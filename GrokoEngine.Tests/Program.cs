@@ -97,8 +97,9 @@ internal static class Program
         foreach (var test in tests)
         {
             // Aislamiento: BepuBackend es estado GLOBAL/estatico. Sin esto, un test que corre
-            // Step deja la simulacion Bepu "lista" y el siguiente (p.ej. un raycast tras solo
-            // SyncPhysicsComponents) consulta shapes viejas de otro test -> resultado equivocado.
+            // Step deja la simulacion Bepu "lista" (o cambia Enabled) y el siguiente hereda ese
+            // estado -> resultados equivocados. Restauramos el estado por defecto en CADA test.
+            BepuBackend.Enabled = true;   // default del motor; los tests que quieran legacy lo ponen false
             BepuBackend.Reset();
             try
             {
@@ -1185,12 +1186,14 @@ internal static class Program
         target.AddComponent<BoxCollider>();
         var roots = new List<GameObject> { target };
 
-        physics.EnsureSimulationBuilt(roots);
+        // Step es la via oficial que reconstruye al detectar cambios de pose (EnsureSimulationBuilt
+        // es ligero a proposito: solo garantiza que la sim exista, NO reconstruye, por perf).
+        physics.Step(roots, 1.0 / 60.0);
         AssertTrue(physics.Raycast(new Vector3(0f, 0f, 0f), new Vector3(1f, 0f, 0f), 10f, out var firstHit), "initial static hit");
         AssertNear(1.5f, firstHit.Distance, "initial static distance");
 
         target.PosX = 6f;
-        physics.EnsureSimulationBuilt(roots);
+        physics.Step(roots, 1.0 / 60.0);
         AssertTrue(physics.Raycast(new Vector3(0f, 0f, 0f), new Vector3(1f, 0f, 0f), 10f, out var movedHit), "moved static hit");
         AssertNear(5.5f, movedHit.Distance, "moved static distance");
     }
@@ -1203,12 +1206,12 @@ internal static class Program
         box.Size = new Vector3(4f, 1f, 1f);
         var roots = new List<GameObject> { target };
 
-        physics.EnsureSimulationBuilt(roots);
+        physics.Step(roots, 1.0 / 60.0);
         AssertTrue(physics.Raycast(new Vector3(-5f, 0f, 0f), new Vector3(1f, 0f, 0f), 10f, out var firstHit), "initial quaternion static hit");
         AssertNear(3.0f, firstHit.Distance, "initial quaternion static distance", 0.05f);
 
         target.SetLocalTRS(target.transform.Position, Quaternion.Euler(0f, 90f, 0f), target.transform.Scale);
-        physics.EnsureSimulationBuilt(roots);
+        physics.Step(roots, 1.0 / 60.0);
 
         AssertTrue(physics.Raycast(new Vector3(-5f, 0f, 0f), new Vector3(1f, 0f, 0f), 10f, out var rotatedHit), "rotated quaternion static hit");
         AssertNear(4.5f, rotatedHit.Distance, "rotated quaternion static distance", 0.08f);
@@ -1563,6 +1566,9 @@ internal static class Program
 
     private static void CharacterControllerGroundsAndBlocksMovement()
     {
+        // El CharacterController es HIBRIDO: BEPU no lo mueve (lo lleva el script via Move()).
+        // Este test prueba la AUTO-gravedad del path legacy (StepRecursive), asi que desactiva BEPU.
+        BepuBackend.Enabled = false;
         var physics = new PhysicsEngine();
         var floor = new GameObject { Name = "Floor" };
         floor.PosY = 0f;
@@ -1596,6 +1602,8 @@ internal static class Program
 
     private static void CharacterControllerStepsOverLowObstacles()
     {
+        // CharacterController hibrido: prueba la auto-gravedad/step del path legacy (ver test anterior).
+        BepuBackend.Enabled = false;
         var physics = new PhysicsEngine();
         var floor = new GameObject { Name = "Floor" };
         var floorCollider = floor.AddComponent<BoxCollider>();
@@ -2350,19 +2358,19 @@ internal static class Program
         public override void OnCollisionEnter(Collision collision)
         {
             CollisionEnterCount++;
-            LastCollisionObject = collision.GameObject;
+            LastCollisionObject = collision.OtherGameObject;   // el objeto con el que se choca (rival)
         }
 
         public override void OnCollisionStay(Collision collision)
         {
             CollisionStayCount++;
-            LastCollisionObject = collision.GameObject;
+            LastCollisionObject = collision.OtherGameObject;   // el objeto con el que se choca (rival)
         }
 
         public override void OnCollisionExit(Collision collision)
         {
             CollisionExitCount++;
-            LastCollisionObject = collision.GameObject;
+            LastCollisionObject = collision.OtherGameObject;   // el objeto con el que se choca (rival)
         }
 
         public override void OnTriggerEnter(Collider other)

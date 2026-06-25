@@ -258,6 +258,16 @@ namespace GrokoEngine
             hash.Add(Quantize(collider.Center.Y));
             hash.Add(Quantize(collider.Center.Z));
 
+            // Collider ESTATICO (sin Rigidbody): su POSE MUNDIAL entra en la firma -> si el objeto se
+            // mueve/rota/escala, hay que reconstruir BEPU. Con Rigidbody (dinamico o kinematic) la pose
+            // la gestiona BEPU, NO se incluye (si no, reconstruiria cada frame al integrar la posicion).
+            if (collider.gameObject != null && collider.gameObject.GetComponent<Rigidbody>() == null)
+            {
+                var wb = collider.GetBounds();
+                hash.Add(Quantize(wb.Min.X)); hash.Add(Quantize(wb.Min.Y)); hash.Add(Quantize(wb.Min.Z));
+                hash.Add(Quantize(wb.Max.X)); hash.Add(Quantize(wb.Max.Y)); hash.Add(Quantize(wb.Max.Z));
+            }
+
             switch (collider)
             {
                 case BoxCollider box:
