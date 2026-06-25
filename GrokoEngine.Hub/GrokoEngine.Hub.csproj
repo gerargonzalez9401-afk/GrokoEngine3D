@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <!-- Core arrastra envdte (.NET Framework) de forma transitiva -->
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
+    <PackageReference Include="OpenTK.Windowing.Desktop" Version="4.9.4" />
+    <PackageReference Include="OpenTK.Graphics" Version="4.9.4" />
+    <PackageReference Include="OpenTK.Mathematics" Version="4.9.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GrokoEngine.Core\GrokoEngine.Core.csproj" />
+    <!-- Reutiliza el wrapper ImGui + estilo del editor, sin duplicar código -->
+    <Compile Include="..\GrokoEngine.ImGuiEditor\ImGuiController.cs" Link="ImGuiController.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Mimotor.Math">
+      <HintPath>..\ThirdParty\Mimotor.Math\Mimotor.Math.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

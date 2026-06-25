@@ -1,0 +1,45 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrokoEngine.Core", "GrokoEngine.Core\GrokoEngine.Core.csproj", "{2D63D754-2E2D-4800-A58A-F1A8681B2AD5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrokoEngine.Hub", "GrokoEngine.Hub\GrokoEngine.Hub.csproj", "{8D83C491-CF2A-4F01-B961-05CBFA74BE69}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrokoEngine.ImGuiEditor", "GrokoEngine.ImGuiEditor\GrokoEngine.ImGuiEditor.csproj", "{F4C6EF35-CD83-4D4C-B27E-E550CFC4D2AA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrokoEngine.ShaderGraph", "GrokoEngine.ShaderGraph\GrokoEngine.ShaderGraph.csproj", "{7E525FAE-3FF9-4F73-B7AC-9F6A0299D12D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrokoEngine.Tests", "GrokoEngine.Tests\GrokoEngine.Tests.csproj", "{0E4D0CB1-7667-44B8-92C3-0C5B0864028F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{2D63D754-2E2D-4800-A58A-F1A8681B2AD5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2D63D754-2E2D-4800-A58A-F1A8681B2AD5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2D63D754-2E2D-4800-A58A-F1A8681B2AD5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2D63D754-2E2D-4800-A58A-F1A8681B2AD5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8D83C491-CF2A-4F01-B961-05CBFA74BE69}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8D83C491-CF2A-4F01-B961-05CBFA74BE69}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8D83C491-CF2A-4F01-B961-05CBFA74BE69}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8D83C491-CF2A-4F01-B961-05CBFA74BE69}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F4C6EF35-CD83-4D4C-B27E-E550CFC4D2AA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F4C6EF35-CD83-4D4C-B27E-E550CFC4D2AA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F4C6EF35-CD83-4D4C-B27E-E550CFC4D2AA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F4C6EF35-CD83-4D4C-B27E-E550CFC4D2AA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7E525FAE-3FF9-4F73-B7AC-9F6A0299D12D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7E525FAE-3FF9-4F73-B7AC-9F6A0299D12D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7E525FAE-3FF9-4F73-B7AC-9F6A0299D12D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7E525FAE-3FF9-4F73-B7AC-9F6A0299D12D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0E4D0CB1-7667-44B8-92C3-0C5B0864028F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0E4D0CB1-7667-44B8-92C3-0C5B0864028F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0E4D0CB1-7667-44B8-92C3-0C5B0864028F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0E4D0CB1-7667-44B8-92C3-0C5B0864028F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

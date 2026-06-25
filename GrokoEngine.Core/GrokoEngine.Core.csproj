@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>disable</ImplicitUsings>
+		<!-- AssetService usa System.Windows.IDataObject / System.Windows.Forms (drag & drop del SO) -->
+		<UseWPF>true</UseWPF>
+		<UseWindowsForms>true</UseWindowsForms>
+		<!-- envdte es .NET Framework: silencia el aviso de compatibilidad NU1701 -->
+		<NoWarn>$(NoWarn);NU1701</NoWarn>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- Rendering\ObjLoader.cs -->
+		<PackageReference Include="AssimpNet" Version="4.1.0" />
+		<!-- Scripting\ScriptCompiler.cs (hot-reload C# vía Roslyn + EnvDTE) -->
+		<PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.3.0" />
+		<PackageReference Include="envdte" Version="17.14.40260" />
+		<PackageReference Include="envdte80" Version="17.14.40260" />
+		<!-- Backend de física profesional (BepuBackend.cs) -->
+		<PackageReference Include="BepuPhysics" Version="2.4.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <!-- Referencia local y portable: el ZIP trae Mimotor.Math.dll en ThirdParty/Mimotor.Math.
+	       Así el proyecto no depende de bin/Debug, bin/Release ni rutas absolutas de tu PC. -->
+	  <Reference Include="Mimotor.Math">
+	    <HintPath>..\ThirdParty\Mimotor.Math\Mimotor.Math.dll</HintPath>
+	    <Private>true</Private>
+	  </Reference>
+	</ItemGroup>
+</Project>

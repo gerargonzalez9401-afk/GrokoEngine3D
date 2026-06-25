@@ -1,0 +1,20 @@
+GrokoEngine - Canvas UI Pro estilo Unity
+
+Contenido:
+- Proyecto completo fuente listo para abrir en Visual Studio.
+- Sistema Canvas/UI actualizado en GrokoEngine.Core/UI.cs.
+- Render/UI editor actualizado en GrokoEngine.ImGuiEditor/ImGuiEditorApp.UI.cs.
+- Inspector/menús/componentes actualizados en ImGuiEditorApp.Components.cs.
+- Serialización actualizada en GrokoEngine.Core/Editor/SceneSerializer.cs.
+
+Nota:
+- Se excluyeron carpetas bin/obj/.vs para evitar basura de compilación.
+- Al abrir el proyecto, Visual Studio/.NET restaurará paquetes y generará bin/obj de nuevo.
+- Este entorno no tiene dotnet instalado, por eso no se pudo compilar aquí.
+
+Prueba recomendada:
+1. Abrir GrokoEngine.slnx en Visual Studio.
+2. Rebuild Solution.
+3. Crear UI > Canvas.
+4. Crear UI > Button, Text, Image, Slider, Toggle y ScrollView.
+5. Probar Overlay, Screen Space Camera y World Space.

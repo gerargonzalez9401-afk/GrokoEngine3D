@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="GrokoEngine.Core/GrokoEngine.Core.csproj" Id="2d63d754-2e2d-4800-a58a-f1a8681b2ad5" />
+  <Project Path="GrokoEngine.Hub/GrokoEngine.Hub.csproj" />
+  <Project Path="GrokoEngine.ImGuiEditor/GrokoEngine.ImGuiEditor.csproj" />
+  <Project Path="GrokoEngine.ShaderGraph/GrokoEngine.ShaderGraph.csproj" />
+  <Project Path="GrokoEngine.Tests/GrokoEngine.Tests.csproj" />
+</Solution>
