@@ -131,11 +131,16 @@ namespace GrokoEngine
         public float Frequency = 1f;
     }
 
+    /// <summary>Calidad de colisión de partículas. Fast = AABB barato (solo cajas). High = raycast
+    /// de barrido contra BEPU (todas las formas, sin tunneling, normal real), más caro por partícula.</summary>
+    public enum ParticleCollisionQuality { Fast, High }
+
     public sealed class ParticleCollisionModule
     {
         public bool Enabled = false;
         public float Bounciness = 0.3f;
         public float Dampen = 0.5f;
+        public ParticleCollisionQuality Quality = ParticleCollisionQuality.Fast;
     }
 
     public class ParticleSystem : MonoBehaviour
@@ -286,6 +291,7 @@ namespace GrokoEngine
         public bool CollisionEnabled = false;
         public float CollisionBounciness = 0.3f;
         public float CollisionDampen = 0.5f;
+        public ParticleCollisionQuality CollisionQuality = ParticleCollisionQuality.Fast;
 
         // Switch simple y seguro para el Inspector.
         // Si activas esto, prende todos los flags necesarios para colisión.
@@ -409,6 +415,10 @@ namespace GrokoEngine
             bool hasTurbulence = NoiseModuleEnabled && TurbulenceStrength > 0f;
             bool collisionRequested = CollisionModuleEnabled || CollisionEnabled || Collision.Enabled;
             bool hasCollision = collisionRequested && Physics != null;
+            // Calidad alta: barrido (raycast) contra BEPU. Solo si BEPU esta listo; si no, cae a AABB.
+            var collQuality = Collision.Enabled ? Collision.Quality : CollisionQuality;
+            bool useBepuSweep = hasCollision && collQuality == ParticleCollisionQuality.High
+                                && BepuBackend.Enabled && BepuBackend.IsReady;
 
             if (collisionRequested && Physics == null && !_warnedMissingParticlePhysics)
             {
@@ -478,13 +488,39 @@ namespace GrokoEngine
                     }
                 }
 
+                float prevX = p.Position.X, prevY = p.Position.Y, prevZ = p.Position.Z;
                 p.Position.X += p.Velocity.X * fdt;
                 p.Position.Y += p.Velocity.Y * fdt;
                 p.Position.Z += p.Velocity.Z * fdt;
                 p.Rotation += p.RotationSpeed * fdt;
 
-                // ── Colisión con BoxColliders ──────────────────────
-                if (hasCollision)
+                // ── Colisión: High = barrido a BEPU (preciso); Fast = AABB barato ──
+                if (useBepuSweep)
+                {
+                    // Raycast de la posicion anterior a la nueva contra las shapes REALES de BEPU:
+                    // todas las formas (esfera/capsula/malla/terreno), sin tunneling, normal real.
+                    float dvx = p.Position.X - prevX, dvy = p.Position.Y - prevY, dvz = p.Position.Z - prevZ;
+                    float dist = MathF.Sqrt(dvx * dvx + dvy * dvy + dvz * dvz);
+                    if (dist > 1e-5f &&
+                        BepuBackend.TryRaycast(new Vector3(prevX, prevY, prevZ), new Vector3(dvx, dvy, dvz),
+                            dist, false, LayerMask.Everything, out var phit))
+                    {
+                        float bounce = Collision.Enabled ? Collision.Bounciness : CollisionBounciness;
+                        float dampen = Collision.Enabled ? Collision.Dampen : CollisionDampen;
+                        var n = phit.Normal;
+                        // Reposicionar justo en el impacto, un pelin sobre la superficie.
+                        p.Position.X = phit.Point.X + n.X * 0.01f;
+                        p.Position.Y = phit.Point.Y + n.Y * 0.01f;
+                        p.Position.Z = phit.Point.Z + n.Z * 0.01f;
+                        // Reflejar: componente NORMAL rebota (bounce), componente TANGENCIAL amortigua (dampen).
+                        float vn = p.Velocity.X * n.X + p.Velocity.Y * n.Y + p.Velocity.Z * n.Z;
+                        float tx = p.Velocity.X - vn * n.X, ty = p.Velocity.Y - vn * n.Y, tz = p.Velocity.Z - vn * n.Z;
+                        p.Velocity.X = tx * dampen - bounce * vn * n.X;
+                        p.Velocity.Y = ty * dampen - bounce * vn * n.Y;
+                        p.Velocity.Z = tz * dampen - bounce * vn * n.Z;
+                    }
+                }
+                else if (hasCollision)
                 {
                     var particleBounds = new Bounds(
                         new Vector3(p.Position.X - 0.001f, p.Position.Y - 0.001f, p.Position.Z - 0.001f),
@@ -664,6 +700,7 @@ namespace GrokoEngine
             Collision.Enabled = collisionOn;
             Collision.Bounciness = CollisionBounciness;
             Collision.Dampen = CollisionDampen;
+            Collision.Quality = CollisionQuality;
         }
 
         public void SyncModulesToLegacyFields()
@@ -715,6 +752,7 @@ namespace GrokoEngine
             CollisionEnabled = moduleCollisionOn;
             CollisionBounciness = Collision.Bounciness;
             CollisionDampen = Collision.Dampen;
+            CollisionQuality = Collision.Quality;
         }
 
         public override void OnEnable()

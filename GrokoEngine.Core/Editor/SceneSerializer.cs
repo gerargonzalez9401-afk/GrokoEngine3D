@@ -827,6 +827,14 @@ namespace GrokoEngine
                 && int.TryParse(shapeRaw, out int shapeInt))
                 ps.Shape = (ParticleShape)shapeInt;
 
+            // CollisionQuality es enum (Fast/High): Enum.TryParse acepta nombre o numero.
+            if (comp is ParticleSystem psq && fields.TryGetValue("CollisionQuality", out var cqRaw)
+                && Enum.TryParse<ParticleCollisionQuality>(cqRaw, out var cq))
+            {
+                psq.CollisionQuality = cq;
+                psq.Collision.Quality = cq;
+            }
+
             if (comp is ParticleSystem psBursts && fields.TryGetValue("ExtraBursts", out var burstsRaw))
             {
                 try

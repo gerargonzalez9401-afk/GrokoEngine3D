@@ -485,6 +485,13 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
                 ps.CollisionDampen = Math.Clamp(v, 0f, 1f);
                 ps.Collision.Dampen = ps.CollisionDampen;
             }, 0.01f, 0f, 1f);
+            int q = (int)ps.CollisionQuality;
+            string[] qNames = { "Fast (AABB, cajas)", "High (BEPU sweep, todas las formas)" };
+            if (ImGui.Combo("Quality##pscollision", ref q, qNames, qNames.Length))
+            {
+                ps.CollisionQuality = (GrokoEngine.ParticleCollisionQuality)q;
+                ps.Collision.Quality = ps.CollisionQuality;
+            }
             ImGui.EndDisabled();
         }
 
