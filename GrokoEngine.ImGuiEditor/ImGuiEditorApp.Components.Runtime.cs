@@ -132,6 +132,11 @@ private void StepRuntime(double deltaTime)
             physicsEngine.Step(objects, deltaTime);            // camino único: BEPU + broadphase legacy + eventos
             profiler.SamplePhysics(EditorProfiler.ElapsedMs(physicsStart));
 
+            // Las particulas son componentes del MOTOR (no user scripts), asi que ExecuteUpdate no
+            // las toca. Sin este pase, al darle Play se congelaban (solo avanzaban en edicion).
+            // Tras physics.Step para que la colision High (raycast a BEPU) use el estado del frame.
+            StepEditorParticles(deltaTime);
+
             long runtimeSceneStart = EditorProfiler.Timestamp();
             RuntimeScene.Tick(deltaTime);
             profiler.SampleRuntimeScene(EditorProfiler.ElapsedMs(runtimeSceneStart));
