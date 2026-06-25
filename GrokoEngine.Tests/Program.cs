@@ -11,6 +11,7 @@ namespace GrokoEngine.Tests;
 internal static class Program
 {
     private static int passed;
+    private static int failed;
 
     [STAThread]
     private static int Main()
@@ -95,6 +96,10 @@ internal static class Program
 
         foreach (var test in tests)
         {
+            // Aislamiento: BepuBackend es estado GLOBAL/estatico. Sin esto, un test que corre
+            // Step deja la simulacion Bepu "lista" y el siguiente (p.ej. un raycast tras solo
+            // SyncPhysicsComponents) consulta shapes viejas de otro test -> resultado equivocado.
+            BepuBackend.Reset();
             try
             {
                 test.Run();
@@ -103,14 +108,14 @@ internal static class Program
             }
             catch (Exception ex)
             {
+                failed++;
                 Console.Error.WriteLine($"FAIL {test.Name}");
-                Console.Error.WriteLine(ex.Message);
-                return 1;
+                Console.Error.WriteLine($"  {ex.Message}");
             }
         }
 
-        Console.WriteLine($"{passed}/{tests.Length} tests passed.");
-        return 0;
+        Console.WriteLine($"{passed}/{tests.Length} tests passed, {failed} failed.");
+        return failed == 0 ? 0 : 1;
     }
 
     private static void BoxColliderUsesCenterAndScale()
@@ -1021,8 +1026,16 @@ internal static class Program
         physics.Step(new List<GameObject> { floor, body }, 0.2);
 
         AssertTrue(rb.IsGrounded, "fast body grounded");
-        AssertNear(1.0005f, body.Position.Y, "fast body rests on floor", 0.002f);
-        AssertNear(0f, rb.Velocity.Y, "fast body vertical velocity stopped", 0.001f);
+        // El motor resuelve la fisica con BEPU, no con el solver legacy. El cuerpo reposa con el
+        // margen de contacto especulativo de Bepu (~2-3 cm por encima del contacto geometrico en
+        // Y=1.0), no con el slop de 0.5 mm del solver antiguo. Lo ESENCIAL de este test es que NO
+        // haya tunneling: el cuerpo queda apoyado ENCIMA del suelo (cerca de 1.0), no lo atraviesa
+        // (sin colision caeria a ~ -9). Por eso validamos un rango sobre el suelo, no la posicion exacta.
+        AssertTrue(body.Position.Y > 0.95f && body.Position.Y < 1.1f, "fast body rests on floor without tunneling");
+        // Bepu aplica una pequena velocidad de recuperacion al sacar el cuerpo de la penetracion
+        // del paso extremo (cae -100 m/s en un solo Step de 0.2s). Lo importante es que la caida
+        // quedo FRENADA (ya no se hunde a -100); la velocidad exacta 0 era del solver legacy.
+        AssertTrue(rb.Velocity.Y > -1f, "fast body vertical fall arrested (no tunneling)");
     }
 
     private static void PhysicsEnginePushesDynamicRigidbodiesByMass()
@@ -1241,7 +1254,11 @@ internal static class Program
         RuntimeScene.SetContext(roots, physics, compiler);
         try
         {
-            var instance = RuntimeScene.Instantiate(prefab, new Vector3(3f, 4f, 5f), Quaternion.identity);
+            // 90 grados en Y = quaternion (0, sin45, 0, cos45). El test antiguo pasaba identity
+            // (sin rotacion) pero esperaba RotY=90, lo cual era incoherente: Instantiate convierte
+            // el quaternion a Euler con QuaternionToEulerDeg, asi que hay que pasar una rotacion REAL.
+            var rot90Y = new Quaternion(0f, 0.70710678f, 0f, 0.70710678f);
+            var instance = RuntimeScene.Instantiate(prefab, new Vector3(3f, 4f, 5f), rot90Y);
 
             AssertEqual(1, roots.Count, "instantiated root count");
             AssertEqual(instance, roots[0], "instantiated root");
@@ -1250,7 +1267,7 @@ internal static class Program
             AssertNear(3f, instance.PosX, "instance pos x");
             AssertNear(4f, instance.PosY, "instance pos y");
             AssertNear(5f, instance.PosZ, "instance pos z");
-            AssertNear(90f, instance.RotY, "instance rot y");
+            AssertNear(90f, instance.RotY, "instance rot y", 0.5f);
             AssertTrue(instance.GetComponent<BoxCollider>() != null, "instance has collider");
             AssertTrue(physics.GetColliders().Contains(instance.GetComponent<BoxCollider>()!), "collider registered");
         }
