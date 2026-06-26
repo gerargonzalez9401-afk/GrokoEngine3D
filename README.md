@@ -2,7 +2,9 @@
 
 ![GrokoEngine3D editor preview](Docs/github-hero.png)
 
-GrokoEngine3D is an experimental 3D engine and editor built in C# with a workflow inspired by modern game engines such as Unity.
+GrokoEngine3D is an experimental 3D engine and editor created by Gerar Gonzalez. It is currently in active development and built in C# with a workflow inspired by modern game engines such as Unity.
+
+This project is an early experimental version of a custom game engine. Features, architecture and tools may change frequently while the engine continues to evolve.
 
 The project includes a visual editor, scene hierarchy, inspector, project browser, component system, physics, animation, particles, materials, shader graph tools and real-time rendering.
 
@@ -37,7 +39,9 @@ It is not intended to replace commercial engines yet. Instead, it is a technical
 
 ## Status
 
-The engine is under active development. Current builds compile successfully and include automated validation tests, but some systems are still experimental and may change frequently.
+GrokoEngine3D is an experimental engine in active development, created by Gerar Gonzalez.
+
+Current builds compile successfully and include automated validation tests, but many systems are still evolving. This repository should be treated as a development version, not a finished production engine.
 
 ## License
 
