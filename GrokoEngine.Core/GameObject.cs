@@ -317,6 +317,7 @@ namespace GrokoEngine
             component.gameObject = this;
             Components.Add(component);
             componentCacheDirty = true;
+            EnforceCharacterControllerRigidbodyCompatibility(component);
 
             if (physics != null)
             {
@@ -352,6 +353,38 @@ namespace GrokoEngine
                     Debug.LogWarning($"[AddComponent] {component.GetType().Name}.Awake/OnEnable lanzó: {ex.Message}");
                 }
             }
+        }
+
+        /// <summary>
+        /// Unity-style compatibility rule: a CharacterController is a kinematic mover.
+        /// It should not be driven by a dynamic Rigidbody on the same GameObject.
+        ///
+        /// We keep an existing Rigidbody for legacy scenes/scripts, but force it into a
+        /// safe non-simulated mode so it cannot apply a second gravity/integration pass.
+        /// </summary>
+        private void EnforceCharacterControllerRigidbodyCompatibility(Component addedComponent)
+        {
+            if (addedComponent is CharacterController)
+            {
+                foreach (var rb in Components.OfType<Rigidbody>())
+                    MakeRigidbodyCharacterSafe(rb);
+                return;
+            }
+
+            if (addedComponent is Rigidbody addedRigidbody && Components.Any(c => c is CharacterController))
+                MakeRigidbodyCharacterSafe(addedRigidbody);
+        }
+
+        private static void MakeRigidbodyCharacterSafe(Rigidbody rb)
+        {
+            if (rb.IsKinematic && !rb.UseGravity && rb.Velocity.X == 0f && rb.Velocity.Y == 0f && rb.Velocity.Z == 0f)
+                return;
+
+            rb.IsKinematic = true;
+            rb.UseGravity = false;
+            rb.Velocity = Vector3.Zero;
+            rb.MarkBepuVelocityDirty();
+            Debug.LogWarning("[CharacterController] Rigidbody en el mismo GameObject convertido a Kinematic sin gravedad. Usa CharacterController para personajes, o Rigidbody dinámico para física, pero no ambos dinámicos.");
         }
 
         private void RebuildComponentCacheIfNeeded()

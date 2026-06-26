@@ -125,6 +125,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private ImGuiController imgui = null!;
     private SceneViewportRenderer sceneRenderer = null!;
     private SceneRenderTarget sceneTarget = null!;
+    private SceneRenderTarget gamePreviewTarget = null!;
     private GameObject? selected
     {
         get => selection.Current;
@@ -139,6 +140,9 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private float _panelBottomH = 250f;
     // Pestaña activa del viewport: false = Scene (cámara libre + gizmos), true = Game (cámara del juego).
     private bool gameViewActive;
+    private enum ViewportPanelLayout { Tabs, SplitHorizontal, SplitVertical, DockableWindows }
+    private ViewportPanelLayout viewportPanelLayout = ViewportPanelLayout.Tabs;
+    private Vector2 gamePreviewPanelContentSize = new(800, 450);
     private readonly List<ConsoleEntry> consoleLog = new();
     private readonly ConcurrentQueue<ConsoleEntry> pendingConsoleLog = new();
     private string statusMessageValue = "Ready";
@@ -512,7 +516,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         // Solo se pueden desacoplar manteniendo Shift + arrastrar el título.
         var io = ImGui.GetIO();
         io.ConfigWindowsMoveFromTitleBarOnly = true;   // solo arrastrar desde el título
-        io.ConfigDockingWithShift = true;              // Shift requerido para desacoplar
+        io.ConfigDockingWithShift = false;             // Unity-like: arrastrar y acoplar directamente
 
         BuildViewportResolutionPresets();
         LoadEditorSettings();
@@ -527,6 +531,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         Program.UpdateSplash("Initializing renderer", 0.32f);
         sceneRenderer = new SceneViewportRenderer();
         sceneTarget = new SceneRenderTarget();
+        gamePreviewTarget = new SceneRenderTarget();
         camera.SetLookDirection(camera.Front);
         GrokoEngine.Debug.OnLogMessage += HandleEngineLogMessage;
         scriptCompiler.OnLog += (message, isError) => Log(message, isError ? ConsoleSeverity.Error : ConsoleSeverity.Info);
@@ -583,6 +588,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         imgui.Dispose();
         sceneRenderer.Dispose();
         sceneTarget.Dispose();
+        gamePreviewTarget.Dispose();
         scriptCompiler.Dispose();
         base.OnUnload();
     }
@@ -743,6 +749,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         gizmoMouseCaptured = gizmoDragging;
         HandleEditorShortcuts();
         DrawDockspace();
+        DrawDockableViewportWindows();
         profiler.SampleUiBuild(EditorProfiler.ElapsedMs(uiStart));
 
         long uiDrawStart = EditorProfiler.Timestamp();
@@ -767,18 +774,28 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         profiler.RenderHeight = height;
 
         // Vista de juego: en Play o en la pestaña "Game" → cámara del juego, sin gizmos/grid.
-        bool gameView = isPlaying || gameViewActive;
+        bool dualViewport = !gameMode && viewportPanelLayout != ViewportPanelLayout.Tabs;
+        bool gameView = gameMode || (!dualViewport && (isPlaying || gameViewActive));
         EditorCameraState activeCam;
         bool noGameCamera = false;
+        Camera? gameCameraComponent = null;
         if (gameView)
         {
             var gameCamera = FindGameCamera(objects);
+            gameCameraComponent = gameCamera?.GetComponent<Camera>();
             activeCam = gameCamera != null ? ComputeGameCameraState(gameCamera) : camera;
             // Sin cámara activa (ninguna o todas desactivadas): Game view en negro, como Unity
             // ("No cameras rendering"). No caemos a la cámara del editor.
             noGameCamera = gameCamera == null;
             // Fondo negro como en la Game view de Unity.
-            GL.ClearColor(0f, 0f, 0f, 1f);
+            if (noGameCamera)
+                GL.ClearColor(0f, 0f, 0f, 1f);
+            else
+                GL.ClearColor(
+                    Math.Clamp(gameCameraComponent?.BackgroundR ?? 0.075f, 0f, 1f),
+                    Math.Clamp(gameCameraComponent?.BackgroundG ?? 0.095f, 0f, 1f),
+                    Math.Clamp(gameCameraComponent?.BackgroundB ?? 0.120f, 0f, 1f),
+                    Math.Clamp(gameCameraComponent?.BackgroundA ?? 1f, 0f, 1f));
         }
         else
         {
@@ -801,6 +818,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.ColorSpace = colorSpace;
         sceneRenderer.ImageBasedLighting = iblEnabled;
         sceneRenderer.EnvironmentHdriPath = hdriPath;
+        sceneRenderer.DrawEnvironmentBackground = !gameView || gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
         sceneRenderer.RenderRealtimeShadows = gameView;
         sceneRenderer.ShadowUpdateIntervalFrames = gameView ? 3 : 1;
         sceneRenderer.SceneGridAxis = ToRendererGridAxis(sceneGridAxis);
@@ -831,10 +849,65 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         long postProcessStart = EditorProfiler.Timestamp();
         sceneTarget.ApplyPostProcess(postSettings);
         profiler.SamplePostProcess(EditorProfiler.ElapsedMs(postProcessStart));
+        if (dualViewport)
+            RenderGamePreviewTexture(postSettings);
         SceneRenderTarget.Unbind(ClientSize.X, ClientSize.Y);
         GL.ClearColor(0.105f, 0.115f, 0.125f, 1f);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
         profiler.SampleRenderScene(EditorProfiler.ElapsedMs(renderStart));
+    }
+
+    private void RenderGamePreviewTexture(PostProcessSettings? postSettings)
+    {
+        int width = Math.Max(1, (int)MathF.Round(gamePreviewPanelContentSize.X * renderScale));
+        int height = Math.Max(1, (int)MathF.Round(gamePreviewPanelContentSize.Y * renderScale));
+        var gameCamera = FindGameCamera(objects);
+        var gameCameraComponent = gameCamera?.GetComponent<Camera>();
+        var activeCam = gameCamera != null ? ComputeGameCameraState(gameCamera) : camera;
+        bool noGameCamera = gameCamera == null;
+
+        if (noGameCamera)
+            GL.ClearColor(0f, 0f, 0f, 1f);
+        else
+            GL.ClearColor(
+                Math.Clamp(gameCameraComponent?.BackgroundR ?? 0.075f, 0f, 1f),
+                Math.Clamp(gameCameraComponent?.BackgroundG ?? 0.095f, 0f, 1f),
+                Math.Clamp(gameCameraComponent?.BackgroundB ?? 0.120f, 0f, 1f),
+                Math.Clamp(gameCameraComponent?.BackgroundA ?? 1f, 0f, 1f));
+
+        int samples = activeCam.AntiAliasing ? activeCam.AntiAliasingSamples : 1;
+        gamePreviewTarget.Resize(width, height, samples);
+        gamePreviewTarget.Bind();
+
+        GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+        GL.Enable(EnableCap.DepthTest);
+        sceneRenderer.DebugView = (int)lightingDebugView;
+        sceneRenderer.ShadowQuality = shadowQuality;
+        sceneRenderer.ShadowBias = shadowBias;
+        sceneRenderer.ColorSpace = colorSpace;
+        sceneRenderer.ImageBasedLighting = iblEnabled;
+        sceneRenderer.EnvironmentHdriPath = hdriPath;
+        sceneRenderer.DrawEnvironmentBackground = gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
+        sceneRenderer.RenderRealtimeShadows = true;
+        sceneRenderer.ShadowUpdateIntervalFrames = 3;
+        sceneRenderer.SceneGridAxis = ToRendererGridAxis(sceneGridAxis);
+        sceneRenderer.SceneGridSize = sceneGridSize;
+        sceneRenderer.SceneGridOpacity = sceneGridOpacity;
+        sceneRenderer.SelectedObjectIds = Array.Empty<string>();
+
+        if (!noGameCamera)
+            sceneRenderer.Render(objects, null, activeCam, width, height, showGrid: false);
+
+        gamePreviewTarget.Resolve();
+        bool postEnabled = postSettings?.PostProcessEnabled ?? false;
+        gamePreviewTarget.FxaaEnabled = fxaaEnabled;
+        gamePreviewTarget.BloomQuality = postEnabled ? bloomQuality : 0;
+        gamePreviewTarget.AmbientOcclusionQuality = postEnabled ? ambientOcclusionQuality : 0;
+        gamePreviewTarget.GodRaysEnabled = sceneRenderer.SunGodRaysActive;
+        gamePreviewTarget.GodRaySunU = sceneRenderer.SunScreenUv.X;
+        gamePreviewTarget.GodRaySunV = sceneRenderer.SunScreenUv.Y;
+        gamePreviewTarget.GodRayStrength = sceneRenderer.SunGodRaysStrength;
+        gamePreviewTarget.ApplyPostProcess(postSettings);
     }
 
     private (int Width, int Height) GetViewportRenderSize()

@@ -38,6 +38,16 @@ internal sealed partial class ImGuiEditorApp
         ImGui.PushStyleColor(ImGuiCol.ChildBg, new System.Numerics.Vector4(0.075f, 0.090f, 0.110f, 1f));
         ImGui.BeginChild("##ScenePanel", size, ImGuiChildFlags.None, ImGuiWindowFlags.NoScrollbar);
 
+        DrawViewportLayoutBar();
+        if (viewportPanelLayout != ViewportPanelLayout.Tabs)
+        {
+            DrawSplitViewportPanels();
+            ImGui.EndChild();
+            ImGui.PopStyleColor();
+            ImGui.PopStyleVar();
+            return;
+        }
+
         // Pestañas Scene / Game (como Unity). La pestaña activa decide cámara y gizmos.
         if (ImGui.BeginTabBar("##sceneGameTabs", ImGuiTabBarFlags.None))
         {
@@ -105,6 +115,237 @@ internal sealed partial class ImGuiEditorApp
         ImGui.PopStyleVar();
     }
 
+    private void DrawViewportLayoutBar()
+    {
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(7f, 2f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(3f, 0f));
+        if (DrawViewportLayoutButton("Tabs", viewportPanelLayout == ViewportPanelLayout.Tabs))
+            viewportPanelLayout = ViewportPanelLayout.Tabs;
+        ImGui.SameLine();
+        if (DrawViewportLayoutButton("Split H", viewportPanelLayout == ViewportPanelLayout.SplitHorizontal))
+        {
+            viewportPanelLayout = ViewportPanelLayout.SplitHorizontal;
+            gameViewActive = false;
+        }
+        ImGui.SameLine();
+        if (DrawViewportLayoutButton("Split V", viewportPanelLayout == ViewportPanelLayout.SplitVertical))
+        {
+            viewportPanelLayout = ViewportPanelLayout.SplitVertical;
+            gameViewActive = false;
+        }
+        ImGui.SameLine();
+        if (DrawViewportLayoutButton("Dock", viewportPanelLayout == ViewportPanelLayout.DockableWindows))
+        {
+            viewportPanelLayout = ViewportPanelLayout.DockableWindows;
+            gameViewActive = false;
+        }
+        ImGui.SameLine();
+        ImGui.TextDisabled("Scene + Game like Unity");
+        ImGui.PopStyleVar(2);
+    }
+
+    private static bool DrawViewportLayoutButton(string label, bool active)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Button, active
+            ? new System.Numerics.Vector4(0.22f, 0.42f, 0.66f, 1f)
+            : new System.Numerics.Vector4(0.13f, 0.14f, 0.15f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new System.Numerics.Vector4(0.28f, 0.50f, 0.76f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new System.Numerics.Vector4(0.20f, 0.45f, 0.72f, 1f));
+        bool clicked = ImGui.Button(label);
+        ImGui.PopStyleColor(3);
+        return clicked;
+    }
+
+    private void DrawSplitViewportPanels()
+    {
+        if (viewportPanelLayout == ViewportPanelLayout.DockableWindows)
+        {
+            var dockAvail = ImGui.GetContentRegionAvail();
+            viewportPanelContentMin = ImGui.GetCursorScreenPos();
+            viewportPanelContentSize = new Vector2(Math.Max(1f, dockAvail.X), Math.Max(1f, dockAvail.Y));
+            var drawList = ImGui.GetWindowDrawList();
+            drawList.AddRectFilled(viewportPanelContentMin, viewportPanelContentMin + viewportPanelContentSize,
+                ImGui.GetColorU32(new System.Numerics.Vector4(0.06f, 0.07f, 0.08f, 1f)));
+            const string msg = "Dock mode: drag the Scene and Game window title bars like Unity.";
+            var textSize = ImGui.CalcTextSize(msg);
+            drawList.AddText(
+                viewportPanelContentMin + new Vector2(Math.Max(12f, (viewportPanelContentSize.X - textSize.X) * 0.5f), Math.Max(24f, (viewportPanelContentSize.Y - textSize.Y) * 0.5f)),
+                ImGui.GetColorU32(new System.Numerics.Vector4(0.72f, 0.76f, 0.80f, 0.92f)),
+                msg);
+            ImGui.Dummy(viewportPanelContentSize);
+            return;
+        }
+
+        var avail = ImGui.GetContentRegionAvail();
+        const float gap = 4f;
+        gameViewActive = false;
+
+        if (viewportPanelLayout == ViewportPanelLayout.SplitVertical)
+        {
+            float eachH = Math.Max(1f, (avail.Y - gap) * 0.5f);
+            DrawSplitViewportPane("Scene", sceneTarget, new Vector2(avail.X, eachH), gamePanel: false);
+            ImGui.Dummy(new Vector2(0f, gap));
+            DrawSplitViewportPane("Game", gamePreviewTarget, new Vector2(avail.X, eachH), gamePanel: true);
+            return;
+        }
+
+        float eachW = Math.Max(1f, (avail.X - gap) * 0.5f);
+        DrawSplitViewportPane("Scene", sceneTarget, new Vector2(eachW, avail.Y), gamePanel: false);
+        ImGui.SameLine(0f, gap);
+        DrawSplitViewportPane("Game", gamePreviewTarget, new Vector2(eachW, avail.Y), gamePanel: true);
+    }
+
+    private void DrawSplitViewportPane(string title, SceneRenderTarget target, Vector2 size, bool gamePanel)
+    {
+        size.X = Math.Max(1f, size.X);
+        size.Y = Math.Max(1f, size.Y);
+        ImGui.BeginChild("##SplitViewport" + title, size, ImGuiChildFlags.Borders, ImGuiWindowFlags.NoScrollbar);
+
+        var savedViewportMin = viewportMin;
+        var savedViewportMax = viewportMax;
+        var savedPanelMin = viewportPanelContentMin;
+        var savedPanelSize = viewportPanelContentSize;
+        var savedContentMin = viewportContentMin;
+        var savedContentSize = viewportContentSize;
+        bool savedReady = viewportReady;
+        bool savedGameView = gameViewActive;
+        gameViewActive = gamePanel;
+        viewportMin = ImGui.GetWindowPos();
+        viewportMax = viewportMin + ImGui.GetWindowSize();
+        viewportPanelContentMin = ImGui.GetCursorScreenPos();
+        viewportPanelContentSize = ImGui.GetContentRegionAvail();
+        viewportPanelContentSize.X = Math.Max(1f, viewportPanelContentSize.X);
+        viewportPanelContentSize.Y = Math.Max(1f, viewportPanelContentSize.Y);
+        ComputeViewportImageRect(viewportPanelContentMin, viewportPanelContentSize, out viewportContentMin, out viewportContentSize);
+        viewportReady = true;
+        if (gamePanel)
+            gamePreviewPanelContentSize = viewportPanelContentSize;
+
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(viewportPanelContentMin, viewportPanelContentMin + viewportPanelContentSize, ImGui.GetColorU32(new System.Numerics.Vector4(0.015f, 0.017f, 0.020f, 1f)));
+        ImGui.SetCursorScreenPos(viewportContentMin);
+        ImGui.Image(target.TextureId, viewportContentSize, new Vector2(0f, 1f), new Vector2(1f, 0f));
+        RenderCanvasUI(drawList, viewportContentMin, viewportContentSize);
+
+        uint border = ImGui.GetColorU32(new System.Numerics.Vector4(0.08f, 0.08f, 0.09f, 1f));
+        uint text = ImGui.GetColorU32(new System.Numerics.Vector4(0.72f, 0.75f, 0.78f, 0.95f));
+        drawList.AddRect(viewportContentMin, viewportContentMin + viewportContentSize, border, 0f, ImDrawFlags.None, 1.5f);
+        drawList.AddRectFilled(viewportContentMin, viewportContentMin + new Vector2(viewportContentSize.X, 28f), ImGui.GetColorU32(new System.Numerics.Vector4(0.10f, 0.10f, 0.11f, 0.88f)));
+        drawList.AddText(viewportContentMin + new Vector2(10f, 7f), text, title);
+
+        if (!gamePanel)
+        {
+            HandleViewportAssetDrop();
+            DrawViewportToolbarOverlay();
+            DrawViewportResolutionOverlay();
+            DrawViewCubeGizmo(drawList);
+            if (viewportGizmosVisible)
+                DrawTransformGizmo(drawList);
+        }
+
+        ImGui.EndChild();
+        if (gamePanel)
+        {
+            viewportMin = savedViewportMin;
+            viewportMax = savedViewportMax;
+            viewportPanelContentMin = savedPanelMin;
+            viewportPanelContentSize = savedPanelSize;
+            viewportContentMin = savedContentMin;
+            viewportContentSize = savedContentSize;
+            viewportReady = savedReady;
+        }
+        gameViewActive = savedGameView;
+    }
+
+    private void DrawDockableViewportWindows()
+    {
+        if (gameMode || viewportPanelLayout != ViewportPanelLayout.DockableWindows)
+            return;
+
+        ImGui.SetNextWindowSize(new Vector2(720f, 420f), ImGuiCond.FirstUseEver);
+        if (ImGui.Begin("Scene###DockableSceneViewport", ImGuiWindowFlags.NoCollapse))
+            DrawDockableViewportContent("Scene", sceneTarget, gamePanel: false);
+        ImGui.End();
+
+        ImGui.SetNextWindowSize(new Vector2(520f, 320f), ImGuiCond.FirstUseEver);
+        if (ImGui.Begin("Game###DockableGameViewport", ImGuiWindowFlags.NoCollapse))
+            DrawDockableViewportContent("Game", gamePreviewTarget, gamePanel: true);
+        ImGui.End();
+    }
+
+    private void DrawDockableViewportContent(string title, SceneRenderTarget target, bool gamePanel)
+    {
+        var savedViewportMin = viewportMin;
+        var savedViewportMax = viewportMax;
+        var savedPanelMin = viewportPanelContentMin;
+        var savedPanelSize = viewportPanelContentSize;
+        var savedContentMin = viewportContentMin;
+        var savedContentSize = viewportContentSize;
+        bool savedReady = viewportReady;
+        bool savedGameView = gameViewActive;
+
+        gameViewActive = gamePanel;
+        viewportMin = ImGui.GetWindowPos();
+        viewportMax = viewportMin + ImGui.GetWindowSize();
+        viewportPanelContentMin = ImGui.GetCursorScreenPos();
+        viewportPanelContentSize = ImGui.GetContentRegionAvail();
+        viewportPanelContentSize.X = Math.Max(1f, viewportPanelContentSize.X);
+        viewportPanelContentSize.Y = Math.Max(1f, viewportPanelContentSize.Y);
+        ComputeViewportImageRect(viewportPanelContentMin, viewportPanelContentSize, out viewportContentMin, out viewportContentSize);
+        viewportReady = true;
+        if (gamePanel)
+            gamePreviewPanelContentSize = viewportPanelContentSize;
+
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(viewportPanelContentMin, viewportPanelContentMin + viewportPanelContentSize, ImGui.GetColorU32(new System.Numerics.Vector4(0.015f, 0.017f, 0.020f, 1f)));
+        ImGui.SetCursorScreenPos(viewportContentMin);
+        ImGui.Image(target.TextureId, viewportContentSize, new Vector2(0f, 1f), new Vector2(1f, 0f));
+        RenderCanvasUI(drawList, viewportContentMin, viewportContentSize);
+
+        uint border = ImGui.GetColorU32(new System.Numerics.Vector4(0.08f, 0.08f, 0.09f, 1f));
+        uint text = ImGui.GetColorU32(new System.Numerics.Vector4(0.72f, 0.75f, 0.78f, 0.95f));
+        uint accent = ImGui.GetColorU32(new System.Numerics.Vector4(0.98f, 0.76f, 0.22f, 0.95f));
+        drawList.AddRect(viewportContentMin, viewportContentMin + viewportContentSize, border, 0f, ImDrawFlags.None, 1.5f);
+        drawList.AddRectFilled(viewportContentMin, viewportContentMin + new Vector2(viewportContentSize.X, 28f), ImGui.GetColorU32(new System.Numerics.Vector4(0.10f, 0.10f, 0.11f, 0.88f)));
+        drawList.AddText(viewportContentMin + new Vector2(10f, 7f), text, title);
+
+        if (!gamePanel)
+        {
+            string hint = viewportContentSize.X < 520f ? "RMB+WASD  F" : "RMB+WASD   MMB pan   Alt+LMB orbit   F focus";
+            drawList.AddText(viewportContentMin + new Vector2(62f, 7f), ImGui.GetColorU32(new System.Numerics.Vector4(0.45f, 0.48f, 0.50f, 0.95f)), hint);
+            if (selected != null)
+                drawList.AddText(viewportContentMin + new Vector2(56f, 38f), accent, selected.Name);
+            HandleViewportAssetDrop();
+            DrawSelectionBoxOverlay(drawList);
+            DrawViewportStatusToast(drawList);
+            DrawAnimatorDebugOverlay(drawList);
+            DrawViewportCameraIcons(drawList);
+            DrawViewportResolutionOverlay();
+            DrawViewportToolbarOverlay();
+            DrawViewportQuickActions();
+            DrawViewCubeGizmo(drawList);
+            if (viewportGizmosVisible)
+                DrawBoxColliderEditGizmo(drawList);
+            if (viewportGizmosVisible && selected?.EditorId != colliderEditObjectId)
+                DrawTransformGizmo(drawList);
+        }
+        else if (target.TextureId == 0)
+        {
+            drawList.AddText(viewportContentMin + new Vector2(12f, 38f), text, "Game preview waiting for render...");
+        }
+
+        if (gamePanel)
+        {
+            viewportMin = savedViewportMin;
+            viewportMax = savedViewportMax;
+            viewportPanelContentMin = savedPanelMin;
+            viewportPanelContentSize = savedPanelSize;
+            viewportContentMin = savedContentMin;
+            viewportContentSize = savedContentSize;
+            viewportReady = savedReady;
+        }
+        gameViewActive = savedGameView;
+    }
     // Billboard 2D del icono de cámara (cine) sobre cada cámara de la escena. Siempre
     // visible (estilo Unity); se oculta en Game/Play o si los gizmos están desactivados.
     private void DrawViewportCameraIcons(ImDrawListPtr drawList)

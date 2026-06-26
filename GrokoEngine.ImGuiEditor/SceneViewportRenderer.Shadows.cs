@@ -416,6 +416,12 @@ private void DrawDepthGeometry(int modelLocation)
         for (int i = 0; i < dynamicMeshDraws.Count;)
         {
             var draw = dynamicMeshDraws[i];
+            if (!draw.CastShadows)
+            {
+                i++;
+                continue;
+            }
+
             int end = i + 1;
             while (end < dynamicMeshDraws.Count && CanDepthInstanceTogether(draw, dynamicMeshDraws[end]))
                 end++;
@@ -897,5 +903,34 @@ private void CaptureDepthBuffer()
         GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, previousDrawFramebuffer);
     }
 
-private readonly record struct PointShadowInfo(bool Enabled, Vector3 Position, float FarPlane, float Strength);
+    private readonly struct ShadowInfo
+    {
+        public static readonly ShadowInfo Disabled = new(false, Matrix4.Identity, 0f);
+
+        public readonly bool Enabled;
+        public readonly Matrix4 LightMvp;
+        public readonly float Strength;
+        public readonly int CascadeCount;
+        public readonly Matrix4[] Cascades;
+        public readonly float[] Splits;
+        public readonly Vector3 CameraPosition;
+
+        public ShadowInfo(bool enabled, Matrix4 lightMvp, float strength)
+            : this(enabled, lightMvp, strength, 1, new[] { lightMvp, lightMvp, lightMvp, lightMvp, lightMvp }, new float[MaxDirectionalShadowCascades], Vector3.Zero)
+        {
+        }
+
+        public ShadowInfo(bool enabled, Matrix4 lightMvp, float strength, int cascadeCount, Matrix4[] cascades, float[] splits, Vector3 cameraPosition)
+        {
+            Enabled = enabled;
+            LightMvp = lightMvp;
+            Strength = strength;
+            CascadeCount = Math.Clamp(cascadeCount, 0, MaxDirectionalShadowCascades);
+            Cascades = cascades.Length >= MaxDirectionalShadowCascades ? cascades : new[] { lightMvp, lightMvp, lightMvp, lightMvp, lightMvp };
+            Splits = splits.Length >= MaxDirectionalShadowCascades ? splits : new float[MaxDirectionalShadowCascades];
+            CameraPosition = cameraPosition;
+        }
+    }
+
+    private readonly record struct PointShadowInfo(bool Enabled, Vector3 Position, float FarPlane, float Strength);
 }

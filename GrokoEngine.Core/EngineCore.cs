@@ -191,6 +191,8 @@ namespace GrokoEngine
     // =====================================================
     // CAMERA
     // =====================================================
+    public enum CameraClearFlags { Skybox, SolidColor }
+
     public class Camera : Component
     {
         private float _fov = 60f;
@@ -226,6 +228,11 @@ namespace GrokoEngine
             }
         }
 
+        public CameraClearFlags ClearFlags = CameraClearFlags.Skybox;
+        public float BackgroundR = 0.075f;
+        public float BackgroundG = 0.095f;
+        public float BackgroundB = 0.120f;
+        public float BackgroundA = 1f;
         public bool AntiAliasing { get; set; } = true;
 
         public int AntiAliasingSamples

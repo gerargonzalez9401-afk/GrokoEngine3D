@@ -117,17 +117,29 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
 
             GL.BindVertexArray(_particleVao);
 
-            foreach (var (texPath, start, count, blendMode, softParticles, softRange) in _particleRanges)
+            _particleRanges.Sort(static (a, b) =>
             {
-                ApplyParticleBlendMode(blendMode);
-                GL.Uniform1(_particleSoftRangeLoc, softRange);
-                GL.Uniform1(_particleSoftLoc, softParticles && w > 0 && h > 0 ? 1 : 0);
+                int cmp = a.Queue.CompareTo(b.Queue);
+                if (cmp != 0) return cmp;
+                cmp = a.SortingLayer.CompareTo(b.SortingLayer);
+                if (cmp != 0) return cmp;
+                cmp = a.OrderInLayer.CompareTo(b.OrderInLayer);
+                if (cmp != 0) return cmp;
+                return a.SortingFudge.CompareTo(b.SortingFudge);
+            });
+
+            foreach (var range in _particleRanges)
+            {
+                ApplyParticleBlendMode(range.Blend);
+                GL.Uniform1(_particleSoftRangeLoc, range.SoftRange);
+                GL.Uniform1(_particleSoftLoc, range.Soft && w > 0 && h > 0 ? 1 : 0);
+                string? texPath = range.TexturePath;
                 bool hasTex = !string.IsNullOrWhiteSpace(texPath) && System.IO.File.Exists(texPath);
                 int texId = hasTex ? GetTexture(texPath!) : 0;
                 GL.Uniform1(_particleHasTexLoc, hasTex ? 1 : 0);
                 GL.BindTexture(TextureTarget.Texture2D, texId);
-                TrackParticleDraw(count);
-                GL.DrawArrays(PrimitiveType.Triangles, start, count);
+                TrackParticleDraw(range.Count);
+                GL.DrawArrays(PrimitiveType.Triangles, range.Start, range.Count);
             }
 
             GL.ActiveTexture(TextureUnit.Texture1);
@@ -171,6 +183,7 @@ private void CollectParticleVerts(IReadOnlyList<GameObject> objects, Vector3 rig
             var ps = obj.GetComponent<GrokoEngine.ParticleSystem>();
             if (ps == null || !ps.Enabled || ps.Particles.Count == 0) { CollectParticleVerts(obj.Children, right, up, cameraPosition); continue; }
             if (!ps.RendererModuleEnabled) { CollectParticleVerts(obj.Children, right, up, cameraPosition); continue; }
+            if (ps.RenderMode is ParticleRenderMode.Mesh or ParticleRenderMode.Prefab) { CollectParticleVerts(obj.Children, right, up, cameraPosition); continue; }
 
             bool isLocal = ps.SimulationSpace == ParticleSimulationSpace.Local;
             var objPos = isLocal ? new MiMotor.Mathematics.Vector3(obj.PosX, obj.PosY, obj.PosZ) : MiMotor.Mathematics.Vector3.Zero;
@@ -193,7 +206,7 @@ private void CollectParticleVerts(IReadOnlyList<GameObject> objects, Vector3 rig
             float lodRatio = ps.LODDistanceMax > ps.LODDistance
                 ? 1f - Math.Clamp((lodDist - ps.LODDistance) / (ps.LODDistanceMax - ps.LODDistance), 0f, 1f)
                 : lodDist > ps.LODDistanceMax ? 0f : 1f;
-            int maxRender = (int)(ps.Particles.Count * lodRatio);
+            int maxRender = ApplyRendererMaxParticles(ps, (int)(ps.Particles.Count * lodRatio));
             if (maxRender == 0) { CollectParticleVerts(obj.Children, right, up, cameraPosition); continue; }
 
             // ── Ordenar back-to-front ──────────────────────────────
@@ -239,14 +252,10 @@ private void CollectParticleVerts(IReadOnlyList<GameObject> objects, Vector3 rig
                 else
                     color = new Vector4(p.CurrentR, p.CurrentG, p.CurrentB, p.CurrentA);
 
-                color = new Vector4(
-                    color.X * surface.Tint.X * hdrIntensity,
-                    color.Y * surface.Tint.Y * hdrIntensity,
-                    color.Z * surface.Tint.Z * hdrIntensity,
-                    color.W * surface.Tint.W);
+                color = ApplyParticleColorLook(ps, p, color, surface, hdrIntensity);
 
                 float sizeMultiplier = ps.SizeOverLifetimeModuleEnabled
-                    ? GrokoEngine.ParticleSystem.EvaluateSimpleCurve(p.NormalizedAge, ps.SizeCurveMid, ps.SizeCurveMidValue)
+                    ? GrokoEngine.ParticleSystem.EvaluateParticleCurve(ps.SizeOverLifetimeCurve, p.NormalizedAge, ps.SizeCurveMid, ps.SizeCurveMidValue)
                     : 1f;
 
                 if (ps.StretchedBillboard || ps.RenderMode == ParticleRenderMode.StretchedBillboard)
@@ -260,10 +269,249 @@ private void CollectParticleVerts(IReadOnlyList<GameObject> objects, Vector3 rig
 
             int cnt = _particleVerts.Count - start;
             if (cnt > 0)
-                _particleRanges.Add((surface.TexturePath, start, cnt, ps.BlendMode, ps.SoftParticles, Math.Max(0.001f, ps.SoftParticleRange)));
+                _particleRanges.Add(new ParticleRenderRange(
+                    surface.TexturePath,
+                    start,
+                    cnt,
+                    ps.BlendMode,
+                    ps.SoftParticles,
+                    Math.Max(0.001f, ps.SoftParticleRange),
+                    EffectiveParticleRenderQueue(ps),
+                    ps.SortingLayer,
+                    ps.OrderInLayer,
+                    ps.SortingFudge));
 
             CollectParticleVerts(obj.Children, right, up, cameraPosition);
         }
+    }
+
+private void CollectParticleMeshDraws(IReadOnlyList<GameObject> objects, Vector3 cameraPosition)
+    {
+        foreach (var obj in objects)
+        {
+            if (!obj.IsActive)
+                continue;
+
+            var ps = obj.GetComponent<GrokoEngine.ParticleSystem>();
+            if (ps is { Enabled: true, RendererModuleEnabled: true } &&
+                ps.RenderMode is ParticleRenderMode.Mesh or ParticleRenderMode.Prefab &&
+                ps.Particles.Count > 0)
+            {
+                QueueParticleMeshDraws(obj, ps, cameraPosition);
+            }
+
+            CollectParticleMeshDraws(obj.Children, cameraPosition);
+        }
+    }
+
+private void QueueParticleMeshDraws(GameObject obj, GrokoEngine.ParticleSystem ps, Vector3 cameraPosition)
+    {
+        if (!TryResolveParticleVisualMesh(ps, out var visual))
+            return;
+
+        string meshPath = visual.MeshPath;
+        var mesh = GetParsedMesh(meshPath);
+        if (mesh == null || mesh.TriangleCount <= 0)
+            return;
+
+        bool isLocal = ps.SimulationSpace == ParticleSimulationSpace.Local;
+        var objPos = isLocal ? new MiMotor.Mathematics.Vector3(obj.PosX, obj.PosY, obj.PosZ) : MiMotor.Mathematics.Vector3.Zero;
+        var objRot = isLocal ? new MiMotor.Mathematics.Vector3(obj.RotX, obj.RotY, obj.RotZ) : MiMotor.Mathematics.Vector3.Zero;
+        Matrix4 emitterRotation = isLocal ? BuildEulerRotation(obj.RotX, obj.RotY, obj.RotZ) : Matrix4.Identity;
+
+        bool useGradient = ps.ColorKeyCount >= 2;
+        var surface = visual.Surface;
+        float hdrIntensity = Math.Max(0f, ps.HdrIntensity);
+        float meshScale = Math.Max(0.001f, ps.ParticleMeshScale);
+        Vector4 material = visual.Material;
+        Vector4 emission = visual.Emission;
+
+        int maxRender = ApplyRendererMaxParticles(ps, ps.Particles.Count);
+        int queued = 0;
+        foreach (var p in ps.Particles)
+        {
+            if (queued++ >= maxRender)
+                break;
+
+            var wp = GetWorldPos(p.Position, isLocal, objPos, objRot);
+
+            Vector4 color;
+            if (!ps.ColorOverLifetimeModuleEnabled)
+                color = new Vector4(ps.ColorStartR, ps.ColorStartG, ps.ColorStartB, ps.ColorStartA);
+            else if (useGradient)
+            {
+                var (r, g, b, a) = ps.SampleGradient(p.NormalizedAge);
+                color = new Vector4(r, g, b, a);
+            }
+            else
+                color = new Vector4(p.CurrentR, p.CurrentG, p.CurrentB, p.CurrentA);
+
+            color = ApplyParticleColorLook(ps, p, color, surface, hdrIntensity);
+
+            float sizeMultiplier = ps.SizeOverLifetimeModuleEnabled
+                ? GrokoEngine.ParticleSystem.EvaluateParticleCurve(ps.SizeOverLifetimeCurve, p.NormalizedAge, ps.SizeCurveMid, ps.SizeCurveMidValue)
+                : 1f;
+            float scale = Math.Max(0.0001f, p.CurrentSize * sizeMultiplier * meshScale);
+
+            Matrix4 orientation = ResolveParticleMeshOrientation(ps, p, wp, cameraPosition, emitterRotation);
+            Matrix4 world =
+                Matrix4.CreateScale(scale) *
+                orientation *
+                Matrix4.CreateTranslation(wp.X, wp.Y, wp.Z);
+
+            TryQueueDynamicMeshDraw(
+                mesh,
+                world,
+                1f,
+                color,
+                meshPath,
+                material,
+                emission,
+                0,
+                mesh.Positions.Length / 3,
+                surface.TexturePath,
+                visual.Maps.NormalMapPath,
+                visual.Maps.RoughnessMapPath,
+                visual.Maps.MetallicMapPath,
+                null,
+                null,
+                null,
+                ps.ParticleCastShadows,
+                ps.ParticleReceiveShadows);
+        }
+    }
+
+private static Matrix4 ResolveParticleMeshOrientation(
+    GrokoEngine.ParticleSystem ps,
+    Particle p,
+    MiMotor.Mathematics.Vector3 worldPosition,
+    Vector3 cameraPosition,
+    Matrix4 emitterRotation)
+    {
+        Matrix4 particleRoll = Matrix4.CreateRotationY(MathHelper.DegreesToRadians(p.Rotation));
+
+        return ps.RenderAlignment switch
+        {
+            ParticleRenderAlignment.Local => particleRoll * emitterRotation,
+            ParticleRenderAlignment.View => YawRotationToward(
+                new Vector3(cameraPosition.X - worldPosition.X, 0f, cameraPosition.Z - worldPosition.Z),
+                particleRoll),
+            ParticleRenderAlignment.Velocity => YawRotationToward(
+                new Vector3(p.Velocity.X, 0f, p.Velocity.Z),
+                particleRoll),
+            _ => particleRoll
+        };
+    }
+
+private static Matrix4 YawRotationToward(Vector3 direction, Matrix4 fallback)
+    {
+        if (direction.LengthSquared < 0.000001f)
+            return fallback;
+
+        direction.Normalize();
+        float yaw = MathF.Atan2(direction.X, direction.Z);
+        return Matrix4.CreateRotationY(yaw);
+    }
+
+private bool TryResolveParticleVisualMesh(GrokoEngine.ParticleSystem ps, out ParticleVisualMesh visual)
+    {
+        visual = default;
+
+        if (ps.RenderMode == ParticleRenderMode.Mesh)
+        {
+            string meshPath = NormalizeExistingAssetPath(ps.ParticleMeshPath) ?? ps.ParticleMeshPath;
+            if (string.IsNullOrWhiteSpace(meshPath) || !ObjLoader.IsSupportedMesh(meshPath))
+                return false;
+
+            var surface = GetParticleRenderSurface(ps);
+            visual = new ParticleVisualMesh(
+                meshPath,
+                surface,
+                new SurfaceMaps(null, null, null),
+                new Vector4(0f, 0.5f, 0f, 0f),
+                Vector4.Zero);
+            return true;
+        }
+
+        if (ps.RenderMode == ParticleRenderMode.Prefab)
+        {
+            string prefabPath = NormalizeExistingAssetPath(ps.ParticlePrefabPath) ?? ps.ParticlePrefabPath;
+            if (string.IsNullOrWhiteSpace(prefabPath) || !System.IO.File.Exists(prefabPath))
+                return false;
+
+            return TryGetPrefabParticleVisual(prefabPath, ps, out visual);
+        }
+
+        return false;
+    }
+
+private bool TryGetPrefabParticleVisual(string prefabPath, GrokoEngine.ParticleSystem ps, out ParticleVisualMesh visual)
+    {
+        visual = default;
+        DateTime writeTime = System.IO.File.GetLastWriteTimeUtc(prefabPath);
+        if (_particlePrefabVisualCache.TryGetValue(prefabPath, out var cached) && cached.WriteTime == writeTime)
+        {
+            visual = cached.Visual.WithFallbackSurface(GetParticleRenderSurface(ps));
+            return !string.IsNullOrWhiteSpace(visual.MeshPath);
+        }
+
+        try
+        {
+            var loaded = SceneSerializer.LoadPrefab(prefabPath, new PhysicsEngine(), new ScriptCompiler(System.IO.Path.GetDirectoryName(prefabPath) ?? string.Empty));
+            if (!TryFindFirstPrefabMesh(loaded, out var meshFilter, out var meshObject))
+                return false;
+
+            string meshPath = NormalizeExistingAssetPath(meshFilter.MeshPath) ?? meshFilter.MeshPath;
+            if (string.IsNullOrWhiteSpace(meshPath) || !ObjLoader.IsSupportedMesh(meshPath))
+                return false;
+
+            var tint = GetObjectColor(meshObject, new Vector4(1f, 1f, 1f, 1f));
+            string? texturePath = GetObjectTexturePath(meshObject);
+            var (material, emission) = GetObjectSurface(meshObject);
+            var maps = GetObjectSurfaceMaps(meshObject);
+
+            visual = new ParticleVisualMesh(
+                meshPath,
+                new ParticleRenderSurface(tint, NormalizeTexturePath(texturePath)),
+                maps,
+                material,
+                emission);
+            _particlePrefabVisualCache[prefabPath] = (writeTime, visual);
+            visual = visual.WithFallbackSurface(GetParticleRenderSurface(ps));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogAssetWarning($"Particle prefab visual failed: {System.IO.Path.GetFileName(prefabPath)} ({ex.Message})");
+            return false;
+        }
+    }
+
+private static bool TryFindFirstPrefabMesh(GameObject obj, out MeshFilter meshFilter, out GameObject meshObject)
+    {
+        if (obj.GetComponent<MeshFilter>() is { } mf && !string.IsNullOrWhiteSpace(mf.MeshPath))
+        {
+            meshFilter = mf;
+            meshObject = obj;
+            return true;
+        }
+
+        foreach (var child in obj.Children)
+        {
+            if (TryFindFirstPrefabMesh(child, out meshFilter, out meshObject))
+                return true;
+        }
+
+        meshFilter = null!;
+        meshObject = null!;
+        return false;
+    }
+
+private static Matrix4 BuildEulerRotation(float rotX, float rotY, float rotZ)
+    {
+        return Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(rotZ)) *
+               Matrix4.CreateRotationX(MathHelper.DegreesToRadians(rotX)) *
+               Matrix4.CreateRotationY(MathHelper.DegreesToRadians(rotY));
     }
 
 private static MiMotor.Mathematics.Vector3 GetWorldPos(
@@ -296,6 +544,62 @@ private ParticleRenderSurface GetParticleRenderSurface(GrokoEngine.ParticleSyste
         }
 
         return new ParticleRenderSurface(tint, NormalizeTexturePath(texturePath));
+    }
+
+private static Vector4 ApplyParticleColorLook(GrokoEngine.ParticleSystem ps, Particle p, Vector4 color, ParticleRenderSurface surface, float hdrIntensity)
+    {
+        float r = color.X * surface.Tint.X;
+        float g = color.Y * surface.Tint.Y;
+        float b = color.Z * surface.Tint.Z;
+        float a = Math.Clamp(color.W * surface.Tint.W, 0f, 1f);
+
+        float lum = r * 0.2126f + g * 0.7152f + b * 0.0722f;
+        float saturation = Math.Clamp(ps.ColorSaturation, 0f, 4f);
+        r = lum + (r - lum) * saturation;
+        g = lum + (g - lum) * saturation;
+        b = lum + (b - lum) * saturation;
+
+        float max = MathF.Max(r, MathF.Max(g, b));
+        float min = MathF.Min(r, MathF.Min(g, b));
+        float colorfulness = max <= 0.0001f ? 0f : Math.Clamp((max - min) / max, 0f, 1f);
+        float vibrance = Math.Clamp(ps.ColorVibrance, 0f, 4f);
+        float vibranceBoost = 1f + vibrance * (1f - colorfulness) * 0.65f;
+        r = lum + (r - lum) * vibranceBoost;
+        g = lum + (g - lum) * vibranceBoost;
+        b = lum + (b - lum) * vibranceBoost;
+
+        float variation = Math.Clamp(ps.ColorVariation, 0f, 1f);
+        if (variation > 0f)
+        {
+            float random = ParticleStableRandom01(p.Id);
+            float intensity = 1f + (random * 2f - 1f) * variation * 0.28f;
+            r *= intensity;
+            g *= intensity;
+            b *= intensity;
+        }
+
+        float alphaPower = Math.Clamp(ps.AlphaPower, 0.05f, 4f);
+        a = MathF.Pow(a, alphaPower);
+
+        return new Vector4(
+            Math.Max(0f, r) * hdrIntensity,
+            Math.Max(0f, g) * hdrIntensity,
+            Math.Max(0f, b) * hdrIntensity,
+            a);
+    }
+
+private static float ParticleStableRandom01(int id)
+    {
+        unchecked
+        {
+            uint x = (uint)id;
+            x ^= x >> 16;
+            x *= 0x7feb352dU;
+            x ^= x >> 15;
+            x *= 0x846ca68bU;
+            x ^= x >> 16;
+            return (x & 0x00FFFFFF) / 16777215f;
+        }
     }
 
 private bool TryGetParticleMaterial(string? materialPath, out MaterialAssetData data)
@@ -342,6 +646,25 @@ private static GameObject? FindByEditorId(IReadOnlyList<GameObject> objs, string
             if (found != null) return found;
         }
         return null;
+    }
+
+private static int ApplyRendererMaxParticles(GrokoEngine.ParticleSystem ps, int requested)
+    {
+        int max = Math.Max(0, requested);
+        if (ps.MaxRenderedParticles > 0)
+            max = Math.Min(max, ps.MaxRenderedParticles);
+        return Math.Min(max, Math.Max(0, ps.MaxParticles));
+    }
+
+private static int EffectiveParticleRenderQueue(GrokoEngine.ParticleSystem ps)
+    {
+        return ps.RenderQueue switch
+        {
+            ParticleRenderQueue.Opaque => 2000,
+            ParticleRenderQueue.Transparent => 3000,
+            ParticleRenderQueue.Overlay => 4000,
+            _ => ps.BlendMode == ParticleBlendMode.Alpha ? 3000 : 3100
+        };
     }
 
 private static MiMotor.Mathematics.Vector3 RotateVec3(MiMotor.Mathematics.Vector3 v, MiMotor.Mathematics.Vector3 rot)
@@ -663,4 +986,33 @@ private static int CreateParticleShader()
 private readonly record struct ParticleVertex(Vector3 Center, Vector2 Offset, Vector4 Color, float Rotation, Vector2 Uv, float Absolute);
 
 private readonly record struct ParticleRenderSurface(Vector4 Tint, string? TexturePath);
+
+private readonly record struct ParticleRenderRange(
+    string? TexturePath,
+    int Start,
+    int Count,
+    ParticleBlendMode Blend,
+    bool Soft,
+    float SoftRange,
+    int Queue,
+    int SortingLayer,
+    int OrderInLayer,
+    int SortingFudge);
+
+private readonly record struct ParticleVisualMesh(
+    string MeshPath,
+    ParticleRenderSurface Surface,
+    SurfaceMaps Maps,
+    Vector4 Material,
+    Vector4 Emission)
+{
+    public ParticleVisualMesh WithFallbackSurface(ParticleRenderSurface fallback)
+    {
+        var tint = Surface.Tint == default ? fallback.Tint : Surface.Tint;
+        string? texture = string.IsNullOrWhiteSpace(Surface.TexturePath) ? fallback.TexturePath : Surface.TexturePath;
+        return this with { Surface = new ParticleRenderSurface(tint, texture) };
+    }
+}
+
+private readonly Dictionary<string, (DateTime WriteTime, ParticleVisualMesh Visual)> _particlePrefabVisualCache = new(StringComparer.OrdinalIgnoreCase);
 }

@@ -37,6 +37,7 @@ internal static class Program
             ("SceneCommandHistory executes undo and redo", SceneCommandHistoryExecutesUndoRedo),
             ("SelectionService selects toggles and restores by id", SelectionServiceSelectsTogglesAndRestoresById),
             ("AssetService imports unique files and applies material", AssetServiceImportsUniqueFilesAndAppliesMaterial),
+            ("ObjLoader loads minimal FBX mesh", ObjLoaderLoadsMinimalFbxMesh),
             ("ScriptCompiler skips unchanged recompiles", ScriptCompilerSkipsUnchangedRecompiles),
             ("ScriptCompiler creates player controller pro script", ScriptCompilerCreatesPlayerControllerProScript),
             ("ScriptCompiler repairs legacy player controller pro script", ScriptCompilerRepairsLegacyPlayerControllerProScript),
@@ -76,10 +77,15 @@ internal static class Program
             ("CharacterController steps over low obstacles", CharacterControllerStepsOverLowObstacles),
             ("SceneSerializer preserves character controller", SceneSerializerPreservesCharacterController),
             ("SceneSerializer preserves post process enabled flag", SceneSerializerPreservesPostProcessEnabledFlag),
+            ("SceneSerializer preserves camera clear flags", SceneSerializerPreservesCameraClearFlags),
             ("SceneSerializer does not duplicate character capsule", SceneSerializerDoesNotDuplicateCharacterCapsule),
             ("CharacterController ignores same object colliders", CharacterControllerIgnoresSameObjectColliders),
             ("CharacterController auto centers capsule", CharacterControllerAutoCentersCapsule),
             ("CharacterController records last move debug data", CharacterControllerRecordsLastMoveDebugData),
+            ("CharacterController forces same-object Rigidbody safe", CharacterControllerForcesSameObjectRigidbodySafe),
+            ("SceneSerializer preserves particle mesh renderer", SceneSerializerPreservesParticleMeshRenderer),
+            ("SceneSerializer preserves particle prefab renderer", SceneSerializerPreservesParticlePrefabRenderer),
+            ("SceneSerializer preserves particle curves", SceneSerializerPreservesParticleCurves),
             ("SceneSerializer preserves additional colliders", SceneSerializerPreservesAdditionalColliders),
             ("ParticleSystem rate over distance starts at current position", ParticleSystemRateOverDistanceStartsAtCurrentPosition),
             ("LightmapBaker handles empty scenes", LightmapBakerHandlesEmptyScenes),
@@ -614,6 +620,43 @@ internal static class Program
         AssertEqual(Path.GetFullPath(materialPath), Path.GetFullPath(mat.AssetPath), "material asset path");
         AssertFalse(mat.IsInstance, "material asset should be shared");
         AssertNear(0.25f, mat.R, "material r");
+    }
+
+    private static void ObjLoaderLoadsMinimalFbxMesh()
+    {
+        string root = CreateTempProject();
+        string assets = Path.Combine(root, "Assets");
+        Directory.CreateDirectory(assets);
+        string fbxPath = Path.Combine(assets, "triangle.fbx");
+
+        File.WriteAllText(fbxPath, """
+            ; FBX 7.4.0 project file
+            Objects:  {
+                Geometry: 1, "Geometry::Triangle", "Mesh" {
+                    Vertices: *9 {
+                        a: 0,0,0, 1,0,0, 0,1,0
+                    }
+                    PolygonVertexIndex: *3 {
+                        a: 0,1,-3
+                    }
+                }
+            }
+            """);
+
+        ObjLoader.InvalidateCache(fbxPath);
+        var mesh = ObjLoader.Load(fbxPath);
+
+        AssertTrue(mesh != null, "fbx mesh loaded: " + ObjLoader.LastError);
+        AssertEqual(1, mesh!.TriangleCount, "fbx triangle count");
+        AssertEqual(9, mesh.Positions.Length, "fbx position float count");
+        AssertEqual(9, mesh.Normals.Length, "fbx normal float count");
+        AssertEqual(6, mesh.UVs.Length, "fbx uv float count");
+        AssertNear(0f, mesh.BoundsMin.X, "fbx bounds min x");
+        AssertNear(0f, mesh.BoundsMin.Y, "fbx bounds min y");
+        AssertNear(0f, mesh.BoundsMin.Z, "fbx bounds min z");
+        AssertNear(1f, mesh.BoundsMax.X, "fbx bounds max x");
+        AssertNear(1f, mesh.BoundsMax.Y, "fbx bounds max y");
+        AssertNear(0f, mesh.BoundsMax.Z, "fbx bounds max z");
     }
 
     private static void ScriptCompilerSkipsUnchangedRecompiles()
@@ -1735,6 +1778,165 @@ internal static class Program
         AssertNear(-0.75f, cc.LastMoveDelta.Z, "last move z");
     }
 
+    private static void CharacterControllerForcesSameObjectRigidbodySafe()
+    {
+        var rbFirst = new GameObject { Name = "RbFirstPlayer" };
+        var rbA = rbFirst.AddComponent<Rigidbody>();
+        rbA.IsKinematic = false;
+        rbA.UseGravity = true;
+        rbA.Velocity = new Vector3(1f, -2f, 3f);
+
+        rbFirst.AddComponent<CharacterController>();
+
+        AssertTrue(rbA.IsKinematic, "rigidbody added before character becomes kinematic");
+        AssertFalse(rbA.UseGravity, "rigidbody added before character disables gravity");
+        AssertNear(0f, rbA.Velocity.X, "rigidbody velocity x cleared");
+        AssertNear(0f, rbA.Velocity.Y, "rigidbody velocity y cleared");
+        AssertNear(0f, rbA.Velocity.Z, "rigidbody velocity z cleared");
+
+        var ccFirst = new GameObject { Name = "CcFirstPlayer" };
+        ccFirst.AddComponent<CharacterController>();
+        var rbB = ccFirst.AddComponent<Rigidbody>();
+
+        AssertTrue(rbB.IsKinematic, "rigidbody added after character becomes kinematic");
+        AssertFalse(rbB.UseGravity, "rigidbody added after character disables gravity");
+    }
+
+    private static void SceneSerializerPreservesParticleMeshRenderer()
+    {
+        string root = CreateTempProject();
+        string assets = Path.Combine(root, "Assets");
+        string scenePath = Path.Combine(assets, "Scenes", "ParticleMesh.gscene");
+        string meshPath = Path.Combine(assets, "Meshes", "spark.obj");
+        Directory.CreateDirectory(Path.GetDirectoryName(scenePath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(meshPath)!);
+        File.WriteAllText(meshPath, "o Spark\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+
+        var obj = new GameObject { Name = "Mesh Particles" };
+        var ps = obj.AddComponent<ParticleSystem>();
+        ps.RenderMode = ParticleRenderMode.Mesh;
+        ps.ParticleMeshPath = meshPath;
+        ps.ParticleMeshScale = 2.5f;
+        ps.RenderAlignment = ParticleRenderAlignment.Velocity;
+        ps.ParticleCastShadows = false;
+        ps.ParticleReceiveShadows = false;
+        ps.RenderQueue = ParticleRenderQueue.Transparent;
+        ps.SortingLayer = 2;
+        ps.OrderInLayer = 7;
+        ps.MaxRenderedParticles = 123;
+        ps.RendererBoundsPadding = 3.5f;
+        ps.ColorSaturation = 1.4f;
+        ps.ColorVibrance = 0.7f;
+        ps.AlphaPower = 0.8f;
+        ps.ColorVariation = 0.3f;
+
+        SceneSerializer.Save(scenePath, new[] { obj });
+        var loaded = SceneSerializer.Load(scenePath, new PhysicsEngine(), new ScriptCompiler(assets));
+        var loadedPs = loaded[0].GetComponent<ParticleSystem>()!;
+
+        AssertEqual(ParticleRenderMode.Mesh, loadedPs.RenderMode, "particle render mode");
+        AssertTrue(Path.GetFullPath(loadedPs.ParticleMeshPath).Equals(Path.GetFullPath(meshPath), StringComparison.OrdinalIgnoreCase), "particle mesh path restored");
+        AssertNear(2.5f, loadedPs.ParticleMeshScale, "particle mesh scale");
+        AssertEqual(ParticleRenderAlignment.Velocity, loadedPs.RenderAlignment, "particle mesh alignment");
+        AssertFalse(loadedPs.ParticleCastShadows, "particle mesh cast shadows");
+        AssertFalse(loadedPs.ParticleReceiveShadows, "particle mesh receive shadows");
+        AssertEqual(ParticleRenderQueue.Transparent, loadedPs.RenderQueue, "particle mesh render queue");
+        AssertEqual(2, loadedPs.SortingLayer, "particle mesh sorting layer");
+        AssertEqual(7, loadedPs.OrderInLayer, "particle mesh order in layer");
+        AssertEqual(123, loadedPs.MaxRenderedParticles, "particle mesh max rendered particles");
+        AssertNear(3.5f, loadedPs.RendererBoundsPadding, "particle mesh bounds padding");
+        AssertNear(1.4f, loadedPs.ColorSaturation, "particle color saturation");
+        AssertNear(0.7f, loadedPs.ColorVibrance, "particle color vibrance");
+        AssertNear(0.8f, loadedPs.AlphaPower, "particle alpha power");
+        AssertNear(0.3f, loadedPs.ColorVariation, "particle color variation");
+    }
+
+    private static void SceneSerializerPreservesParticlePrefabRenderer()
+    {
+        string root = CreateTempProject();
+        string assets = Path.Combine(root, "Assets");
+        string scenePath = Path.Combine(assets, "Scenes", "ParticlePrefab.gscene");
+        string prefabPath = Path.Combine(assets, "Prefabs", "Spark.prefab");
+        Directory.CreateDirectory(Path.GetDirectoryName(scenePath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(prefabPath)!);
+
+        var prefab = new GameObject { Name = "SparkVisual" };
+        var mf = prefab.AddComponent<MeshFilter>();
+        mf.MeshPath = Path.Combine(assets, "Meshes", "spark.obj");
+        SceneSerializer.SavePrefab(prefabPath, prefab);
+
+        var obj = new GameObject { Name = "Prefab Particles" };
+        var ps = obj.AddComponent<ParticleSystem>();
+        ps.RenderMode = ParticleRenderMode.Prefab;
+        ps.ParticlePrefabPath = prefabPath;
+        ps.ParticleMeshScale = 0.75f;
+        ps.RenderAlignment = ParticleRenderAlignment.View;
+        ps.ParticleCastShadows = false;
+        ps.ParticleReceiveShadows = true;
+        ps.RenderQueue = ParticleRenderQueue.Overlay;
+        ps.SortingLayer = 4;
+        ps.OrderInLayer = -3;
+        ps.MaxRenderedParticles = 25;
+        ps.RendererBoundsPadding = 1.25f;
+
+        SceneSerializer.Save(scenePath, new[] { obj });
+        var loaded = SceneSerializer.Load(scenePath, new PhysicsEngine(), new ScriptCompiler(assets));
+        var loadedPs = loaded[0].GetComponent<ParticleSystem>()!;
+
+        AssertEqual(ParticleRenderMode.Prefab, loadedPs.RenderMode, "particle prefab render mode");
+        AssertTrue(Path.GetFullPath(loadedPs.ParticlePrefabPath).Equals(Path.GetFullPath(prefabPath), StringComparison.OrdinalIgnoreCase), "particle prefab path restored");
+        AssertNear(0.75f, loadedPs.ParticleMeshScale, "particle prefab scale");
+        AssertEqual(ParticleRenderAlignment.View, loadedPs.RenderAlignment, "particle prefab alignment");
+        AssertFalse(loadedPs.ParticleCastShadows, "particle prefab cast shadows");
+        AssertTrue(loadedPs.ParticleReceiveShadows, "particle prefab receive shadows");
+        AssertEqual(ParticleRenderQueue.Overlay, loadedPs.RenderQueue, "particle prefab render queue");
+        AssertEqual(4, loadedPs.SortingLayer, "particle prefab sorting layer");
+        AssertEqual(-3, loadedPs.OrderInLayer, "particle prefab order in layer");
+        AssertEqual(25, loadedPs.MaxRenderedParticles, "particle prefab max rendered particles");
+        AssertNear(1.25f, loadedPs.RendererBoundsPadding, "particle prefab bounds padding");
+    }
+
+    private static void SceneSerializerPreservesParticleCurves()
+    {
+        string root = CreateTempProject();
+        string assets = Path.Combine(root, "Assets");
+        string scenePath = Path.Combine(assets, "Scenes", "ParticleCurves.gscene");
+        Directory.CreateDirectory(Path.GetDirectoryName(scenePath)!);
+
+        var obj = new GameObject { Name = "Curve Particles" };
+        var ps = obj.AddComponent<ParticleSystem>();
+        ps.LifetimeMode = ParticleValueMode.Curve;
+        ps.LifetimeCurve = new ParticleCurve
+        {
+            Keys = new List<ParticleCurveKey>
+            {
+                new(0f, 0.25f, ParticleCurveTangentMode.Linear),
+                new(0.35f, 2.25f, ParticleCurveTangentMode.Smooth),
+                new(1f, 0.75f, ParticleCurveTangentMode.Constant)
+            }
+        };
+        ps.LifetimeCurve.Normalize();
+        ps.SpeedCurve = new ParticleCurve
+        {
+            Keys = new List<ParticleCurveKey>
+            {
+                new(0f, 1f, ParticleCurveTangentMode.Linear),
+                new(1f, 3f, ParticleCurveTangentMode.Linear)
+            }
+        };
+
+        SceneSerializer.Save(scenePath, new[] { obj });
+        var loaded = SceneSerializer.Load(scenePath, new PhysicsEngine(), new ScriptCompiler(assets));
+        var loadedPs = loaded[0].GetComponent<ParticleSystem>()!;
+
+        AssertEqual(3, loadedPs.LifetimeCurve.Keys.Count, "lifetime curve key count");
+        AssertNear(0.35f, loadedPs.LifetimeCurve.Keys[1].Time, "lifetime curve mid time");
+        AssertNear(2.25f, loadedPs.LifetimeCurve.Keys[1].Value, "lifetime curve mid value");
+        AssertEqual(ParticleCurveTangentMode.Smooth, loadedPs.LifetimeCurve.Keys[1].TangentMode, "lifetime curve tangent");
+        AssertEqual(ParticleCurveTangentMode.Constant, loadedPs.LifetimeCurve.Keys[2].TangentMode, "lifetime curve constant tangent");
+        AssertNear(3f, loadedPs.SpeedCurve.Evaluate(1f), "speed curve evaluate");
+    }
+
     private static void SceneSerializerPreservesAdditionalColliders()
     {
         string root = CreateTempProject();
@@ -2315,6 +2517,31 @@ internal static class Program
         var legacyLoaded = SceneSerializer.Deserialize(legacyJson, physics, scripts);
         var legacyPp = legacyLoaded[0].GetComponent<PostProcessSettings>()!;
         AssertFalse(legacyPp.PostProcessEnabled, "legacy enabled flag restored");
+    }
+
+    private static void SceneSerializerPreservesCameraClearFlags()
+    {
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets"));
+        var obj = new GameObject { Name = "Main Camera" };
+        var cam = obj.AddComponent<Camera>();
+        cam.ClearFlags = CameraClearFlags.SolidColor;
+        cam.BackgroundR = 0.28f;
+        cam.BackgroundG = 0.42f;
+        cam.BackgroundB = 0.68f;
+        cam.BackgroundA = 1f;
+
+        string json = SceneSerializer.Serialize(new[] { obj });
+        AssertContains(json, "ClearFlags", "camera clear flags serialized");
+        AssertContains(json, "BackgroundR", "camera background serialized");
+
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts);
+        var loadedCam = loaded[0].GetComponent<Camera>()!;
+        AssertEqual(CameraClearFlags.SolidColor, loadedCam.ClearFlags, "camera clear flags restored");
+        AssertNear(0.28f, loadedCam.BackgroundR, "camera background r restored");
+        AssertNear(0.42f, loadedCam.BackgroundG, "camera background g restored");
+        AssertNear(0.68f, loadedCam.BackgroundB, "camera background b restored");
+        AssertNear(1f, loadedCam.BackgroundA, "camera background a restored");
     }
 
     private sealed class TestCommand : ISceneCommand

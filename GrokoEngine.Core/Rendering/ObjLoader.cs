@@ -237,8 +237,10 @@ namespace GrokoEngine
             try
             {
                 var mesh = path.EndsWith(".fbx", StringComparison.OrdinalIgnoreCase)
-                    ? ParseWithAssimp(path) ?? ParseFbxAscii(path)
+                    ? ParseFbx(path)
                     : ParseObj(path);
+                if (mesh == null)
+                    return null;
                 EvictIfNeeded();
                 _cache[path] = (mesh, diskTime, Interlocked.Increment(ref _insertTick));
                 return mesh;
@@ -251,6 +253,33 @@ namespace GrokoEngine
         }
 
         public static void InvalidateCache(string path) => _cache.TryRemove(path, out _);
+
+        private static ParsedMesh? ParseFbx(string path)
+        {
+            Exception? assimpException = null;
+            try
+            {
+                var mesh = ParseWithAssimp(path);
+                if (mesh != null)
+                    return mesh;
+            }
+            catch (Exception ex)
+            {
+                assimpException = ex;
+            }
+
+            try
+            {
+                return ParseFbxAscii(path);
+            }
+            catch (Exception ex)
+            {
+                LastError = assimpException == null
+                    ? ex.Message
+                    : $"Assimp: {assimpException.Message}; ASCII fallback: {ex.Message}";
+                return null;
+            }
+        }
 
         // Evicción FIFO: si el cache está lleno, descarta la(s) entrada(s) con el
         // tick de inserción más antiguo hasta dejar hueco para una nueva. O(n) por

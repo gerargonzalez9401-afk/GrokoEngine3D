@@ -283,6 +283,11 @@ namespace GrokoEngine
                     data.Fields["FOV"] = cam.FOV.ToString(CultureInfo.InvariantCulture);
                     data.Fields["NearClip"] = cam.NearClip.ToString(CultureInfo.InvariantCulture);
                     data.Fields["FarClip"] = cam.FarClip.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ClearFlags"] = cam.ClearFlags.ToString();
+                    data.Fields["BackgroundR"] = cam.BackgroundR.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["BackgroundG"] = cam.BackgroundG.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["BackgroundB"] = cam.BackgroundB.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["BackgroundA"] = cam.BackgroundA.ToString(CultureInfo.InvariantCulture);
                     data.Fields["AntiAliasing"] = cam.AntiAliasing.ToString();
                     data.Fields["AntiAliasingSamples"] = cam.AntiAliasingSamples.ToString(CultureInfo.InvariantCulture);
                     data.Fields["FrustumCulling"] = cam.FrustumCulling.ToString();
@@ -477,6 +482,8 @@ namespace GrokoEngine
                     }
                     if (comp is ParticleSystem ps && ps.ExtraBursts.Count > 0)
                         data.Fields["ExtraBursts"] = JsonSerializer.Serialize(ps.ExtraBursts, JsonOptions);
+                    if (comp is ParticleSystem psCurves)
+                        SerializeParticleCurves(data, psCurves);
                     return data;
                 case MonoBehaviour:
                     foreach (var field in comp.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
@@ -847,6 +854,9 @@ namespace GrokoEngine
                 }
             }
 
+            if (comp is ParticleSystem psCurves)
+                DeserializeParticleCurves(psCurves, fields);
+
             // Campos Vector3 de scripts (MonoBehaviour): reconstruir desde {Name}X/Y/Z
             if (comp is MonoBehaviour)
             {
@@ -935,6 +945,46 @@ namespace GrokoEngine
 
         private static bool IsPathFieldName(string name) =>
             name.EndsWith("Path", StringComparison.OrdinalIgnoreCase);
+
+        private static void SerializeParticleCurves(ComponentData data, ParticleSystem ps)
+        {
+            data.Fields[nameof(ParticleSystem.LifetimeCurve)] = JsonSerializer.Serialize(ps.LifetimeCurve, JsonOptions);
+            data.Fields[nameof(ParticleSystem.SpeedCurve)] = JsonSerializer.Serialize(ps.SpeedCurve, JsonOptions);
+            data.Fields[nameof(ParticleSystem.StartSizeCurve)] = JsonSerializer.Serialize(ps.StartSizeCurve, JsonOptions);
+            data.Fields[nameof(ParticleSystem.SizeOverLifetimeCurve)] = JsonSerializer.Serialize(ps.SizeOverLifetimeCurve, JsonOptions);
+            data.Fields[nameof(ParticleSystem.GravityCurve)] = JsonSerializer.Serialize(ps.GravityCurve, JsonOptions);
+        }
+
+        private static void DeserializeParticleCurves(ParticleSystem ps, Dictionary<string, string> fields)
+        {
+            ps.LifetimeCurve = ReadParticleCurve(fields, nameof(ParticleSystem.LifetimeCurve), ps.LifetimeCurveMid, ps.LifetimeCurveMidValue);
+            ps.SpeedCurve = ReadParticleCurve(fields, nameof(ParticleSystem.SpeedCurve), ps.SpeedCurveMid, ps.SpeedCurveMidValue);
+            ps.StartSizeCurve = ReadParticleCurve(fields, nameof(ParticleSystem.StartSizeCurve), ps.StartSizeCurveMid, ps.StartSizeCurveMidValue);
+            ps.SizeOverLifetimeCurve = ReadParticleCurve(fields, nameof(ParticleSystem.SizeOverLifetimeCurve), ps.SizeCurveMid, ps.SizeCurveMidValue);
+            ps.GravityCurve = ReadParticleCurve(fields, nameof(ParticleSystem.GravityCurve), ps.GravityCurveMid, ps.GravityCurveMidValue);
+        }
+
+        private static ParticleCurve ReadParticleCurve(Dictionary<string, string> fields, string name, float fallbackMid, float fallbackValue)
+        {
+            if (fields.TryGetValue(name, out var raw) && !string.IsNullOrWhiteSpace(raw))
+            {
+                try
+                {
+                    var curve = JsonSerializer.Deserialize<ParticleCurve>(raw, JsonOptions);
+                    if (curve != null)
+                    {
+                        curve.Normalize();
+                        return curve;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    GrokoEngine.Debug.LogWarning($"No se pudo restaurar curva de partículas '{name}': {ex.Message}");
+                }
+            }
+
+            return ParticleCurve.FromSimple(fallbackMid, fallbackValue);
+        }
 
         private static void SerializeFloat(ComponentData data, string key, float value)
             => data.Fields[key] = value.ToString(CultureInfo.InvariantCulture);

@@ -108,6 +108,12 @@ private void DrawProjectAssetPreview(ImDrawListPtr drawList, string path, bool i
             return;
         }
 
+        if (kind == "PART")
+        {
+            DrawParticlePresetAssetPreview(drawList, min, size);
+            return;
+        }
+
         DrawFileAssetPreview(drawList, min, size, kind, ProjectAssetColorForKind(kind));
     }
 
@@ -187,6 +193,40 @@ private static void DrawAnimationAssetPreview(ImDrawListPtr drawList, Vector2 mi
         var b = min + new Vector2(size * 0.70f, size * 0.50f);
         var c = min + new Vector2(size * 0.34f, size * 0.76f);
         drawList.AddTriangleFilled(a, b, c, teal);
+    }
+
+private static void DrawParticlePresetAssetPreview(ImDrawListPtr drawList, Vector2 min, float size)
+    {
+        var max = min + new Vector2(size, size);
+        uint bgTop = ImGui.GetColorU32(new System.Numerics.Vector4(0.15f, 0.08f, 0.20f, 1f));
+        uint bgBottom = ImGui.GetColorU32(new System.Numerics.Vector4(0.04f, 0.05f, 0.08f, 1f));
+        uint border = ImGui.GetColorU32(new System.Numerics.Vector4(0.78f, 0.42f, 1.00f, 1f));
+        uint glow = ImGui.GetColorU32(new System.Numerics.Vector4(0.72f, 0.32f, 1.00f, 0.32f));
+        uint hot = ImGui.GetColorU32(new System.Numerics.Vector4(1.00f, 0.72f, 0.25f, 1f));
+        uint pink = ImGui.GetColorU32(new System.Numerics.Vector4(0.92f, 0.35f, 1.00f, 1f));
+        uint blue = ImGui.GetColorU32(new System.Numerics.Vector4(0.34f, 0.78f, 1.00f, 1f));
+        uint white = ImGui.GetColorU32(new System.Numerics.Vector4(0.92f, 0.96f, 1.00f, 1f));
+
+        drawList.AddRectFilledMultiColor(min, max, bgTop, bgTop, bgBottom, bgBottom);
+        drawList.AddRect(min, max, border, 6f, ImDrawFlags.None, Math.Max(1.2f, size * 0.035f));
+
+        var center = min + new Vector2(size * 0.50f, size * 0.55f);
+        for (int i = 0; i < 7; i++)
+        {
+            float a = -1.2f + i * 0.42f;
+            float len = size * (0.22f + (i % 3) * 0.045f);
+            var p0 = center + new Vector2(MathF.Cos(a) * size * 0.06f, MathF.Sin(a) * size * 0.04f);
+            var p1 = center + new Vector2(MathF.Cos(a) * len, MathF.Sin(a) * len);
+            uint col = i % 3 == 0 ? hot : i % 3 == 1 ? pink : blue;
+            drawList.AddLine(p0, p1, col, Math.Max(1.2f, size * 0.035f));
+            drawList.AddCircleFilled(p1, Math.Max(1.6f, size * 0.045f), col, 14);
+        }
+
+        drawList.AddCircleFilled(center, size * 0.18f, glow, 24);
+        drawList.AddCircleFilled(center, size * 0.075f, white, 18);
+
+        if (size >= 38f)
+            drawList.AddText(min + new Vector2(size * 0.17f, size * 0.09f), white, "FX");
     }
 
 private void DrawFolderPreview(ImDrawListPtr drawList, Vector2 min, float size, bool hasContent)

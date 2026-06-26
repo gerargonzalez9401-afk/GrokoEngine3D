@@ -32,6 +32,14 @@ namespace GrokoEngine.ImGuiEditor;
 
 internal sealed partial class ImGuiEditorApp
 {
+private static string? particleCurveEditorOpenId;
+private static int particleCurveSelectedKey = -1;
+private sealed record ParticleModuleClipboard(string ModuleId, Dictionary<string, string> Values);
+private sealed record ParticlePresetFile(int Version, string Name, Dictionary<string, string> Values);
+private static ParticleModuleClipboard? particleModuleClipboard;
+private static readonly JsonSerializerOptions ParticleModuleClipboardJsonOptions = new() { IncludeFields = true };
+private string particlePresetAssetPath = "";
+
 private GameObject CreateParticleSystem()
     {
         return CommitSceneMutation("Create Particle System", () =>
@@ -139,7 +147,11 @@ private static void ConfigureProfessionalParticleDefaults(GrokoEngine.ParticleSy
         ps.SortParticles = true;
         ps.SoftParticles = true;
         ps.SoftParticleRange = 0.25f;
-        ps.HdrIntensity = 1.75f;
+        ps.HdrIntensity = 2.2f;
+        ps.ColorSaturation = 1.25f;
+        ps.ColorVibrance = 0.65f;
+        ps.AlphaPower = 0.82f;
+        ps.ColorVariation = 0.18f;
         ps.TrailsModuleEnabled = false;
         ps.TrailEnabled = false;
         ps.ParticleCollision = false;
@@ -154,7 +166,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8f, 6f));
         ImGui.Indent(10f);
 
-        if (DrawParticleSection("Main", "timing, space and limits"))
+        if (DrawParticleSection(ps, "main", "⚙", "Main", "timing, space and limits"))
         {
             bool enabled = ps.MainModuleEnabled;
             if (DrawParticleModuleToggle("main", ref enabled)) ps.MainModuleEnabled = enabled;
@@ -178,7 +190,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Emission", "rate and bursts"))
+        if (DrawParticleSection(ps, "emission", "✦", "Emission", "rate and bursts"))
         {
             bool enabled = ps.EmissionModuleEnabled;
             if (DrawParticleModuleToggle("emission", ref enabled)) ps.EmissionModuleEnabled = enabled;
@@ -253,7 +265,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Shape", "spawn volume"))
+        if (DrawParticleSection(ps, "shape", "◎", "Shape", "spawn volume"))
         {
             bool enabled = ps.ShapeModuleEnabled;
             if (DrawParticleModuleToggle("shape", ref enabled)) ps.ShapeModuleEnabled = enabled;
@@ -276,19 +288,19 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Particle", "lifetime, size, speed"))
+        if (DrawParticleSection(ps, "particle", "◈", "Particle", "lifetime, size, speed"))
         {
             DrawParticleScalarMode("lifetime", "Lifetime Mode", ps.LifetimeMode, v => ps.LifetimeMode = v,
                 "Lifetime", ps.LifetimeMin, ps.LifetimeMax,
                 (a, b) => { ps.LifetimeMin = Math.Max(0.01f, Math.Min(a, b)); ps.LifetimeMax = Math.Max(ps.LifetimeMin, b); },
-                ps.LifetimeCurveMid, ps.LifetimeCurveMidValue,
+                ps.LifetimeCurve, ps.LifetimeCurveMid, ps.LifetimeCurveMidValue,
                 (mid, value) => { ps.LifetimeCurveMid = Math.Clamp(mid, 0f, 1f); ps.LifetimeCurveMidValue = Math.Max(0f, value); },
                 0.05f, 0.01f, 100f);
 
             DrawParticleScalarMode("speed", "Speed Mode", ps.SpeedMode, v => ps.SpeedMode = v,
                 "Speed", ps.SpeedMin, ps.SpeedMax,
                 (a, b) => { ps.SpeedMin = Math.Max(0f, Math.Min(a, b)); ps.SpeedMax = Math.Max(ps.SpeedMin, b); },
-                ps.SpeedCurveMid, ps.SpeedCurveMidValue,
+                ps.SpeedCurve, ps.SpeedCurveMid, ps.SpeedCurveMidValue,
                 (mid, value) => { ps.SpeedCurveMid = Math.Clamp(mid, 0f, 1f); ps.SpeedCurveMidValue = Math.Max(0f, value); },
                 0.1f, 0f, 500f);
 
@@ -309,7 +321,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             if (ps.SizeMode is ParticleValueMode.Curve or ParticleValueMode.RandomBetweenTwoCurves)
             {
                 DrawParticleCurveControls("Start Size Curve", "psstartsizecurve",
-                    ps.StartSizeCurveMid, ps.StartSizeCurveMidValue,
+                    ps.StartSizeCurve, ps.StartSizeCurveMid, ps.StartSizeCurveMidValue,
                     (mid, value) => { ps.StartSizeCurveMid = Math.Clamp(mid, 0f, 1f); ps.StartSizeCurveMidValue = Math.Max(0f, value); });
             }
             if (ps.StartSize3D)
@@ -327,7 +339,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             if (ps.SizeOverLifetimeModuleEnabled)
             {
                 DrawParticleCurveControls("Size Lifetime Curve", "pssizecurve",
-                    ps.SizeCurveMid, ps.SizeCurveMidValue,
+                    ps.SizeOverLifetimeCurve, ps.SizeCurveMid, ps.SizeCurveMidValue,
                     (mid, value) => { ps.SizeCurveMid = Math.Clamp(mid, 0f, 1f); ps.SizeCurveMidValue = Math.Max(0f, value); });
             }
 
@@ -337,7 +349,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
                 (a, b) => { ps.RotationSpeedMin = a; ps.RotationSpeedMax = b; }, 1f, -720f, 720f);
         }
 
-        if (DrawParticleSection("Color over Lifetime", "gradient and alpha"))
+        if (DrawParticleSection(ps, "color", "▰", "Color over Lifetime", "gradient and alpha"))
         {
             bool enabled = ps.ColorOverLifetimeModuleEnabled;
             if (DrawParticleModuleToggle("color", ref enabled)) ps.ColorOverLifetimeModuleEnabled = enabled;
@@ -351,7 +363,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Velocity over Lifetime", "wind and drift", false))
+        if (DrawParticleSection(ps, "velocity", "⇢", "Velocity over Lifetime", "wind and drift", false))
         {
             bool enabled = ps.VelocityOverLifetimeModuleEnabled;
             if (DrawParticleModuleToggle("velocity", ref enabled)) ps.VelocityOverLifetimeModuleEnabled = enabled;
@@ -363,7 +375,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Force over Lifetime", "constant forces", false))
+        if (DrawParticleSection(ps, "force", "↯", "Force over Lifetime", "constant forces", false))
         {
             bool enabled = ps.ForceOverLifetimeModuleEnabled;
             if (DrawParticleModuleToggle("force", ref enabled)) ps.ForceOverLifetimeModuleEnabled = enabled;
@@ -374,7 +386,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Limit Velocity over Lifetime", "speed cap", false))
+        if (DrawParticleSection(ps, "limitvelocity", "⇥", "Limit Velocity over Lifetime", "speed cap", false))
         {
             bool enabled = ps.LimitVelocityOverLifetimeModuleEnabled;
             if (DrawParticleModuleToggle("limitvelocity", ref enabled)) ps.LimitVelocityOverLifetimeModuleEnabled = enabled;
@@ -384,7 +396,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Noise", "organic motion", false))
+        if (DrawParticleSection(ps, "noise", "≈", "Noise", "organic motion", false))
         {
             bool enabled = ps.NoiseModuleEnabled;
             if (DrawParticleModuleToggle("noise", ref enabled)) ps.NoiseModuleEnabled = enabled;
@@ -394,7 +406,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Texture Sheet Animation", "sprite atlas", false))
+        if (DrawParticleSection(ps, "sheet", "▦", "Texture Sheet Animation", "sprite atlas", false))
         {
             DrawAssetSlot("Texture##pstexture", ps.TexturePath, "None (Texture)", path => ps.TexturePath = path ?? "", MaterialAsset.IsTexturePath);
             if (!string.IsNullOrEmpty(ps.TexturePath))
@@ -413,7 +425,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Renderer", "billboard, blend and sorting"))
+        if (DrawParticleSection(ps, "renderer", "▣", "Renderer", "billboard, blend and sorting"))
         {
             bool enabled = ps.RendererModuleEnabled;
             if (DrawParticleModuleToggle("renderer", ref enabled)) ps.RendererModuleEnabled = enabled;
@@ -429,11 +441,68 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
                 ps.RenderMode = v;
                 ps.StretchedBillboard = v == ParticleRenderMode.StretchedBillboard;
             });
+            if (ps.RenderMode == ParticleRenderMode.Mesh)
+            {
+                DrawAssetSlot("Mesh##psrenderer", ps.ParticleMeshPath, "Drop mesh / FBX / OBJ", path =>
+                {
+                    if (string.IsNullOrWhiteSpace(path) || ObjLoader.IsSupportedMesh(path))
+                        ps.ParticleMeshPath = path ?? "";
+                }, ObjLoader.IsSupportedMesh);
+                if (!string.IsNullOrWhiteSpace(ps.ParticleMeshPath))
+                {
+                    ImGui.SameLine();
+                    if (ImGui.SmallButton("Clear##psmesh"))
+                        ps.ParticleMeshPath = "";
+                }
+                DrawFloat("Mesh Scale##psrenderer", ps.ParticleMeshScale, v => ps.ParticleMeshScale = Math.Clamp(v, 0.001f, 1000f), 0.01f, 0.001f, 1000f);
+                ImGui.TextDisabled("Mesh particles use particle size, color and lifetime like Unity.");
+            }
+            if (ps.RenderMode == ParticleRenderMode.Prefab)
+            {
+                DrawAssetSlot("Prefab##psrenderer", ps.ParticlePrefabPath, "Drop prefab asset", path =>
+                {
+                    if (string.IsNullOrWhiteSpace(path) || path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+                        ps.ParticlePrefabPath = path ?? "";
+                }, path => path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrWhiteSpace(ps.ParticlePrefabPath))
+                {
+                    ImGui.SameLine();
+                    if (ImGui.SmallButton("Clear##psprefab"))
+                        ps.ParticlePrefabPath = "";
+                }
+                DrawFloat("Prefab Scale##psrenderer", ps.ParticleMeshScale, v => ps.ParticleMeshScale = Math.Clamp(v, 0.001f, 1000f), 0.01f, 0.001f, 1000f);
+                ImGui.TextDisabled("Safe mode: renders the prefab visual mesh without spawning GameObjects per particle.");
+            }
+            if (ps.RenderMode is ParticleRenderMode.Mesh or ParticleRenderMode.Prefab)
+            {
+                DrawEnumCombo("Alignment##psrenderer", ps.RenderAlignment, v => ps.RenderAlignment = v);
+                ImGui.TextDisabled(ps.RenderAlignment switch
+                {
+                    ParticleRenderAlignment.Local => "Local: follows emitter rotation.",
+                    ParticleRenderAlignment.View => "View: faces the camera horizontally.",
+                    ParticleRenderAlignment.Velocity => "Velocity: points along particle movement.",
+                    _ => "World: stable world orientation plus particle rotation."
+                });
+                bool cast = ps.ParticleCastShadows;
+                if (SmallCheckbox("Cast Shadows##psrenderer", ref cast)) ps.ParticleCastShadows = cast;
+                bool receive = ps.ParticleReceiveShadows;
+                if (SmallCheckbox("Receive Shadows##psrenderer", ref receive)) ps.ParticleReceiveShadows = receive;
+            }
             DrawEnumCombo("Blend Mode##psrenderer", ps.BlendMode, v => ps.BlendMode = v);
+            DrawEnumCombo("Render Queue##psrenderer", ps.RenderQueue, v => ps.RenderQueue = v);
             DrawFloat("HDR Intensity##psrenderer", ps.HdrIntensity, v => ps.HdrIntensity = Math.Clamp(v, 0f, 32f), 0.05f, 0f, 32f);
+            DrawFloat("Color Saturation##psrenderer", ps.ColorSaturation, v => ps.ColorSaturation = Math.Clamp(v, 0f, 4f), 0.01f, 0f, 4f);
+            DrawFloat("Color Vibrance##psrenderer", ps.ColorVibrance, v => ps.ColorVibrance = Math.Clamp(v, 0f, 4f), 0.01f, 0f, 4f);
+            DrawFloat("Alpha Power##psrenderer", ps.AlphaPower, v => ps.AlphaPower = Math.Clamp(v, 0.05f, 4f), 0.01f, 0.05f, 4f);
+            DrawFloat("Color Variation##psrenderer", ps.ColorVariation, v => ps.ColorVariation = Math.Clamp(v, 0f, 1f), 0.01f, 0f, 1f);
+            ImGui.TextDisabled("Vibrance/variation add life without changing the gradient keys.");
             bool sort = ps.SortParticles;
             if (SmallCheckbox("Sort Particles##psrenderer", ref sort)) ps.SortParticles = sort;
             DrawEnumCombo("Sort Mode##psrenderer", ps.SortMode, v => ps.SortMode = v);
+            DrawFloat("Sorting Layer##psrenderer", ps.SortingLayer, v => ps.SortingLayer = (int)v, 1f, -32768f, 32767f);
+            DrawFloat("Order in Layer##psrenderer", ps.OrderInLayer, v => ps.OrderInLayer = (int)v, 1f, -32768f, 32767f);
+            DrawFloat("Max Rendered Particles##psrenderer", ps.MaxRenderedParticles, v => ps.MaxRenderedParticles = Math.Max(0, (int)v), 1f, 0f, 50000f);
+            ImGui.TextDisabled("0 = no extra cap beyond Max Particles and LOD.");
             bool allowRoll = ps.AllowRoll;
             if (SmallCheckbox("Allow Roll##psrenderer", ref allowRoll)) ps.AllowRoll = allowRoll;
             bool flipU = ps.FlipU;
@@ -447,6 +516,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             if (ps.SoftParticles)
                 DrawFloat("Soft Range##psrenderer", ps.SoftParticleRange, v => ps.SoftParticleRange = Math.Max(0.001f, v), 0.01f, 0.001f, 10f);
             DrawFloat("Sorting Fudge##psrenderer", ps.SortingFudge, v => ps.SortingFudge = (int)v, 1f, -1000f, 1000f);
+            DrawFloat("Bounds Padding##psrenderer", ps.RendererBoundsPadding, v => ps.RendererBoundsPadding = Math.Clamp(v, 0f, 1000f), 0.05f, 0f, 1000f);
             if (ps.RenderMode == ParticleRenderMode.StretchedBillboard || ps.StretchedBillboard)
             {
                 DrawFloat("Speed Scale##psstretched", ps.StretchSpeedScale, v => ps.StretchSpeedScale = Math.Max(0f, v), 0.01f, 0f, 5f);
@@ -455,7 +525,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Trails", "ribbons behind particles", false))
+        if (DrawParticleSection(ps, "trails", "〰", "Trails", "ribbons behind particles", false))
         {
             bool enabled = ps.TrailsModuleEnabled || ps.TrailEnabled;
             if (DrawParticleModuleToggle("trails", ref enabled))
@@ -470,7 +540,7 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Collision", "scene interaction", false))
+        if (DrawParticleSection(ps, "collision", "●", "Collision", "scene interaction", false))
         {
             bool enabled = ps.ParticleCollision;
             if (DrawParticleModuleToggle("collision", ref enabled)) ps.ParticleCollision = enabled;
@@ -495,14 +565,14 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             ImGui.EndDisabled();
         }
 
-        if (DrawParticleSection("Sub Emitters", "birth and death events", false))
+        if (DrawParticleSection(ps, "subemitters", "↳", "Sub Emitters", "birth and death events", false))
         {
             DrawString("Birth System Id##pssub", ps.SubEmitterBirth, v => ps.SubEmitterBirth = v);
             DrawString("Death System Id##pssub", ps.SubEmitterDeath, v => ps.SubEmitterDeath = v);
             DrawFloat("Emit Count##pssub", ps.SubEmitterCount, v => ps.SubEmitterCount = Math.Max(1, (int)v), 1f, 1f, 500f);
         }
 
-        if (DrawParticleSection("LOD / Stop Action", "performance and finish", false))
+        if (DrawParticleSection(ps, "lod", "LOD", "LOD / Stop Action", "performance and finish", false))
         {
             DrawFloat("LOD Start Distance##pslod", ps.LODDistance, v => ps.LODDistance = Math.Max(0f, v), 1f, 0f, 5000f);
             DrawFloat("LOD Max Distance##pslod", ps.LODDistanceMax, v => ps.LODDistanceMax = Math.Max(ps.LODDistance, v), 1f, 0f, 5000f);
@@ -520,7 +590,7 @@ private void DrawParticleToolbar(GrokoEngine.ParticleSystem ps)
         float fill = ps.MaxParticles <= 0 ? 0f : Math.Clamp(ps.Particles.Count / (float)ps.MaxParticles, 0f, 1f);
         ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vec4(0.125f, 0.13f, 0.14f, 1f));
         ImGui.PushStyleColor(ImGuiCol.Border, new Vec4(0.26f, 0.28f, 0.30f, 1f));
-        ImGui.BeginChild("##particleToolbar", new Vector2(width, 104f), ImGuiChildFlags.None);
+        ImGui.BeginChild("##particleToolbar", new Vector2(width, 148f), ImGuiChildFlags.None);
         ImGui.Indent(10f);
 
         var statusColor = ps.IsPlaying ? new Vec4(0.22f, 0.88f, 0.50f, 1f) : new Vec4(0.68f, 0.68f, 0.68f, 1f);
@@ -547,6 +617,17 @@ private void DrawParticleToolbar(GrokoEngine.ParticleSystem ps)
         ImGui.PopStyleVar();
 
         ImGui.Spacing();
+        ImGui.TextDisabled("Presets");
+        ImGui.SameLine();
+        DrawParticlePresetButton("Fire##pspreset", "warm additive flame", new Vec4(1.00f, 0.42f, 0.10f, 1f), () => ApplyParticlePreset(ps, "fire"));
+        ImGui.SameLine();
+        DrawParticlePresetButton("Smoke##pspreset", "soft dark plume", new Vec4(0.44f, 0.48f, 0.52f, 1f), () => ApplyParticlePreset(ps, "smoke"));
+        ImGui.SameLine();
+        DrawParticlePresetButton("Sparks##pspreset", "fast bright sparks", new Vec4(1.00f, 0.82f, 0.24f, 1f), () => ApplyParticlePreset(ps, "sparks"));
+        ImGui.SameLine();
+        DrawParticlePresetButton("Magic##pspreset", "glowing arcane dust", new Vec4(0.55f, 0.38f, 1.00f, 1f), () => ApplyParticlePreset(ps, "magic"));
+
+        ImGui.Spacing();
         DrawParticleMiniStat("Space", ps.SimulationSpace.ToString());
         ImGui.SameLine();
         DrawParticleMiniStat("Shape", ps.Shape.ToString());
@@ -557,24 +638,694 @@ private void DrawParticleToolbar(GrokoEngine.ParticleSystem ps)
         ImGui.EndChild();
         ImGui.PopStyleColor(2);
         ImGui.Spacing();
+        DrawParticlePresetAssetTools(ps);
+        DrawParticlePerformanceWarnings(ps);
     }
 
-private static bool DrawParticleSection(string title, string hint, bool defaultOpen = true)
+private void DrawParticlePresetAssetTools(GrokoEngine.ParticleSystem ps)
+    {
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vec4(0.075f, 0.085f, 0.100f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vec4(0.18f, 0.24f, 0.30f, 1f));
+        ImGui.BeginChild("##particlePresetAssets", new Vector2(0f, 76f), ImGuiChildFlags.Borders);
+        ImGui.TextColored(new Vec4(0.48f, 0.78f, 1f, 1f), "Particle Preset Asset");
+        ImGui.SameLine();
+        ImGui.TextDisabled(".particlepreset reutilizable");
+
+        DrawAssetSlot("Preset##pspresetasset", particlePresetAssetPath, "Drop .particlepreset", path =>
+        {
+            if (string.IsNullOrWhiteSpace(path) || IsParticlePresetPath(path))
+                particlePresetAssetPath = path ?? "";
+        }, IsParticlePresetPath);
+        ImGui.SameLine();
+        ImGui.BeginDisabled(string.IsNullOrWhiteSpace(particlePresetAssetPath) || !File.Exists(particlePresetAssetPath));
+        if (ImGui.SmallButton("Apply##pspresetasset"))
+            ApplyParticlePresetAsset(ps, particlePresetAssetPath);
+        ImGui.EndDisabled();
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Save As Asset##pspresetasset"))
+            SaveParticlePresetAsset(ps);
+
+        ImGui.EndChild();
+        ImGui.PopStyleColor(2);
+        ImGui.Spacing();
+    }
+
+private static bool IsParticlePresetPath(string path)
+    {
+        return !string.IsNullOrWhiteSpace(path) &&
+               path.EndsWith(".particlepreset", StringComparison.OrdinalIgnoreCase);
+    }
+
+private void SaveParticlePresetAsset(GrokoEngine.ParticleSystem ps)
+    {
+        try
+        {
+            string assetsRoot = string.IsNullOrWhiteSpace(rootAssetsPath)
+                ? Path.Combine(projectPath, "Assets")
+                : rootAssetsPath;
+            string dir = Path.Combine(assetsRoot, "Particles");
+            Directory.CreateDirectory(dir);
+            string baseName = SanitizeParticlePresetFileName(gameObjectNameFallback: "ParticlePreset");
+            string path = UniqueParticlePresetPath(dir, baseName);
+            var preset = new ParticlePresetFile(1, Path.GetFileNameWithoutExtension(path), CopyParticlePresetValues(ps));
+            File.WriteAllText(path, JsonSerializer.Serialize(preset, ParticleModuleClipboardJsonOptions));
+            particlePresetAssetPath = path;
+            statusMessage = "Particle preset guardado: " + Path.GetFileName(path);
+            InvalidateProjectFolderCache(dir);
+        }
+        catch (Exception ex)
+        {
+            statusMessage = "No se pudo guardar particle preset: " + ex.Message;
+        }
+    }
+
+private string SanitizeParticlePresetFileName(string gameObjectNameFallback)
+    {
+        string? name = selected?.Name;
+        if (string.IsNullOrWhiteSpace(name))
+            name = gameObjectNameFallback;
+        foreach (char c in Path.GetInvalidFileNameChars())
+            name = name.Replace(c, '_');
+        return string.IsNullOrWhiteSpace(name) ? gameObjectNameFallback : name;
+    }
+
+private static string UniqueParticlePresetPath(string dir, string baseName)
+    {
+        string path = Path.Combine(dir, baseName + ".particlepreset");
+        int index = 1;
+        while (File.Exists(path))
+            path = Path.Combine(dir, $"{baseName}_{index++}.particlepreset");
+        return path;
+    }
+
+private void ApplyParticlePresetAsset(GrokoEngine.ParticleSystem ps, string path)
+    {
+        try
+        {
+            var preset = JsonSerializer.Deserialize<ParticlePresetFile>(File.ReadAllText(path), ParticleModuleClipboardJsonOptions);
+            if (preset == null)
+            {
+                statusMessage = "Preset de partículas inválido.";
+                return;
+            }
+
+            PasteParticlePresetValues(ps, preset.Values);
+            ps.SyncLegacyFieldsToModules();
+            ps.Restart();
+            statusMessage = "Particle preset aplicado: " + preset.Name;
+        }
+        catch (Exception ex)
+        {
+            statusMessage = "No se pudo aplicar particle preset: " + ex.Message;
+        }
+    }
+
+private static void ApplyParticlePreset(GrokoEngine.ParticleSystem ps, string preset)
+    {
+        string material = ps.MaterialPath;
+        string texture = ps.TexturePath;
+        string mesh = ps.ParticleMeshPath;
+        string prefab = ps.ParticlePrefabPath;
+
+        ps.Stop();
+        ps.MainModuleEnabled = true;
+        ps.EmissionModuleEnabled = true;
+        ps.ShapeModuleEnabled = true;
+        ps.ColorOverLifetimeModuleEnabled = true;
+        ps.SizeOverLifetimeModuleEnabled = true;
+        ps.RendererModuleEnabled = true;
+        ps.TextureSheetAnimationModuleEnabled = false;
+        ps.TrailsModuleEnabled = false;
+        ps.TrailEnabled = false;
+        ps.ParticleCollision = false;
+        ps.NoiseModuleEnabled = false;
+        ps.VelocityOverLifetimeModuleEnabled = false;
+        ps.ForceOverLifetimeModuleEnabled = false;
+        ps.LimitVelocityOverLifetimeModuleEnabled = false;
+        ps.RenderMode = ParticleRenderMode.Billboard;
+        ps.StretchedBillboard = false;
+        ps.SortParticles = true;
+        ps.SortMode = ParticleSortMode.Distance;
+        ps.RenderQueue = ParticleRenderQueue.Auto;
+        ps.MaterialPath = material;
+        ps.TexturePath = texture;
+        ps.ParticleMeshPath = mesh;
+        ps.ParticlePrefabPath = prefab;
+
+        switch (preset)
+        {
+            case "smoke":
+                ps.Duration = 4.5f;
+                ps.EmitRate = 22f;
+                ps.MaxParticles = 900;
+                ps.LifetimeMin = 2.6f;
+                ps.LifetimeMax = 5.2f;
+                ps.SpeedMin = 0.25f;
+                ps.SpeedMax = 1.15f;
+                ps.SizeStart = 0.32f;
+                ps.SizeEnd = 1.65f;
+                ps.Shape = ParticleShape.Cone;
+                ps.ShapeRadius = 0.38f;
+                ps.ShapeAngle = 10f;
+                ps.ShapeRandomDirectionAmount = 0.45f;
+                ps.ColorKeyCount = 4;
+                SetParticleGradientKeys(ps,
+                    (0.00f, 0.18f, 0.19f, 0.20f, 0.00f),
+                    (0.18f, 0.34f, 0.35f, 0.36f, 0.38f),
+                    (0.65f, 0.20f, 0.21f, 0.22f, 0.26f),
+                    (1.00f, 0.08f, 0.08f, 0.09f, 0.00f));
+                ps.BlendMode = ParticleBlendMode.Alpha;
+                ps.HdrIntensity = 0.8f;
+                ps.ColorSaturation = 0.85f;
+                ps.ColorVibrance = 0.20f;
+                ps.AlphaPower = 0.95f;
+                ps.ColorVariation = 0.25f;
+                ps.SoftParticles = true;
+                ps.SoftParticleRange = 0.8f;
+                ps.NoiseModuleEnabled = true;
+                ps.TurbulenceStrength = 0.75f;
+                ps.TurbulenceFrequency = 0.85f;
+                ps.VelocityOverLifetimeModuleEnabled = true;
+                ps.VelOverLifeY = 0.35f;
+                ps.SizeCurveMid = 0.62f;
+                ps.SizeCurveMidValue = 1.6f;
+                break;
+
+            case "sparks":
+                ps.Duration = 1.1f;
+                ps.EmitRate = 75f;
+                ps.MaxParticles = 450;
+                ps.LifetimeMin = 0.18f;
+                ps.LifetimeMax = 0.72f;
+                ps.SpeedMin = 5.5f;
+                ps.SpeedMax = 11.5f;
+                ps.SizeStart = 0.035f;
+                ps.SizeEnd = 0f;
+                ps.Shape = ParticleShape.Cone;
+                ps.ShapeRadius = 0.06f;
+                ps.ShapeAngle = 38f;
+                ps.ShapeRandomDirectionAmount = 0.22f;
+                ps.ColorKeyCount = 3;
+                SetParticleGradientKeys(ps,
+                    (0.00f, 1.00f, 0.92f, 0.42f, 1.00f),
+                    (0.35f, 1.00f, 0.43f, 0.12f, 0.86f),
+                    (1.00f, 0.18f, 0.04f, 0.01f, 0.00f));
+                ps.BlendMode = ParticleBlendMode.Additive;
+                ps.HdrIntensity = 3.5f;
+                ps.ColorSaturation = 1.45f;
+                ps.ColorVibrance = 0.85f;
+                ps.AlphaPower = 0.70f;
+                ps.ColorVariation = 0.32f;
+                ps.RenderMode = ParticleRenderMode.StretchedBillboard;
+                ps.StretchedBillboard = true;
+                ps.StretchSpeedScale = 0.22f;
+                ps.StretchLengthScale = 1.8f;
+                ps.TrailsModuleEnabled = true;
+                ps.TrailEnabled = true;
+                ps.TrailLifetime = 0.12f;
+                ps.TrailWidthStart = 0.025f;
+                ps.TrailWidthEnd = 0f;
+                ps.GravityScale = -0.35f;
+                break;
+
+            case "magic":
+                ps.Duration = 3.2f;
+                ps.EmitRate = 38f;
+                ps.MaxParticles = 700;
+                ps.LifetimeMin = 1.2f;
+                ps.LifetimeMax = 2.8f;
+                ps.SpeedMin = 0.65f;
+                ps.SpeedMax = 2.1f;
+                ps.SizeStart = 0.08f;
+                ps.SizeEnd = 0.35f;
+                ps.Shape = ParticleShape.Sphere;
+                ps.ShapeRadius = 0.65f;
+                ps.ShapeRandomDirectionAmount = 0.85f;
+                ps.ColorKeyCount = 4;
+                SetParticleGradientKeys(ps,
+                    (0.00f, 0.25f, 0.84f, 1.00f, 0.00f),
+                    (0.22f, 0.70f, 0.40f, 1.00f, 0.95f),
+                    (0.72f, 0.18f, 0.92f, 1.00f, 0.62f),
+                    (1.00f, 0.08f, 0.02f, 0.18f, 0.00f));
+                ps.BlendMode = ParticleBlendMode.Additive;
+                ps.HdrIntensity = 2.8f;
+                ps.ColorSaturation = 1.35f;
+                ps.ColorVibrance = 1.05f;
+                ps.AlphaPower = 0.76f;
+                ps.ColorVariation = 0.22f;
+                ps.NoiseModuleEnabled = true;
+                ps.TurbulenceStrength = 1.15f;
+                ps.TurbulenceFrequency = 1.8f;
+                ps.SizeCurveMid = 0.35f;
+                ps.SizeCurveMidValue = 1.35f;
+                break;
+
+            default:
+                ConfigureProfessionalParticleDefaults(ps);
+                ps.Duration = 2.4f;
+                ps.EmitRate = 42f;
+                ps.MaxParticles = 850;
+                ps.LifetimeMin = 0.55f;
+                ps.LifetimeMax = 1.35f;
+                ps.SpeedMin = 1.25f;
+                ps.SpeedMax = 3.8f;
+                ps.SizeStart = 0.18f;
+                ps.SizeEnd = 0.0f;
+                ps.Shape = ParticleShape.Cone;
+                ps.ShapeRadius = 0.20f;
+                ps.ShapeAngle = 17f;
+                ps.ShapeRandomDirectionAmount = 0.18f;
+                ps.ColorKeyCount = 4;
+                SetParticleGradientKeys(ps,
+                    (0.00f, 1.00f, 0.90f, 0.30f, 0.00f),
+                    (0.15f, 1.00f, 0.70f, 0.18f, 0.95f),
+                    (0.55f, 1.00f, 0.18f, 0.04f, 0.58f),
+                    (1.00f, 0.15f, 0.02f, 0.01f, 0.00f));
+                ps.BlendMode = ParticleBlendMode.Additive;
+                ps.HdrIntensity = 2.4f;
+                ps.ColorSaturation = 1.30f;
+                ps.ColorVibrance = 0.75f;
+                ps.AlphaPower = 0.78f;
+                ps.ColorVariation = 0.20f;
+                ps.SoftParticles = true;
+                ps.SoftParticleRange = 0.32f;
+                break;
+        }
+
+        SyncParticleColorsFromGradientEdges(ps);
+        ps.LifetimeCurve = ParticleCurve.FromSimple(ps.LifetimeCurveMid, ps.LifetimeCurveMidValue);
+        ps.SpeedCurve = ParticleCurve.FromSimple(ps.SpeedCurveMid, ps.SpeedCurveMidValue);
+        ps.StartSizeCurve = ParticleCurve.FromSimple(ps.StartSizeCurveMid, ps.StartSizeCurveMidValue);
+        ps.SizeOverLifetimeCurve = ParticleCurve.FromSimple(ps.SizeCurveMid, ps.SizeCurveMidValue);
+        ps.GravityCurve = ParticleCurve.FromSimple(ps.GravityCurveMid, ps.GravityCurveMidValue);
+        ps.SyncLegacyFieldsToModules();
+        ps.Restart();
+    }
+
+private static void SetParticleGradientKeys(GrokoEngine.ParticleSystem ps, params (float T, float R, float G, float B, float A)[] keys)
+    {
+        ps.ColorKeyCount = Math.Clamp(keys.Length, 2, 4);
+        void Apply(int index, (float T, float R, float G, float B, float A) key)
+        {
+            key.T = Math.Clamp(key.T, 0f, 1f);
+            key.R = Math.Clamp(key.R, 0f, 1f);
+            key.G = Math.Clamp(key.G, 0f, 1f);
+            key.B = Math.Clamp(key.B, 0f, 1f);
+            key.A = Math.Clamp(key.A, 0f, 1f);
+            switch (index)
+            {
+                case 1: ps.CK1T = key.T; ps.CK1R = key.R; ps.CK1G = key.G; ps.CK1B = key.B; ps.CK1A = key.A; break;
+                case 2: ps.CK2T = key.T; ps.CK2R = key.R; ps.CK2G = key.G; ps.CK2B = key.B; ps.CK2A = key.A; break;
+                case 3: ps.CK3T = key.T; ps.CK3R = key.R; ps.CK3G = key.G; ps.CK3B = key.B; ps.CK3A = key.A; break;
+                case 4: ps.CK4T = key.T; ps.CK4R = key.R; ps.CK4G = key.G; ps.CK4B = key.B; ps.CK4A = key.A; break;
+            }
+        }
+
+        for (int i = 0; i < keys.Length && i < 4; i++)
+            Apply(i + 1, keys[i]);
+    }
+
+private static void DrawParticlePerformanceWarnings(GrokoEngine.ParticleSystem ps)
+    {
+        var warnings = new List<string>();
+        int renderedCap = ps.MaxRenderedParticles > 0 ? Math.Min(ps.MaxParticles, ps.MaxRenderedParticles) : ps.MaxParticles;
+        bool meshLike = ps.RenderMode is ParticleRenderMode.Mesh or ParticleRenderMode.Prefab;
+        if (ps.MaxParticles > 5000)
+            warnings.Add("Max Particles es muy alto. Usa LOD o Max Rendered Particles para evitar picos de CPU/GPU.");
+        if (ps.EmitRate > 1200f)
+            warnings.Add("Emission Rate muy alto. Puede saturar update/render cada frame.");
+        if (ps.BurstEnabled && ps.BurstCount > 1500)
+            warnings.Add("Burst Count pesado. Un burst grande puede congelar un frame al dispararse.");
+        if (meshLike && renderedCap > 600)
+            warnings.Add("Mesh/Prefab particles con muchas instancias. Mantén Max Rendered Particles bajo o usa billboards.");
+        if (meshLike && ps.ParticleCastShadows && renderedCap > 250)
+            warnings.Add("Sombras en Mesh/Prefab particles son caras. Desactiva Cast Shadows si no es imprescindible.");
+        if (ps.TrailsModuleEnabled && ps.MaxParticles > 1500)
+            warnings.Add("Trails + muchas partículas multiplica vértices. Baja Max Particles o Trail Lifetime.");
+        if (ps.ParticleCollision && ps.CollisionQuality == ParticleCollisionQuality.High && ps.MaxParticles > 350)
+            warnings.Add("Collision High usa barridos físicos. Para muchos particles usa Fast o baja Max Particles.");
+        if (ps.SoftParticles && ps.MaxParticles > 3000)
+            warnings.Add("Soft Particles con conteos altos cuesta más fill-rate. Úsalo en efectos cercanos.");
+        if (ps.TextureSheetAnimationModuleEnabled && ps.SheetColumns * ps.SheetRows > 256)
+            warnings.Add("Atlas con demasiados frames. Revisa memoria, import settings y frame rate.");
+        if (ps.LODDistanceMax <= ps.LODDistance || ps.LODDistanceMax < 10f)
+            warnings.Add("LOD casi sin rango útil. Configura distancias para cortar efectos lejos de cámara.");
+
+        if (warnings.Count == 0)
+            return;
+
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vec4(0.18f, 0.125f, 0.045f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vec4(0.88f, 0.58f, 0.18f, 0.85f));
+        ImGui.BeginChild("##particleWarnings", new Vector2(0f, 38f + warnings.Count * 20f), ImGuiChildFlags.Borders);
+        ImGui.TextColored(new Vec4(1.0f, 0.72f, 0.25f, 1f), "⚠ Performance warnings");
+        foreach (string warning in warnings)
+        {
+            ImGui.Bullet();
+            ImGui.SameLine();
+            ImGui.TextWrapped(warning);
+        }
+        ImGui.EndChild();
+        ImGui.PopStyleColor(2);
+        ImGui.Spacing();
+    }
+
+private static void DrawParticlePresetButton(string label, string tooltip, Vec4 color, Action apply)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vec4(color.X * 0.28f, color.Y * 0.28f, color.Z * 0.28f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vec4(color.X * 0.45f, color.Y * 0.45f, color.Z * 0.45f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vec4(color.X * 0.60f, color.Y * 0.60f, color.Z * 0.60f, 1f));
+        if (ImGui.SmallButton(label))
+            apply();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(tooltip);
+        ImGui.PopStyleColor(3);
+    }
+
+private static bool DrawParticleSection(GrokoEngine.ParticleSystem ps, string moduleId, string icon, string title, string hint, bool defaultOpen = true)
     {
         ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(8f, 6f));
-        ImGui.PushStyleColor(ImGuiCol.Header, new Vec4(0.17f, 0.18f, 0.19f, 1f));
-        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new Vec4(0.23f, 0.25f, 0.27f, 1f));
-        ImGui.PushStyleColor(ImGuiCol.HeaderActive, new Vec4(0.28f, 0.31f, 0.34f, 1f));
-        bool open = ImGui.CollapsingHeader($"{title}##pssection{title}", defaultOpen ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None);
+        ImGui.PushStyleColor(ImGuiCol.Header, new Vec4(0.145f, 0.158f, 0.178f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new Vec4(0.205f, 0.230f, 0.260f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderActive, new Vec4(0.255f, 0.305f, 0.360f, 1f));
+        bool open = ImGui.CollapsingHeader($"{icon}  {title}##pssection{moduleId}", defaultOpen ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None);
         ImGui.PopStyleColor(3);
         ImGui.PopStyleVar();
         if (open)
         {
-            ImGui.PushStyleColor(ImGuiCol.Separator, new Vec4(0.26f, 0.28f, 0.30f, 1f));
+            ImGui.PushStyleColor(ImGuiCol.Separator, new Vec4(0.24f, 0.32f, 0.40f, 1f));
             ImGui.Separator();
             ImGui.PopStyleColor();
+            ImGui.TextColored(new Vec4(0.36f, 0.72f, 1f, 1f), icon);
+            ImGui.SameLine();
+            ImGui.TextDisabled(hint);
+            DrawParticleModuleActions(ps, moduleId, title);
+            ImGui.Spacing();
         }
         return open;
+    }
+
+private static void DrawParticleModuleActions(GrokoEngine.ParticleSystem ps, string moduleId, string title)
+    {
+        float buttonW = 52f;
+        float totalW = buttonW * 3f + ImGui.GetStyle().ItemSpacing.X * 2f;
+        float right = ImGui.GetContentRegionAvail().X - totalW;
+        if (right > 8f)
+            ImGui.SameLine(ImGui.GetCursorPosX() + right);
+        else
+            ImGui.SameLine();
+
+        ImGui.PushID("psmoduleactions" + moduleId);
+        if (ImGui.SmallButton("Reset"))
+        {
+            ResetParticleModule(ps, moduleId);
+            ps.SyncLegacyFieldsToModules();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Reset Module: vuelve este módulo a valores por defecto.");
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Copy"))
+        {
+            particleModuleClipboard = CopyParticleModule(ps, moduleId);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip($"Copy Module: copia solo {title}.");
+
+        bool canPaste = particleModuleClipboard?.ModuleId == moduleId;
+        ImGui.SameLine();
+        ImGui.BeginDisabled(!canPaste);
+        if (ImGui.SmallButton("Paste") && particleModuleClipboard is not null)
+        {
+            PasteParticleModule(ps, particleModuleClipboard);
+            ps.SyncLegacyFieldsToModules();
+        }
+        ImGui.EndDisabled();
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(canPaste ? $"Paste Module: pega {title}." : "Paste Module: primero copia este mismo tipo de módulo.");
+        ImGui.PopID();
+    }
+
+private static ParticleModuleClipboard CopyParticleModule(GrokoEngine.ParticleSystem ps, string moduleId)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string name in GetParticleModuleMembers(moduleId))
+        {
+            if (!TryGetParticleMember(ps, name, out object? value, out _))
+                continue;
+            values[name] = JsonSerializer.Serialize(value, value?.GetType() ?? typeof(object), ParticleModuleClipboardJsonOptions);
+        }
+
+        return new ParticleModuleClipboard(moduleId, values);
+    }
+
+private static void PasteParticleModule(GrokoEngine.ParticleSystem ps, ParticleModuleClipboard clipboard)
+    {
+        foreach (var pair in clipboard.Values)
+        {
+            if (!TryGetParticleMemberType(pair.Key, out Type? type) || type is null)
+                continue;
+            object? value = JsonSerializer.Deserialize(pair.Value, type, ParticleModuleClipboardJsonOptions);
+            TrySetParticleMember(ps, pair.Key, value);
+        }
+    }
+
+private static Dictionary<string, string> CopyParticlePresetValues(GrokoEngine.ParticleSystem ps)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string moduleId in ParticlePresetModuleIds())
+        {
+            foreach (string name in GetParticleModuleMembers(moduleId))
+            {
+                if (!TryGetParticleMember(ps, name, out object? value, out _))
+                    continue;
+                values[name] = JsonSerializer.Serialize(value, value?.GetType() ?? typeof(object), ParticleModuleClipboardJsonOptions);
+            }
+        }
+
+        return values;
+    }
+
+private static void PasteParticlePresetValues(GrokoEngine.ParticleSystem ps, Dictionary<string, string> values)
+    {
+        foreach (var pair in values)
+        {
+            if (!TryGetParticleMemberType(pair.Key, out Type? type) || type is null)
+                continue;
+            object? value = JsonSerializer.Deserialize(pair.Value, type, ParticleModuleClipboardJsonOptions);
+            TrySetParticleMember(ps, pair.Key, value);
+        }
+    }
+
+private static string[] ParticlePresetModuleIds() => new[]
+    {
+        "main", "emission", "shape", "particle", "color", "velocity", "force", "limitvelocity",
+        "noise", "sheet", "renderer", "trails", "collision", "subemitters", "lod"
+    };
+
+private static void ResetParticleModule(GrokoEngine.ParticleSystem ps, string moduleId)
+    {
+        var defaults = new GrokoEngine.ParticleSystem();
+        var snapshot = CopyParticleModule(defaults, moduleId);
+        PasteParticleModule(ps, snapshot);
+    }
+
+private static string[] GetParticleModuleMembers(string moduleId) => moduleId switch
+    {
+        "main" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.MainModuleEnabled), nameof(GrokoEngine.ParticleSystem.Duration),
+            nameof(GrokoEngine.ParticleSystem.StartDelay), nameof(GrokoEngine.ParticleSystem.SimulationSpeed),
+            nameof(GrokoEngine.ParticleSystem.MaxParticles), nameof(GrokoEngine.ParticleSystem.Looping),
+            nameof(GrokoEngine.ParticleSystem.PlayOnAwake), nameof(GrokoEngine.ParticleSystem.Prewarm),
+            nameof(GrokoEngine.ParticleSystem.AutoRandomSeed), nameof(GrokoEngine.ParticleSystem.RandomSeed),
+            nameof(GrokoEngine.ParticleSystem.SimulationSpace), nameof(GrokoEngine.ParticleSystem.ScalingMode)
+        },
+        "emission" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.EmissionModuleEnabled), nameof(GrokoEngine.ParticleSystem.EmitRate),
+            nameof(GrokoEngine.ParticleSystem.RateOverDistanceEnabled), nameof(GrokoEngine.ParticleSystem.RateOverDistance),
+            nameof(GrokoEngine.ParticleSystem.BurstEnabled), nameof(GrokoEngine.ParticleSystem.BurstTime),
+            nameof(GrokoEngine.ParticleSystem.BurstCount), nameof(GrokoEngine.ParticleSystem.BurstProbability),
+            nameof(GrokoEngine.ParticleSystem.ExtraBursts)
+        },
+        "shape" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.ShapeModuleEnabled), nameof(GrokoEngine.ParticleSystem.Shape),
+            nameof(GrokoEngine.ParticleSystem.ShapeRadius), nameof(GrokoEngine.ParticleSystem.ShapeAngle),
+            nameof(GrokoEngine.ParticleSystem.ShapeArc), nameof(GrokoEngine.ParticleSystem.ShapeRadiusThickness),
+            nameof(GrokoEngine.ParticleSystem.ShapeEmitFromShell), nameof(GrokoEngine.ParticleSystem.ShapeRandomDirectionAmount),
+            nameof(GrokoEngine.ParticleSystem.ShapeBoxSizeX), nameof(GrokoEngine.ParticleSystem.ShapeBoxSizeY),
+            nameof(GrokoEngine.ParticleSystem.ShapeBoxSizeZ)
+        },
+        "particle" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.LifetimeMode), nameof(GrokoEngine.ParticleSystem.SpeedMode),
+            nameof(GrokoEngine.ParticleSystem.SizeMode), nameof(GrokoEngine.ParticleSystem.GravityMode),
+            nameof(GrokoEngine.ParticleSystem.LifetimeMin), nameof(GrokoEngine.ParticleSystem.LifetimeMax),
+            nameof(GrokoEngine.ParticleSystem.SpeedMin), nameof(GrokoEngine.ParticleSystem.SpeedMax),
+            nameof(GrokoEngine.ParticleSystem.SizeStart), nameof(GrokoEngine.ParticleSystem.SizeEnd),
+            nameof(GrokoEngine.ParticleSystem.StartSize3D), nameof(GrokoEngine.ParticleSystem.SizeStartX),
+            nameof(GrokoEngine.ParticleSystem.SizeStartY), nameof(GrokoEngine.ParticleSystem.SizeStartZ),
+            nameof(GrokoEngine.ParticleSystem.SizeEndX), nameof(GrokoEngine.ParticleSystem.SizeEndY),
+            nameof(GrokoEngine.ParticleSystem.SizeEndZ), nameof(GrokoEngine.ParticleSystem.LifetimeCurveMid),
+            nameof(GrokoEngine.ParticleSystem.LifetimeCurveMidValue), nameof(GrokoEngine.ParticleSystem.SpeedCurveMid),
+            nameof(GrokoEngine.ParticleSystem.SpeedCurveMidValue), nameof(GrokoEngine.ParticleSystem.StartSizeCurveMid),
+            nameof(GrokoEngine.ParticleSystem.StartSizeCurveMidValue), nameof(GrokoEngine.ParticleSystem.SizeCurveMid),
+            nameof(GrokoEngine.ParticleSystem.SizeCurveMidValue), nameof(GrokoEngine.ParticleSystem.GravityScale),
+            nameof(GrokoEngine.ParticleSystem.RotationSpeedMin), nameof(GrokoEngine.ParticleSystem.RotationSpeedMax),
+            nameof(GrokoEngine.ParticleSystem.SizeOverLifetimeModuleEnabled),
+            nameof(GrokoEngine.ParticleSystem.LifetimeCurve), nameof(GrokoEngine.ParticleSystem.SpeedCurve),
+            nameof(GrokoEngine.ParticleSystem.StartSizeCurve), nameof(GrokoEngine.ParticleSystem.SizeOverLifetimeCurve),
+            nameof(GrokoEngine.ParticleSystem.GravityCurve)
+        },
+        "color" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.ColorOverLifetimeModuleEnabled), nameof(GrokoEngine.ParticleSystem.ColorStartR),
+            nameof(GrokoEngine.ParticleSystem.ColorStartG), nameof(GrokoEngine.ParticleSystem.ColorStartB),
+            nameof(GrokoEngine.ParticleSystem.ColorStartA), nameof(GrokoEngine.ParticleSystem.ColorEndR),
+            nameof(GrokoEngine.ParticleSystem.ColorEndG), nameof(GrokoEngine.ParticleSystem.ColorEndB),
+            nameof(GrokoEngine.ParticleSystem.ColorEndA), nameof(GrokoEngine.ParticleSystem.ColorKeyCount),
+            nameof(GrokoEngine.ParticleSystem.CK1T), nameof(GrokoEngine.ParticleSystem.CK1R), nameof(GrokoEngine.ParticleSystem.CK1G), nameof(GrokoEngine.ParticleSystem.CK1B), nameof(GrokoEngine.ParticleSystem.CK1A),
+            nameof(GrokoEngine.ParticleSystem.CK2T), nameof(GrokoEngine.ParticleSystem.CK2R), nameof(GrokoEngine.ParticleSystem.CK2G), nameof(GrokoEngine.ParticleSystem.CK2B), nameof(GrokoEngine.ParticleSystem.CK2A),
+            nameof(GrokoEngine.ParticleSystem.CK3T), nameof(GrokoEngine.ParticleSystem.CK3R), nameof(GrokoEngine.ParticleSystem.CK3G), nameof(GrokoEngine.ParticleSystem.CK3B), nameof(GrokoEngine.ParticleSystem.CK3A),
+            nameof(GrokoEngine.ParticleSystem.CK4T), nameof(GrokoEngine.ParticleSystem.CK4R), nameof(GrokoEngine.ParticleSystem.CK4G), nameof(GrokoEngine.ParticleSystem.CK4B), nameof(GrokoEngine.ParticleSystem.CK4A)
+        },
+        "velocity" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.VelocityOverLifetimeModuleEnabled),
+            nameof(GrokoEngine.ParticleSystem.VelOverLifeX), nameof(GrokoEngine.ParticleSystem.VelOverLifeY),
+            nameof(GrokoEngine.ParticleSystem.VelOverLifeZ), nameof(GrokoEngine.ParticleSystem.InheritVelocity)
+        },
+        "force" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.ForceOverLifetimeModuleEnabled),
+            nameof(GrokoEngine.ParticleSystem.ForceOverLifeX), nameof(GrokoEngine.ParticleSystem.ForceOverLifeY),
+            nameof(GrokoEngine.ParticleSystem.ForceOverLifeZ)
+        },
+        "limitvelocity" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.LimitVelocityOverLifetimeModuleEnabled),
+            nameof(GrokoEngine.ParticleSystem.LimitVelocity), nameof(GrokoEngine.ParticleSystem.LimitVelocityDampen)
+        },
+        "noise" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.NoiseModuleEnabled),
+            nameof(GrokoEngine.ParticleSystem.TurbulenceStrength), nameof(GrokoEngine.ParticleSystem.TurbulenceFrequency)
+        },
+        "sheet" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.TexturePath), nameof(GrokoEngine.ParticleSystem.TextureSheetAnimationModuleEnabled),
+            nameof(GrokoEngine.ParticleSystem.SheetColumns), nameof(GrokoEngine.ParticleSystem.SheetRows),
+            nameof(GrokoEngine.ParticleSystem.SheetFrameRate)
+        },
+        "renderer" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.RendererModuleEnabled), nameof(GrokoEngine.ParticleSystem.MaterialPath),
+            nameof(GrokoEngine.ParticleSystem.BlendMode), nameof(GrokoEngine.ParticleSystem.RenderMode),
+            nameof(GrokoEngine.ParticleSystem.StretchedBillboard), nameof(GrokoEngine.ParticleSystem.StretchSpeedScale),
+            nameof(GrokoEngine.ParticleSystem.StretchLengthScale), nameof(GrokoEngine.ParticleSystem.SortMode),
+            nameof(GrokoEngine.ParticleSystem.SoftParticles), nameof(GrokoEngine.ParticleSystem.SoftParticleRange),
+            nameof(GrokoEngine.ParticleSystem.HdrIntensity), nameof(GrokoEngine.ParticleSystem.ColorSaturation),
+            nameof(GrokoEngine.ParticleSystem.ColorVibrance), nameof(GrokoEngine.ParticleSystem.AlphaPower),
+            nameof(GrokoEngine.ParticleSystem.ColorVariation), nameof(GrokoEngine.ParticleSystem.SortParticles),
+            nameof(GrokoEngine.ParticleSystem.SortingFudge), nameof(GrokoEngine.ParticleSystem.AllowRoll),
+            nameof(GrokoEngine.ParticleSystem.FlipU), nameof(GrokoEngine.ParticleSystem.FlipV),
+            nameof(GrokoEngine.ParticleSystem.PivotX), nameof(GrokoEngine.ParticleSystem.PivotY),
+            nameof(GrokoEngine.ParticleSystem.ParticleMeshPath), nameof(GrokoEngine.ParticleSystem.ParticleMeshScale),
+            nameof(GrokoEngine.ParticleSystem.ParticlePrefabPath), nameof(GrokoEngine.ParticleSystem.RenderAlignment),
+            nameof(GrokoEngine.ParticleSystem.ParticleCastShadows), nameof(GrokoEngine.ParticleSystem.ParticleReceiveShadows),
+            nameof(GrokoEngine.ParticleSystem.RenderQueue), nameof(GrokoEngine.ParticleSystem.SortingLayer),
+            nameof(GrokoEngine.ParticleSystem.OrderInLayer), nameof(GrokoEngine.ParticleSystem.MaxRenderedParticles),
+            nameof(GrokoEngine.ParticleSystem.RendererBoundsPadding)
+        },
+        "trails" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.TrailsModuleEnabled), nameof(GrokoEngine.ParticleSystem.TrailEnabled),
+            nameof(GrokoEngine.ParticleSystem.TrailLifetime), nameof(GrokoEngine.ParticleSystem.TrailWidthStart),
+            nameof(GrokoEngine.ParticleSystem.TrailWidthEnd)
+        },
+        "collision" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.CollisionModuleEnabled), nameof(GrokoEngine.ParticleSystem.CollisionEnabled),
+            nameof(GrokoEngine.ParticleSystem.ParticleCollision), nameof(GrokoEngine.ParticleSystem.CollisionBounciness),
+            nameof(GrokoEngine.ParticleSystem.CollisionDampen), nameof(GrokoEngine.ParticleSystem.CollisionQuality)
+        },
+        "subemitters" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.SubEmitterBirth), nameof(GrokoEngine.ParticleSystem.SubEmitterDeath),
+            nameof(GrokoEngine.ParticleSystem.SubEmitterCount)
+        },
+        "lod" => new[]
+        {
+            nameof(GrokoEngine.ParticleSystem.LODDistance), nameof(GrokoEngine.ParticleSystem.LODDistanceMax),
+            nameof(GrokoEngine.ParticleSystem.StopAction)
+        },
+        _ => Array.Empty<string>()
+    };
+
+private static bool TryGetParticleMember(GrokoEngine.ParticleSystem ps, string name, out object? value, out Type? type)
+    {
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public;
+        var field = typeof(GrokoEngine.ParticleSystem).GetField(name, flags);
+        if (field is not null)
+        {
+            value = field.GetValue(ps);
+            type = field.FieldType;
+            return true;
+        }
+
+        var property = typeof(GrokoEngine.ParticleSystem).GetProperty(name, flags);
+        if (property is not null && property.CanRead)
+        {
+            value = property.GetValue(ps);
+            type = property.PropertyType;
+            return true;
+        }
+
+        value = null;
+        type = null;
+        return false;
+    }
+
+private static bool TryGetParticleMemberType(string name, out Type? type)
+    {
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public;
+        var field = typeof(GrokoEngine.ParticleSystem).GetField(name, flags);
+        if (field is not null)
+        {
+            type = field.FieldType;
+            return true;
+        }
+
+        var property = typeof(GrokoEngine.ParticleSystem).GetProperty(name, flags);
+        if (property is not null && property.CanWrite)
+        {
+            type = property.PropertyType;
+            return true;
+        }
+
+        type = null;
+        return false;
+    }
+
+private static bool TrySetParticleMember(GrokoEngine.ParticleSystem ps, string name, object? value)
+    {
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public;
+        var field = typeof(GrokoEngine.ParticleSystem).GetField(name, flags);
+        if (field is not null && !field.IsInitOnly)
+        {
+            field.SetValue(ps, value);
+            return true;
+        }
+
+        var property = typeof(GrokoEngine.ParticleSystem).GetProperty(name, flags);
+        if (property is not null && property.CanWrite)
+        {
+            property.SetValue(ps, value);
+            return true;
+        }
+
+        return false;
     }
 
 private static bool DrawParticleModuleToggle(string id, ref bool enabled)
@@ -607,6 +1358,7 @@ private static void DrawParticleScalarMode(
         float minValue,
         float maxValue,
         Action<float, float> setValues,
+        ParticleCurve curve,
         float curveMid,
         float curveMidValue,
         Action<float, float> setCurve,
@@ -628,7 +1380,7 @@ private static void DrawParticleScalarMode(
         }
 
         if (mode is ParticleValueMode.Curve or ParticleValueMode.RandomBetweenTwoCurves)
-            DrawParticleCurveControls(valueLabel + " Curve", id + "curve", curveMid, curveMidValue, setCurve);
+            DrawParticleCurveControls(valueLabel + " Curve", id + "curve", curve, curveMid, curveMidValue, setCurve);
     }
 
 private static void DrawParticleValueModeCombo(string label, ParticleValueMode value, Action<ParticleValueMode> set)
@@ -646,13 +1398,333 @@ private static void DrawParticleValueModeCombo(string label, ParticleValueMode v
             set((ParticleValueMode)index);
     }
 
-private static void DrawParticleCurveControls(string label, string id, float mid, float midValue, Action<float, float> set)
+private static void DrawParticleCurveControls(string label, string id, ParticleCurve curve, float mid, float midValue, Action<float, float> set)
     {
-        DrawFloat("Curve Time##" + id, mid, v => set(v, midValue), 0.01f, 0f, 1f);
-        DrawFloat("Curve Value##" + id, midValue, v => set(mid, v), 0.01f, 0f, 4f);
-        ImGui.Indent(8f);
-        DrawMiniCurve(mid, midValue, id + "preview");
-        ImGui.Unindent(8f);
+        const float valueMax = 4f;
+        curve ??= ParticleCurve.FromSimple(mid, midValue);
+        EnsureParticleCurveReady(curve, mid, midValue);
+        mid = Math.Clamp(mid, 0f, 1f);
+        midValue = Math.Clamp(midValue, 0f, valueMax);
+
+        FieldRow(label);
+        float width = Math.Max(180f, ImGui.GetContentRegionAvail().X);
+        bool opened = DrawParticleCurvePreview(id + "preview", curve, mid, midValue, new Vector2(width, 42f), valueMax);
+        if (opened)
+            particleCurveEditorOpenId = particleCurveEditorOpenId == id ? null : id;
+
+        if (particleCurveEditorOpenId == id)
+            DrawParticleCurveEditorPanel(label, id, curve, mid, midValue, valueMax, set);
+    }
+
+private static bool DrawParticleCurvePreview(string id, ParticleCurve curve, float fallbackMid, float fallbackValue, Vector2 size, float valueMax)
+    {
+        var min = ImGui.GetCursorScreenPos();
+        var max = min + size;
+        var draw = ImGui.GetWindowDrawList();
+        bool isOpen = particleCurveEditorOpenId != null && id.StartsWith(particleCurveEditorOpenId, StringComparison.Ordinal);
+        uint bgTop = ImGui.GetColorU32(new Vec4(0.070f, 0.082f, 0.096f, 1f));
+        uint bgBottom = ImGui.GetColorU32(new Vec4(0.035f, 0.040f, 0.050f, 1f));
+        uint border = ImGui.GetColorU32(isOpen ? new Vec4(0.20f, 0.60f, 1.00f, 1f) : new Vec4(0.20f, 0.23f, 0.27f, 1f));
+        uint grid = ImGui.GetColorU32(new Vec4(1f, 1f, 1f, 0.055f));
+        uint curveGlow = ImGui.GetColorU32(new Vec4(0.04f, 0.42f, 1.00f, 0.42f));
+        uint curveColor = ImGui.GetColorU32(new Vec4(0.36f, 0.78f, 1.00f, 1f));
+        uint fill = ImGui.GetColorU32(new Vec4(0.07f, 0.35f, 0.80f, 0.16f));
+
+        draw.AddRectFilledMultiColor(min, max, bgTop, bgTop, bgBottom, bgBottom);
+        DrawParticleCurveGrid(draw, min, max, 4, 2, grid);
+        DrawParticleCurveFill(draw, min, max, curve, fallbackMid, fallbackValue, valueMax, fill, 32);
+        DrawParticleCurveLine(draw, min, max, curve, fallbackMid, fallbackValue, valueMax, curveGlow, 4.5f, 36);
+        DrawParticleCurveLine(draw, min, max, curve, fallbackMid, fallbackValue, valueMax, curveColor, 2.0f, 36);
+        draw.AddRect(min, max, border, 5f, ImDrawFlags.None, isOpen ? 2f : 1f);
+
+        ImGui.InvisibleButton("##" + id, size);
+        bool hovered = ImGui.IsItemHovered();
+        if (hovered)
+        {
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+            ImGui.SetTooltip("Click para abrir el editor de curva");
+        }
+
+        return ImGui.IsItemClicked();
+    }
+
+private static void DrawParticleCurveEditorPanel(string label, string id, ParticleCurve curve, float mid, float midValue, float valueMax, Action<float, float> set)
+    {
+        ImGui.Spacing();
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(8f, 7f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8f, 7f));
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vec4(0.055f, 0.063f, 0.075f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vec4(0.18f, 0.22f, 0.28f, 1f));
+
+        float width = Math.Max(260f, ImGui.GetContentRegionAvail().X);
+        ImGui.BeginChild("##curveeditor" + id, new Vector2(width, 252f), ImGuiChildFlags.Borders);
+        ImGui.TextUnformatted(label);
+        ImGui.SameLine();
+        ImGui.TextDisabled("Unity-style editable curve");
+        ImGui.SameLine(Math.Max(0f, width - 68f));
+        if (ImGui.SmallButton("Close##" + id))
+            particleCurveEditorOpenId = null;
+
+        ImGui.TextDisabled("Arrastra el key azul para modificar la curva. Extremos fijos: 0s y 1s.");
+
+        var graphSize = new Vector2(Math.Max(220f, ImGui.GetContentRegionAvail().X), 132f);
+        DrawParticleCurveGraphEditor(id, graphSize, curve, mid, midValue, valueMax, set);
+
+        DrawParticleCurveKeyInspector(id, curve, valueMax, set);
+
+        DrawParticleCurvePresetButtons(id, curve, valueMax, set);
+
+        ImGui.EndChild();
+        ImGui.PopStyleColor(2);
+        ImGui.PopStyleVar(2);
+    }
+
+private static void DrawParticleCurveGraphEditor(string id, Vector2 size, ParticleCurve curve, float fallbackMid, float fallbackValue, float valueMax, Action<float, float> set)
+    {
+        var min = ImGui.GetCursorScreenPos();
+        var max = min + size;
+        var draw = ImGui.GetWindowDrawList();
+
+        uint bgTop = ImGui.GetColorU32(new Vec4(0.045f, 0.052f, 0.064f, 1f));
+        uint bgBottom = ImGui.GetColorU32(new Vec4(0.020f, 0.025f, 0.033f, 1f));
+        uint gridMajor = ImGui.GetColorU32(new Vec4(1f, 1f, 1f, 0.105f));
+        uint gridMinor = ImGui.GetColorU32(new Vec4(1f, 1f, 1f, 0.050f));
+        uint axis = ImGui.GetColorU32(new Vec4(0.32f, 0.38f, 0.45f, 0.85f));
+        uint fill = ImGui.GetColorU32(new Vec4(0.04f, 0.35f, 0.95f, 0.18f));
+        uint curveGlow = ImGui.GetColorU32(new Vec4(0.02f, 0.45f, 1.00f, 0.50f));
+        uint curveColor = ImGui.GetColorU32(new Vec4(0.42f, 0.82f, 1.00f, 1f));
+        uint keyOuter = ImGui.GetColorU32(new Vec4(0.03f, 0.13f, 0.22f, 1f));
+        uint keyInner = ImGui.GetColorU32(new Vec4(0.22f, 0.72f, 1.00f, 1f));
+        uint text = ImGui.GetColorU32(new Vec4(0.72f, 0.78f, 0.84f, 0.92f));
+
+        draw.AddRectFilledMultiColor(min, max, bgTop, bgTop, bgBottom, bgBottom);
+        DrawParticleCurveGrid(draw, min, max, 8, 4, gridMinor);
+        DrawParticleCurveGrid(draw, min, max, 4, 2, gridMajor);
+        draw.AddLine(new Vector2(min.X, max.Y), max, axis, 1.25f);
+        draw.AddLine(min, new Vector2(min.X, max.Y), axis, 1.25f);
+        DrawParticleCurveFill(draw, min, max, curve, fallbackMid, fallbackValue, valueMax, fill, 72);
+        DrawParticleCurveLine(draw, min, max, curve, fallbackMid, fallbackValue, valueMax, curveGlow, 6f, 96);
+        DrawParticleCurveLine(draw, min, max, curve, fallbackMid, fallbackValue, valueMax, curveColor, 2.35f, 96);
+
+        for (int i = 0; i < curve.Keys.Count; i++)
+        {
+            var key = curve.Keys[i];
+            var p = ParticleCurvePointToScreen(min, max, key.Time, key.Value, valueMax);
+            bool selected = i == particleCurveSelectedKey;
+            draw.AddCircleFilled(p, selected ? 9f : 6.5f, keyOuter);
+            draw.AddCircleFilled(p, selected ? 6f : 4.2f, keyInner);
+        }
+        draw.AddText(min + new Vector2(8f, 7f), text, $"0 - {valueMax:0.#}");
+        draw.AddText(new Vector2(max.X - 40f, max.Y - 20f), text, "1.0s");
+        draw.AddRect(min, max, ImGui.GetColorU32(new Vec4(0.18f, 0.26f, 0.35f, 1f)), 5f, ImDrawFlags.None, 1.4f);
+
+        ImGui.InvisibleButton("##curvegraphedit" + id, size);
+        bool hovered = ImGui.IsItemHovered();
+        bool active = ImGui.IsItemActive();
+        if (hovered)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeAll);
+
+        if (hovered && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+        {
+            var mouse = ImGui.GetMousePos();
+            AddParticleCurveKeyFromMouse(curve, min, max, valueMax, mouse);
+            particleCurveSelectedKey = Math.Clamp(curve.Keys.Count - 1, 0, curve.Keys.Count - 1);
+            SyncParticleCurveLegacyMid(curve, set);
+        }
+        else if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            var mouse = ImGui.GetMousePos();
+            particleCurveSelectedKey = FindNearestParticleCurveKey(curve, min, max, valueMax, mouse);
+        }
+
+        if (active && particleCurveSelectedKey >= 0 && particleCurveSelectedKey < curve.Keys.Count)
+        {
+            var mouse = ImGui.GetMousePos();
+            float t = Math.Clamp((mouse.X - min.X) / Math.Max(1f, size.X), 0f, 1f);
+            float value = Math.Clamp((max.Y - mouse.Y) / Math.Max(1f, size.Y) * valueMax, 0f, valueMax);
+            var key = curve.Keys[particleCurveSelectedKey];
+            key.Time = t;
+            key.Value = value;
+            curve.Normalize();
+            particleCurveSelectedKey = Math.Clamp(curve.Keys.IndexOf(key), 0, curve.Keys.Count - 1);
+            SyncParticleCurveLegacyMid(curve, set);
+        }
+    }
+
+private static void DrawParticleCurveKeyInspector(string id, ParticleCurve curve, float valueMax, Action<float, float> set)
+    {
+        particleCurveSelectedKey = Math.Clamp(particleCurveSelectedKey, curve.Keys.Count > 0 ? 0 : -1, curve.Keys.Count - 1);
+        if (particleCurveSelectedKey < 0 || particleCurveSelectedKey >= curve.Keys.Count)
+            return;
+
+        var key = curve.Keys[particleCurveSelectedKey];
+        DrawFloat("Key Time##" + id, key.Time, v =>
+        {
+            key.Time = Math.Clamp(v, 0f, 1f);
+            curve.Normalize();
+            SyncParticleCurveLegacyMid(curve, set);
+        }, 0.01f, 0f, 1f);
+        DrawFloat("Key Value##" + id, key.Value, v =>
+        {
+            key.Value = Math.Clamp(v, 0f, valueMax);
+            curve.Normalize();
+            SyncParticleCurveLegacyMid(curve, set);
+        }, 0.01f, 0f, valueMax);
+        DrawEnumCombo("Tangent##" + id, key.TangentMode, v =>
+        {
+            key.TangentMode = v;
+            curve.Normalize();
+            SyncParticleCurveLegacyMid(curve, set);
+        });
+
+        if (ImGui.SmallButton("+ Key##" + id))
+        {
+            curve.Keys.Add(new ParticleCurveKey(0.5f, 1f, ParticleCurveTangentMode.Smooth));
+            curve.Normalize();
+            particleCurveSelectedKey = curve.Keys.Count - 1;
+            SyncParticleCurveLegacyMid(curve, set);
+        }
+        ImGui.SameLine();
+        ImGui.BeginDisabled(curve.Keys.Count <= 2);
+        if (ImGui.SmallButton("- Key##" + id))
+        {
+            curve.Keys.RemoveAt(particleCurveSelectedKey);
+            curve.Normalize();
+            particleCurveSelectedKey = Math.Clamp(particleCurveSelectedKey, 0, curve.Keys.Count - 1);
+            SyncParticleCurveLegacyMid(curve, set);
+        }
+        ImGui.EndDisabled();
+    }
+
+private static void DrawParticleCurvePresetButtons(string id, ParticleCurve curve, float valueMax, Action<float, float> set)
+    {
+        ImGui.TextDisabled("Presets");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Flat##" + id)) SetParticleCurvePreset(curve, set, (0f, 1f), (1f, 1f));
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Punch##" + id)) SetParticleCurvePreset(curve, set, (0f, 1f), (0.22f, Math.Min(valueMax, 2.25f)), (1f, 1f));
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Ease In##" + id)) SetParticleCurvePreset(curve, set, (0f, 0.15f), (0.72f, Math.Min(valueMax, 2.1f)), (1f, 1f));
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Fade##" + id)) SetParticleCurvePreset(curve, set, (0f, 1f), (0.58f, 0.28f), (1f, 0f));
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Pulse##" + id)) SetParticleCurvePreset(curve, set, (0f, 0f), (0.36f, Math.Min(valueMax, 3.2f)), (0.72f, 0.2f), (1f, 0f));
+    }
+
+private static void EnsureParticleCurveReady(ParticleCurve curve, float fallbackMid, float fallbackValue)
+    {
+        if (curve.Keys == null || curve.Keys.Count == 0)
+            curve.Keys = ParticleCurve.FromSimple(fallbackMid, fallbackValue).Keys;
+        curve.Normalize();
+    }
+
+private static int FindNearestParticleCurveKey(ParticleCurve curve, Vector2 min, Vector2 max, float valueMax, Vector2 mouse)
+    {
+        int best = -1;
+        float bestDistance = float.MaxValue;
+        for (int i = 0; i < curve.Keys.Count; i++)
+        {
+            var key = curve.Keys[i];
+            var p = ParticleCurvePointToScreen(min, max, key.Time, key.Value, valueMax);
+            float dx = p.X - mouse.X;
+            float dy = p.Y - mouse.Y;
+            float dist = dx * dx + dy * dy;
+            if (dist < bestDistance)
+            {
+                bestDistance = dist;
+                best = i;
+            }
+        }
+
+        return bestDistance <= 28f * 28f ? best : -1;
+    }
+
+private static void AddParticleCurveKeyFromMouse(ParticleCurve curve, Vector2 min, Vector2 max, float valueMax, Vector2 mouse)
+    {
+        float t = Math.Clamp((mouse.X - min.X) / Math.Max(1f, max.X - min.X), 0f, 1f);
+        float value = Math.Clamp((max.Y - mouse.Y) / Math.Max(1f, max.Y - min.Y) * valueMax, 0f, valueMax);
+        curve.Keys.Add(new ParticleCurveKey(t, value, ParticleCurveTangentMode.Smooth));
+        curve.Normalize();
+        particleCurveSelectedKey = curve.Keys.FindIndex(k => Math.Abs(k.Time - t) < 0.002f && Math.Abs(k.Value - value) < 0.002f);
+    }
+
+private static void SetParticleCurvePreset(ParticleCurve curve, Action<float, float> set, params (float Time, float Value)[] keys)
+    {
+        curve.Keys = keys
+            .Select(k => new ParticleCurveKey(k.Time, k.Value, ParticleCurveTangentMode.Smooth))
+            .ToList();
+        if (curve.Keys.Count >= 1)
+        {
+            curve.Keys[0].TangentMode = ParticleCurveTangentMode.Linear;
+            curve.Keys[^1].TangentMode = ParticleCurveTangentMode.Linear;
+        }
+        curve.Normalize();
+        particleCurveSelectedKey = Math.Clamp(curve.Keys.Count / 2, 0, curve.Keys.Count - 1);
+        SyncParticleCurveLegacyMid(curve, set);
+    }
+
+private static void SyncParticleCurveLegacyMid(ParticleCurve curve, Action<float, float> set)
+    {
+        curve.Normalize();
+        if (curve.Keys.Count == 0)
+            return;
+
+        var key = curve.Keys.Count >= 3
+            ? curve.Keys[curve.Keys.Count / 2]
+            : curve.Keys.OrderByDescending(k => Math.Abs(k.Value - 1f)).First();
+        set(Math.Clamp(key.Time, 0f, 1f), Math.Max(0f, key.Value));
+    }
+
+private static void DrawParticleCurveGrid(ImDrawListPtr draw, Vector2 min, Vector2 max, int vertical, int horizontal, uint color)
+    {
+        float width = max.X - min.X;
+        float height = max.Y - min.Y;
+        for (int i = 1; i < vertical; i++)
+        {
+            float x = min.X + width * i / vertical;
+            draw.AddLine(new Vector2(x, min.Y), new Vector2(x, max.Y), color);
+        }
+
+        for (int i = 1; i < horizontal; i++)
+        {
+            float y = min.Y + height * i / horizontal;
+            draw.AddLine(new Vector2(min.X, y), new Vector2(max.X, y), color);
+        }
+    }
+
+private static void DrawParticleCurveFill(ImDrawListPtr draw, Vector2 min, Vector2 max, ParticleCurve curve, float fallbackMid, float fallbackValue, float valueMax, uint color, int segments)
+    {
+        var previous = ParticleCurvePointToScreen(min, max, 0f, GrokoEngine.ParticleSystem.EvaluateParticleCurve(curve, 0f, fallbackMid, fallbackValue), valueMax);
+        for (int i = 1; i <= segments; i++)
+        {
+            float t = i / (float)segments;
+            var current = ParticleCurvePointToScreen(min, max, t, GrokoEngine.ParticleSystem.EvaluateParticleCurve(curve, t, fallbackMid, fallbackValue), valueMax);
+            draw.AddTriangleFilled(previous, current, new Vector2(current.X, max.Y), color);
+            draw.AddTriangleFilled(previous, new Vector2(current.X, max.Y), new Vector2(previous.X, max.Y), color);
+            previous = current;
+        }
+    }
+
+private static void DrawParticleCurveLine(ImDrawListPtr draw, Vector2 min, Vector2 max, ParticleCurve curve, float fallbackMid, float fallbackValue, float valueMax, uint color, float thickness, int segments)
+    {
+        var previous = ParticleCurvePointToScreen(min, max, 0f, GrokoEngine.ParticleSystem.EvaluateParticleCurve(curve, 0f, fallbackMid, fallbackValue), valueMax);
+        for (int i = 1; i <= segments; i++)
+        {
+            float t = i / (float)segments;
+            var current = ParticleCurvePointToScreen(min, max, t, GrokoEngine.ParticleSystem.EvaluateParticleCurve(curve, t, fallbackMid, fallbackValue), valueMax);
+            draw.AddLine(previous, current, color, thickness);
+            previous = current;
+        }
+    }
+
+private static Vector2 ParticleCurvePointToScreen(Vector2 min, Vector2 max, float time, float value, float valueMax)
+    {
+        float width = max.X - min.X;
+        float height = max.Y - min.Y;
+        float x = min.X + Math.Clamp(time, 0f, 1f) * width;
+        float normalizedValue = Math.Clamp(value / Math.Max(0.0001f, valueMax), 0f, 1f);
+        float y = max.Y - normalizedValue * height;
+        return new Vector2(x, y);
     }
 
 private static void PrepareParticleGradientForInspector(GrokoEngine.ParticleSystem ps)

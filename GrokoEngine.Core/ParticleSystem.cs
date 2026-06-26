@@ -19,10 +19,137 @@ namespace GrokoEngine
     public enum ParticleSimulationSpace { Local, World }
     public enum ParticleStopAction { None, Disable, Destroy }
     public enum ParticleBlendMode { Alpha, Additive, Multiply }
-    public enum ParticleRenderMode { Billboard, StretchedBillboard, HorizontalBillboard, VerticalBillboard }
+    public enum ParticleRenderMode { Billboard, StretchedBillboard, HorizontalBillboard, VerticalBillboard, Mesh, Prefab }
+    public enum ParticleRenderAlignment { World, Local, View, Velocity }
+    public enum ParticleRenderQueue { Auto, Opaque, Transparent, Overlay }
     public enum ParticleSortMode { None, Distance, OldestInFront, YoungestInFront }
     public enum ParticleScalingMode { Hierarchy, Local, Shape }
     public enum ParticleValueMode { Constant, RandomBetweenTwoConstants, Curve, RandomBetweenTwoCurves }
+    public enum ParticleCurveTangentMode { Smooth, Linear, Constant }
+
+    public sealed class ParticleCurveKey
+    {
+        public float Time = 0f;
+        public float Value = 1f;
+        public float InTangent = 0f;
+        public float OutTangent = 0f;
+        public ParticleCurveTangentMode TangentMode = ParticleCurveTangentMode.Smooth;
+
+        public ParticleCurveKey() { }
+
+        public ParticleCurveKey(float time, float value, ParticleCurveTangentMode tangentMode = ParticleCurveTangentMode.Smooth)
+        {
+            Time = Math.Clamp(time, 0f, 1f);
+            Value = value;
+            TangentMode = tangentMode;
+        }
+    }
+
+    public sealed class ParticleCurve
+    {
+        public List<ParticleCurveKey> Keys = new()
+        {
+            new ParticleCurveKey(0f, 1f, ParticleCurveTangentMode.Linear),
+            new ParticleCurveKey(1f, 1f, ParticleCurveTangentMode.Linear)
+        };
+
+        public static ParticleCurve FromSimple(float mid, float midValue)
+        {
+            var curve = new ParticleCurve();
+            curve.Keys = new List<ParticleCurveKey>
+            {
+                new(0f, 1f, ParticleCurveTangentMode.Linear),
+                new(Math.Clamp(mid, 0f, 1f), midValue, ParticleCurveTangentMode.Smooth),
+                new(1f, 1f, ParticleCurveTangentMode.Linear)
+            };
+            curve.Normalize();
+            return curve;
+        }
+
+        public void Normalize()
+        {
+            Keys ??= new List<ParticleCurveKey>();
+            if (Keys.Count == 0)
+            {
+                Keys.Add(new ParticleCurveKey(0f, 1f, ParticleCurveTangentMode.Linear));
+                Keys.Add(new ParticleCurveKey(1f, 1f, ParticleCurveTangentMode.Linear));
+            }
+
+            foreach (var key in Keys)
+            {
+                key.Time = Math.Clamp(key.Time, 0f, 1f);
+                if (float.IsNaN(key.Value) || float.IsInfinity(key.Value)) key.Value = 1f;
+                if (float.IsNaN(key.InTangent) || float.IsInfinity(key.InTangent)) key.InTangent = 0f;
+                if (float.IsNaN(key.OutTangent) || float.IsInfinity(key.OutTangent)) key.OutTangent = 0f;
+            }
+
+            Keys.Sort((a, b) => a.Time.CompareTo(b.Time));
+            for (int i = 1; i < Keys.Count; i++)
+                if (Keys[i].Time <= Keys[i - 1].Time)
+                    Keys[i].Time = Math.Clamp(Keys[i - 1].Time + 0.001f, 0f, 1f);
+
+            AutoSmoothTangents();
+        }
+
+        public void AutoSmoothTangents()
+        {
+            if (Keys.Count < 2)
+                return;
+
+            for (int i = 0; i < Keys.Count; i++)
+            {
+                var key = Keys[i];
+                if (key.TangentMode != ParticleCurveTangentMode.Smooth)
+                    continue;
+
+                int prevIndex = Math.Max(0, i - 1);
+                int nextIndex = Math.Min(Keys.Count - 1, i + 1);
+                var prev = Keys[prevIndex];
+                var next = Keys[nextIndex];
+                float dt = Math.Max(0.0001f, next.Time - prev.Time);
+                float tangent = (next.Value - prev.Value) / dt;
+                key.InTangent = tangent;
+                key.OutTangent = tangent;
+            }
+        }
+
+        public float Evaluate(float t)
+        {
+            Normalize();
+            t = Math.Clamp(t, 0f, 1f);
+            if (Keys.Count == 1)
+                return Keys[0].Value;
+            if (t <= Keys[0].Time)
+                return Keys[0].Value;
+            if (t >= Keys[^1].Time)
+                return Keys[^1].Value;
+
+            for (int i = 0; i < Keys.Count - 1; i++)
+            {
+                var a = Keys[i];
+                var b = Keys[i + 1];
+                if (t < a.Time || t > b.Time)
+                    continue;
+
+                float dt = Math.Max(0.0001f, b.Time - a.Time);
+                float u = Math.Clamp((t - a.Time) / dt, 0f, 1f);
+                if (a.TangentMode == ParticleCurveTangentMode.Constant)
+                    return a.Value;
+                if (a.TangentMode == ParticleCurveTangentMode.Linear || b.TangentMode == ParticleCurveTangentMode.Linear)
+                    return a.Value + (b.Value - a.Value) * u;
+
+                float u2 = u * u;
+                float u3 = u2 * u;
+                float h00 = 2f * u3 - 3f * u2 + 1f;
+                float h10 = u3 - 2f * u2 + u;
+                float h01 = -2f * u3 + 3f * u2;
+                float h11 = u3 - u2;
+                return h00 * a.Value + h10 * a.OutTangent * dt + h01 * b.Value + h11 * b.InTangent * dt;
+            }
+
+            return Keys[^1].Value;
+        }
+    }
 
     public struct BurstEvent
     {
@@ -209,6 +336,11 @@ namespace GrokoEngine
         public float GravityScale = 0f;
         public float GravityCurveMid = 0.5f;
         public float GravityCurveMidValue = 1f;
+        public ParticleCurve LifetimeCurve = ParticleCurve.FromSimple(0.5f, 1f);
+        public ParticleCurve SpeedCurve = ParticleCurve.FromSimple(0.5f, 1f);
+        public ParticleCurve StartSizeCurve = ParticleCurve.FromSimple(0.5f, 1f);
+        public ParticleCurve SizeOverLifetimeCurve = ParticleCurve.FromSimple(0.5f, 0.65f);
+        public ParticleCurve GravityCurve = ParticleCurve.FromSimple(0.5f, 1f);
 
         // ── Color over lifetime ──────────────────────────────────
         public float ColorStartR = 1f, ColorStartG = 0.5f, ColorStartB = 0.1f, ColorStartA = 1.0f;
@@ -273,6 +405,10 @@ namespace GrokoEngine
         public bool SoftParticles = false;
         public float SoftParticleRange = 0.15f;
         public float HdrIntensity = 1f;
+        public float ColorSaturation = 1f;
+        public float ColorVibrance = 0f;
+        public float AlphaPower = 1f;
+        public float ColorVariation = 0f;
         public bool SortParticles = true;
         public int SortingFudge = 0;
         public bool AllowRoll = true;
@@ -280,6 +416,17 @@ namespace GrokoEngine
         public bool FlipV = false;
         public float PivotX = 0f;
         public float PivotY = 0f;
+        public string ParticleMeshPath = "";
+        public float ParticleMeshScale = 1f;
+        public string ParticlePrefabPath = "";
+        public ParticleRenderAlignment RenderAlignment = ParticleRenderAlignment.World;
+        public bool ParticleCastShadows = true;
+        public bool ParticleReceiveShadows = true;
+        public ParticleRenderQueue RenderQueue = ParticleRenderQueue.Auto;
+        public int SortingLayer = 0;
+        public int OrderInLayer = 0;
+        public int MaxRenderedParticles = 0; // 0 = usar MaxParticles/sin límite extra
+        public float RendererBoundsPadding = 0.5f;
 
         // ── Trails ────────────────────────────────────────────────
         public bool TrailEnabled = false;
@@ -467,7 +614,7 @@ namespace GrokoEngine
                 }
 
                 float gravityCurve = GravityMode is ParticleValueMode.Curve or ParticleValueMode.RandomBetweenTwoCurves
-                    ? EvaluateSimpleCurve(p.NormalizedAge, GravityCurveMid, GravityCurveMidValue)
+                    ? EvaluateParticleCurve(GravityCurve, p.NormalizedAge, GravityCurveMid, GravityCurveMidValue)
                     : 1f;
                 float gravity = GravityScale * gravityCurve;
                 p.Velocity.Y -= gravity * 9.81f * fdt;
@@ -781,8 +928,8 @@ namespace GrokoEngine
         {
             var dir = ShapeModuleEnabled ? SampleDirection() : new Vector3(0f, 1f, 0f);
             float curveT = NormalizedEmitterTime();
-            float speed = SampleValue(SpeedMode, SpeedMin, SpeedMax, SpeedCurveMid, SpeedCurveMidValue, curveT);
-            float life = SampleValue(LifetimeMode, LifetimeMin, LifetimeMax, LifetimeCurveMid, LifetimeCurveMidValue, curveT);
+            float speed = SampleValue(SpeedMode, SpeedMin, SpeedMax, SpeedCurve, SpeedCurveMid, SpeedCurveMidValue, curveT);
+            float life = SampleValue(LifetimeMode, LifetimeMin, LifetimeMax, LifetimeCurve, LifetimeCurveMid, LifetimeCurveMidValue, curveT);
             float rot = RotationOverLifetimeModuleEnabled
                 ? Lerp(RotationSpeedMin, RotationSpeedMax, (float)_rng.NextDouble())
                 : 0f;
@@ -799,8 +946,8 @@ namespace GrokoEngine
             float sizeA = StartSize3D ? SizeStartX : SizeStart;
             float sizeB = StartSize3D ? SizeEndX : SizeEnd;
             float startSize = SizeMode is ParticleValueMode.RandomBetweenTwoConstants or ParticleValueMode.RandomBetweenTwoCurves
-                ? SampleValue(SizeMode, Math.Min(sizeA, sizeB), Math.Max(sizeA, sizeB), StartSizeCurveMid, StartSizeCurveMidValue, curveT)
-                : SampleValue(SizeMode, sizeA, sizeA, StartSizeCurveMid, StartSizeCurveMidValue, curveT);
+                ? SampleValue(SizeMode, Math.Min(sizeA, sizeB), Math.Max(sizeA, sizeB), StartSizeCurve, StartSizeCurveMid, StartSizeCurveMidValue, curveT)
+                : SampleValue(SizeMode, sizeA, sizeA, StartSizeCurve, StartSizeCurveMid, StartSizeCurveMidValue, curveT);
             float endSize = SizeOverLifetimeModuleEnabled ? sizeB : startSize;
 
             _particles.Add(new Particle
@@ -906,9 +1053,9 @@ namespace GrokoEngine
 
         private static float Lerp(float a, float b, float t) => a + (b - a) * t;
 
-        private float SampleValue(ParticleValueMode mode, float min, float max, float curveMid, float curveMidValue, float curveT)
+        private float SampleValue(ParticleValueMode mode, float min, float max, ParticleCurve? curveAsset, float curveMid, float curveMidValue, float curveT)
         {
-            float curve = EvaluateSimpleCurve(curveT, curveMid, curveMidValue);
+            float curve = EvaluateParticleCurve(curveAsset, curveT, curveMid, curveMidValue);
             return mode switch
             {
                 ParticleValueMode.Constant => max,
@@ -931,6 +1078,13 @@ namespace GrokoEngine
             if (t <= mid)
                 return Lerp(1f, midValue, t / mid);
             return Lerp(midValue, 1f, (t - mid) / (1f - mid));
+        }
+
+        public static float EvaluateParticleCurve(ParticleCurve? curve, float t, float fallbackMid, float fallbackMidValue)
+        {
+            if (curve == null || curve.Keys == null || curve.Keys.Count == 0)
+                return EvaluateSimpleCurve(t, fallbackMid, fallbackMidValue);
+            return curve.Evaluate(t);
         }
 
         /// <summary>Samplea el gradiente de color en t [0,1] usando hasta 4 paradas.</summary>

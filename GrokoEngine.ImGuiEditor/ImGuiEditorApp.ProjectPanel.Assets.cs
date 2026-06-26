@@ -329,6 +329,8 @@ private void DrawProjectAssetListRowVirtual(ProjectAssetEntry entry, IReadOnlyLi
                 scriptCompiler.OpenInEditor(actionPath);
             else if (actionPath.EndsWith(".shadergraph", StringComparison.OrdinalIgnoreCase))
                 OpenShaderGraphAsset(actionPath);
+            else if (IsParticlePresetPath(actionPath))
+                ApplyParticlePresetAssetToSelection(actionPath);
         }
 
         if (!entry.IsVirtualSubAsset || !string.IsNullOrWhiteSpace(entry.SourceMaterialPath) || !string.IsNullOrWhiteSpace(entry.SourceAvatarPath))
@@ -367,6 +369,10 @@ private void DrawProjectAssetListRowVirtual(ProjectAssetEntry entry, IReadOnlyLi
         else if (entry.IsVirtualSubAsset && entry.Kind == "SUBMESH")
         {
             DrawSubmeshAssetPreview(drawList, rowMin + new Vector2(4f + indent, 2f), 16f);
+        }
+        else if (!isDirectory && entry.Kind == "PART")
+        {
+            DrawParticlePresetAssetPreview(drawList, rowMin + new Vector2(4f + indent, 2f), 16f);
         }
         else
         {
@@ -432,6 +438,10 @@ private void DrawProjectAssetListRow(ProjectAssetEntry entry, IReadOnlyList<Proj
         {
             DrawSubmeshAssetPreview(ImGui.GetWindowDrawList(), rowMin + new Vector2(4f + indent, 2f), 16f);
         }
+        else if (!isDirectory && entry.Kind == "PART")
+        {
+            DrawParticlePresetAssetPreview(ImGui.GetWindowDrawList(), rowMin + new Vector2(4f + indent, 2f), 16f);
+        }
         else
         {
             DrawAtlasIconOrFallback(ImGui.GetWindowDrawList(), icon, rowMin + new Vector2(4f + indent, 3f), 14f, iconColor);
@@ -455,6 +465,8 @@ private void DrawProjectAssetListRow(ProjectAssetEntry entry, IReadOnlyList<Proj
                 scriptCompiler.OpenInEditor(actionPath);
             else if (actionPath.EndsWith(".shadergraph", StringComparison.OrdinalIgnoreCase))
                 OpenShaderGraphAsset(actionPath);
+            else if (IsParticlePresetPath(actionPath))
+                ApplyParticlePresetAssetToSelection(actionPath);
         }
 
         if (!entry.IsVirtualSubAsset || !string.IsNullOrWhiteSpace(entry.SourceMaterialPath) || !string.IsNullOrWhiteSpace(entry.SourceAvatarPath))
@@ -545,6 +557,8 @@ private void DrawProjectAssetTile(ProjectAssetEntry entry, IReadOnlyList<Project
                 scriptCompiler.OpenInEditor(actionPath);
             else if (actionPath.EndsWith(".shadergraph", StringComparison.OrdinalIgnoreCase))
                 OpenShaderGraphAsset(actionPath);
+            else if (IsParticlePresetPath(actionPath))
+                ApplyParticlePresetAssetToSelection(actionPath);
         }
 
         if (!entry.IsVirtualSubAsset || !string.IsNullOrWhiteSpace(entry.SourceMaterialPath) || !string.IsNullOrWhiteSpace(entry.SourceAvatarPath))
@@ -792,6 +806,7 @@ private static System.Numerics.Vector4 ProjectAssetColorForKind(string kind) => 
         "SUBMESH" => new System.Numerics.Vector4(0.48f, 0.78f, 0.92f, 1f),
         "AVATAR" => new System.Numerics.Vector4(0.42f, 0.78f, 0.74f, 1f),
         "ANIM" => new System.Numerics.Vector4(0.38f, 0.82f, 0.70f, 1f),
+        "PART" => new System.Numerics.Vector4(0.84f, 0.46f, 1.00f, 1f),
         "PREF" => new System.Numerics.Vector4(0.38f, 0.62f, 0.96f, 1f),
         "SCENE" => new System.Numerics.Vector4(0.56f, 0.72f, 0.92f, 1f),
         _ => new System.Numerics.Vector4(0.62f, 0.64f, 0.66f, 1f)
@@ -804,6 +819,7 @@ private static string GetAssetKind(string path)
         if (ObjLoader.IsSupportedMesh(path)) return "MESH";
         if (AvatarAsset.IsAvatarPath(path)) return "AVATAR";
         if (AnimationClipAsset.IsAnimationPath(path)) return "ANIM";
+        if (IsParticlePresetPath(path)) return "PART";
         if (path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)) return "PREF";
         if (path.EndsWith(".gscene", StringComparison.OrdinalIgnoreCase)) return "SCENE";
         if (path.EndsWith(".shadergraph", StringComparison.OrdinalIgnoreCase)) return "SHDR";
@@ -821,6 +837,7 @@ private static EditorIcon IconForAssetKind(string kind) => kind switch
         "SUBMESH" => EditorIcon.Mesh,
         "AVATAR" => EditorIcon.Asset,
         "ANIM" => EditorIcon.Asset,
+        "PART" => EditorIcon.Asset,
         "PREF" => EditorIcon.Prefab,
         "SCENE" => EditorIcon.Asset,
         "CS" => EditorIcon.Script,
@@ -871,6 +888,8 @@ private void DrawProjectContextMenu(string path)
                 ApplyMaterialToSelected(path);
             if (MaterialAsset.IsTexturePath(path) && selected != null && ImGui.MenuItem("Apply Texture"))
                 ApplyTextureToSelected(path);
+            if (IsParticlePresetPath(path) && ImGui.MenuItem("Apply Particle Preset", selected?.GetComponent<GrokoEngine.ParticleSystem>() != null))
+                ApplyParticlePresetAssetToSelection(path);
             if (path.EndsWith(".shadergraph", StringComparison.OrdinalIgnoreCase) && ImGui.MenuItem("Create Material"))
                 CreateMaterialFromShaderGraph(path);
         }
@@ -912,6 +931,25 @@ private void DrawProjectBackgroundContextMenu(string? targetDirectory)
 
         ImGui.EndPopup();
         PopContextMenuStyle();
+    }
+
+private void ApplyParticlePresetAssetToSelection(string path)
+    {
+        if (!IsParticlePresetPath(path) || !File.Exists(path))
+        {
+            statusMessage = "Particle preset no encontrado.";
+            return;
+        }
+
+        var ps = selected?.GetComponent<GrokoEngine.ParticleSystem>();
+        if (ps == null)
+        {
+            statusMessage = "Selecciona un GameObject con Particle System para aplicar el preset.";
+            return;
+        }
+
+        particlePresetAssetPath = path;
+        ApplyParticlePresetAsset(ps, path);
     }
 
 private void DrawProjectCreateMenuItems(string targetDirectory)

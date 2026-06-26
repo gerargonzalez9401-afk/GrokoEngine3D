@@ -3,9 +3,6 @@
 		<TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>disable</ImplicitUsings>
-		<!-- AssetService usa System.Windows.IDataObject / System.Windows.Forms (drag & drop del SO) -->
-		<UseWPF>true</UseWPF>
-		<UseWindowsForms>true</UseWindowsForms>
 		<!-- envdte es .NET Framework: silencia el aviso de compatibilidad NU1701 -->
 		<NoWarn>$(NoWarn);NU1701</NoWarn>
 	</PropertyGroup>

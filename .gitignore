@@ -9,6 +9,7 @@ obj/
 
 TestResults/
 *.log
+publish/
 
 GrokoEngine/Assets/bin/
 GrokoEngine/Assets/obj/

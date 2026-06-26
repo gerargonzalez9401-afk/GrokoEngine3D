@@ -504,7 +504,11 @@ internal sealed partial class ImGuiEditorApp
     {
         var entries = new List<AddComponentEntry>
         {
-            new("Physics", "Rigidbody", "Physics body with mass, drag and gravity.", true, () => obj.AddComponentWithEngine<Rigidbody>(physicsEngine)),
+            new("Physics", "Rigidbody", obj.GetComponent<CharacterController>() == null
+                ? "Physics body with mass, drag and gravity."
+                : "Disabled: Character Controller is a kinematic mover and should not use a dynamic Rigidbody.",
+                obj.GetComponent<CharacterController>() == null,
+                () => obj.AddComponentWithEngine<Rigidbody>(physicsEngine)),
             new("Physics", "Box Collider", "Box shape used for collisions and triggers.", true, () => obj.AddComponentWithEngine<BoxCollider>(physicsEngine)),
             new("Physics", "Sphere Collider", "Sphere shape used for radial collisions and triggers.", true, () => obj.AddComponentWithEngine<SphereCollider>(physicsEngine)),
             new("Physics", "Capsule Collider", "Capsule shape for characters and rounded volumes.", true, () => obj.AddComponentWithEngine<CapsuleCollider>(physicsEngine)),
@@ -702,13 +706,31 @@ internal sealed partial class ImGuiEditorApp
                     DrawMeshColliderInspector(meshCollider);
                     break;
                 case Rigidbody rb:
+                    bool characterControlledRigidbody = rb.gameObject.GetComponent<CharacterController>() != null;
+                    if (characterControlledRigidbody)
+                    {
+                        rb.IsKinematic = true;
+                        rb.UseGravity = false;
+                        rb.Velocity = MiMotor.Mathematics.Vector3.Zero;
+                        ImGui.TextColored(new System.Numerics.Vector4(1f, 0.78f, 0.25f, 1f), "Unity-style: CharacterController drives this object.");
+                        ImGui.TextWrapped("Rigidbody is locked as Kinematic without gravity to avoid double physics.");
+                        ImGui.Spacing();
+                    }
                     DrawFloat("Mass", rb.Mass, v => rb.Mass = v, 0.05f, 0.001f, 10000f);
                     DrawFloat("Drag", rb.Drag, v => rb.Drag = v, 0.01f, 0f, 100f);
                     DrawFloat("Angular Drag", rb.AngularDrag, v => rb.AngularDrag = v, 0.01f, 0f, 100f);
                     DrawFloat("Bounciness", rb.Bounciness, v => rb.Bounciness = v, 0.01f, 0f, 1f);
                     DrawFloat("Friction", rb.Friction, v => rb.Friction = v, 0.01f, 0f, 1f);
-                    DrawCheckRow("Use Gravity", rb.UseGravity, v => rb.UseGravity = v);
-                    DrawCheckRow("Is Kinematic", rb.IsKinematic, v => rb.IsKinematic = v);
+                    if (characterControlledRigidbody)
+                    {
+                        ImGui.TextDisabled("Use Gravity: Off (CharacterController)");
+                        ImGui.TextDisabled("Is Kinematic: On (CharacterController)");
+                    }
+                    else
+                    {
+                        DrawCheckRow("Use Gravity", rb.UseGravity, v => rb.UseGravity = v);
+                        DrawCheckRow("Is Kinematic", rb.IsKinematic, v => rb.IsKinematic = v);
+                    }
                     ImGui.Spacing();
                     ImGui.TextDisabled("Constraints");
                     DrawCheckRow("Freeze Position X", rb.FreezePositionX, v => rb.FreezePositionX = v);
@@ -895,6 +917,19 @@ internal sealed partial class ImGuiEditorApp
                     DrawFloat("FOV", cam.FOV, v => cam.FOV = v, 0.5f, 1f, 179f);
                     DrawFloat("Near Clip", cam.NearClip, v => cam.NearClip = v, 0.01f, 0.001f, 100f);
                     DrawFloat("Far Clip", cam.FarClip, v => cam.FarClip = v, 1f, 1f, 100000f);
+                    DrawComboRow("Clear Flags", new[] { "Skybox", "Solid Color" }, (int)cam.ClearFlags, v => cam.ClearFlags = (CameraClearFlags)v);
+                    FieldRow("Background");
+                    {
+                        var background = new Vec4(cam.BackgroundR, cam.BackgroundG, cam.BackgroundB, cam.BackgroundA);
+                        ImGui.SetNextItemWidth(-1f);
+                        if (ImGui.ColorEdit4("##camera_background", ref background, ImGuiColorEditFlags.AlphaPreviewHalf))
+                        {
+                            cam.BackgroundR = Math.Clamp(background.X, 0f, 1f);
+                            cam.BackgroundG = Math.Clamp(background.Y, 0f, 1f);
+                            cam.BackgroundB = Math.Clamp(background.Z, 0f, 1f);
+                            cam.BackgroundA = Math.Clamp(background.W, 0f, 1f);
+                        }
+                    }
                     DrawCheckRow("Anti-aliasing", cam.AntiAliasing, v => cam.AntiAliasing = v);
                     using (new DisabledScope(!cam.AntiAliasing))
                     {

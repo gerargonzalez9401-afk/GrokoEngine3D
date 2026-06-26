@@ -28,6 +28,8 @@
 
   <ItemGroup>
     <None Include="$(NuGetPackageRoot)assimpnet\4.1.0\runtimes\win-x64\native\assimp.dll" Link="assimp.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(NuGetPackageRoot)imgui.net\1.91.6.1\runtimes\win-x64\native\cimgui.dll" Link="cimgui.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(NuGetPackageRoot)opentk.redist.glfw\3.4.0.44\runtimes\win-x64\native\glfw3.dll" Link="glfw3.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
