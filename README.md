@@ -6,6 +6,12 @@ GrokoEngine3D is an experimental 3D engine and editor created by Gerar Gonzalez.
 
 This project is an early experimental version of a custom game engine. Features, architecture and tools may change frequently while the engine continues to evolve.
 
+## Demo Video
+
+Watch the experimental preview on YouTube:
+
+[![GrokoEngine3D Experimental Preview](Docs/github-hero.png)](https://www.youtube.com/watch?v=t-pcfDD5V2M)
+
 The project includes a visual editor, scene hierarchy, inspector, project browser, component system, physics, animation, particles, materials, shader graph tools and real-time rendering.
 
 ## Features
