@@ -1,5 +1,8 @@
 # GrokoEngine3D
 
+[![GitHub stars](https://img.shields.io/github/stars/gerargonzalez9401-afk/GrokoEngine3D?style=social)](https://github.com/gerargonzalez9401-afk/GrokoEngine3D/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/gerargonzalez9401-afk/GrokoEngine3D?style=social)](https://github.com/gerargonzalez9401-afk/GrokoEngine3D/forks)
+
 ![GrokoEngine3D editor preview](Docs/github-hero.png)
 
 GrokoEngine3D is an experimental 3D engine and editor created by Gerar Gonzalez. It is currently in active development and built in C# with a workflow inspired by modern game engines such as Unity.
@@ -48,6 +51,18 @@ It is not intended to replace commercial engines yet. Instead, it is a technical
 GrokoEngine3D is an experimental engine in active development, created by Gerar Gonzalez.
 
 Current builds compile successfully and include automated validation tests, but many systems are still evolving. This repository should be treated as a development version, not a finished production engine.
+
+## Community and Feedback
+
+If you try GrokoEngine3D, your feedback helps the project grow.
+
+- Star the repository if you want to support the project.
+- Open an issue if you find a bug or have a feature idea.
+- Fork the project if you want to experiment with the engine.
+- Share screenshots, videos or demos made with GrokoEngine3D.
+- Mention the repository if you use the engine in a test project or learning experiment.
+
+This helps track interest in the engine and shows where the project should improve next.
 
 ## License
 
