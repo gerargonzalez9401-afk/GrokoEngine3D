@@ -360,7 +360,11 @@ $@"<!-- Auto-generado por GrokoEngine - no editar manualmente -->
                     if (obj is not EnvDTE.DTE dte) continue;
 
                     string dteSln = "";
-                    try { dteSln = dte.Solution?.FullName ?? ""; } catch { }
+                    try { dteSln = dte.Solution?.FullName ?? ""; }
+                    catch (Exception ex)
+                    {
+                        Log($"[DTE] No se pudo leer la solucion abierta: {ex.Message}", true);
+                    }
 
                     if (string.Equals(dteSln, slnPath, StringComparison.OrdinalIgnoreCase))
                     {

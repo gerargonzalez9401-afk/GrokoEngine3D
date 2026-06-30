@@ -763,7 +763,10 @@ namespace GrokoEngine
                         if (arr != null)
                             animator.AnimationSources = arr.Select(p => ResolveAssetPath(p, baseAssetsPath) ?? "").Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        GrokoEngine.Debug.LogWarning($"No se pudo restaurar AnimationSources: {ex.Message}");
+                    }
                 }
                 animator.CurrentClipName = fields.TryGetValue("CurrentClipName", out var currentClip) ? currentClip : "";
                 animator.Loop = GetBool(fields, "Loop", animator.Loop);

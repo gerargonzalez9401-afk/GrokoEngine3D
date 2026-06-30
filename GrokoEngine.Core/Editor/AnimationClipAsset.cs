@@ -212,7 +212,11 @@ namespace GrokoEngine
             data.Keyframes.Sort((a, b) => a.Time.CompareTo(b.Time));
             File.WriteAllText(path, JsonSerializer.Serialize(data, Options));
             // Mantén el caché coherente: la instancia recién guardada pasa a ser la cacheada.
-            try { _cache[path] = (data, File.GetLastWriteTimeUtc(path)); } catch { }
+            try { _cache[path] = (data, File.GetLastWriteTimeUtc(path)); }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AnimationClipAsset] No se pudo actualizar cache para '{path}': {ex.Message}");
+            }
         }
 
         private static string GetUniquePath(string desiredPath)

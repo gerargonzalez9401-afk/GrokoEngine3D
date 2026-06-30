@@ -2224,7 +2224,7 @@ private static void DrawParticleColor(string label, float r, float g, float b, f
     {
         FieldRow(label);
         var color = new System.Numerics.Vector4(r, g, b, alpha);
-        if (ImGui.ColorEdit4("##" + label, ref color))
+        if (ColorField4("##" + label, ref color))
             set(color.X, color.Y, color.Z, color.W);
     }
 

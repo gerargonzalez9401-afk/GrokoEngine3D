@@ -181,6 +181,8 @@ namespace GrokoEngine
         public Dictionary<string, string> ShaderGraphTextures { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public float Roughness { get; set; } = 0.5f;
         public float Metallic { get; set; } = 0f;
+        public bool SpecularHighlights { get; set; } = true;
+        public bool EnvironmentReflections { get; set; } = true;
         public float EmissionR { get; set; } = 0f;
         public float EmissionG { get; set; } = 0f;
         public float EmissionB { get; set; } = 0f;

@@ -23,6 +23,8 @@ namespace GrokoEngine
         public Dictionary<string, string> ShaderGraphTextures { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public float Roughness { get; set; } = 0.5f;
         public float Metallic { get; set; } = 0f;
+        public bool SpecularHighlights { get; set; } = true;
+        public bool EnvironmentReflections { get; set; } = true;
         public float EmissionR { get; set; } = 0f;
         public float EmissionG { get; set; } = 0f;
         public float EmissionB { get; set; } = 0f;
@@ -141,6 +143,8 @@ namespace GrokoEngine
             mat.ShaderGraphTextures = new Dictionary<string, string>(data.ShaderGraphTextures, StringComparer.OrdinalIgnoreCase);
             mat.Roughness = Clamp01(data.Roughness);
             mat.Metallic = Clamp01(data.Metallic);
+            mat.SpecularHighlights = data.SpecularHighlights;
+            mat.EnvironmentReflections = data.EnvironmentReflections;
             mat.EmissionR = Clamp01(data.EmissionR);
             mat.EmissionG = Clamp01(data.EmissionG);
             mat.EmissionB = Clamp01(data.EmissionB);
@@ -167,6 +171,8 @@ namespace GrokoEngine
                 ShaderGraphTextures = new Dictionary<string, string>(material.ShaderGraphTextures, StringComparer.OrdinalIgnoreCase),
                 Roughness = material.Roughness,
                 Metallic = material.Metallic,
+                SpecularHighlights = material.SpecularHighlights,
+                EnvironmentReflections = material.EnvironmentReflections,
                 EmissionR = material.EmissionR,
                 EmissionG = material.EmissionG,
                 EmissionB = material.EmissionB,

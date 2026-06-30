@@ -9,13 +9,10 @@ using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
-using GrokoShaderGraphPro.Models;
-using GrokoShaderGraphPro.Services;
 using MediaColor = System.Windows.Media.Color;
 using MediaColorConverter = System.Windows.Media.ColorConverter;
 
 namespace GrokoEngine.ImGuiEditor;
-
 
 internal sealed partial class SceneViewportRenderer : IDisposable
 {
@@ -183,6 +180,16 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int uEnvMap;
     private int uHasEnvMap;
     private int uEnvMaxLod;
+    private int uEnvDiffuseColor;
+    private int uUseEnvSh;
+    private readonly int[] uEnvSh = new int[9];
+    private int uEnvPrefilterMap;
+    private int uHasEnvPrefilterMap;
+    private int uEnvPrefilterMaxLod;
+    private int uBrdfLut;
+    private int uHasBrdfLut;
+    private int uIblDiffuseStrength;
+    private int uIblSpecularStrength;
     private int uAoStrength;
     private int uFogDensity;
     private int uFogColor;
@@ -337,11 +344,18 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     /// siguiente. Sin coste de recursos (es analítico, sin texturas precalculadas).
     /// </summary>
     public bool ImageBasedLighting { get; set; } = true;
+    public float IblDiffuseStrength { get; set; } = 0.65f;
+    public float IblSpecularStrength { get; set; } = 0f;
 
     // ── Entorno HDRI (IBL Fase 2) ─────────────────────────────────────────
     private int _envTexture;          // textura equirectangular RGB16F (con mips)
+    private int _envPrefilterCube;     // cubemap RGB16F prefiltrado para reflejos PBR
+    private int _brdfLutTexture;       // LUT split-sum para IBL especular
     private bool _envLoaded;
     private float _envMaxLod;
+    private float _envPrefilterMaxLod;
+    private Vector3 _envDiffuseColor = new(0.3f, 0.32f, 0.36f);
+    private readonly Vector3[] _envSh = new Vector3[9];
     private string _envPath = "";
     private bool _envDirty;
 
@@ -395,63 +409,6 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     /// muestras, el comportamiento que tenía el motor por defecto), 2 → 5x5
     /// (25 muestras, penumbra muy suave para escenas "hero").
     /// </summary>
-    
-
-    
-
-    private static long RenderTimestamp() => Stopwatch.GetTimestamp();
-
-    private static float RenderElapsedMs(long start) =>
-        (float)Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-
-    private void ResetRenderStats()
-    {
-        _statsDrawCalls = 0;
-        _statsShadowDrawCalls = 0;
-        _statsInstancedDrawCalls = 0;
-        _statsInstances = 0;
-        _statsTriangles = 0;
-        _statsLineDrawCalls = 0;
-        _statsParticleDrawCalls = 0;
-        _statsBuildSceneMs = 0f;
-        _statsShadowMs = 0f;
-        _statsSkyboxMs = 0f;
-        _statsStaticOpaqueMs = 0f;
-        _statsDynamicOpaqueMs = 0f;
-        _statsShaderGraphMs = 0f;
-        _statsTerrainMs = 0f;
-        _statsLinesGizmosMs = 0f;
-        _statsParticlesMs = 0f;
-        _statsOcclusionMs = 0f;
-        _statsDirectionalShadowMs = 0f;
-        _statsSpotShadowMs = 0f;
-        _statsPointShadowMs = 0f;
-        _statsRenderOtherMs = 0f;
-    }
-
-    private void TrackMainDraw(int vertexCount, int instanceCount = 1)
-    {
-        _statsDrawCalls++;
-        if (instanceCount > 1)
-        {
-            _statsInstancedDrawCalls++;
-            _statsInstances += instanceCount;
-        }
-
-        _statsTriangles += Math.Max(0, vertexCount / 3) * Math.Max(1, instanceCount);
-    }
-
-    
-
-
-    private void TrackLineDraw()
-    {
-        _statsDrawCalls++;
-        _statsLineDrawCalls++;
-    }
-
-    
-
 
     private void FinalizeRenderOther(long renderFrameStart)
     {
@@ -509,277 +466,6 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             _statsRenderOtherMs);
     }
 
-    public SceneViewportRenderer()
-    {
-        // Sin esto, las consultas a samplerCube en los bordes de cada cara filtran
-        // contra el borde de ESA cara únicamente — los texels de la cara vecina no
-        // participan, así que el PCF de las point lights (que muestrea un disco
-        // alrededor de la dirección luz→fragmento y a veces cruza de una cara a
-        // otra) ve una discontinuidad justo en la costura entre caras del cubemap.
-        // Eso dibuja arcos/curvas visibles en las sombras de point lights al subir
-        // la calidad — exactamente el patrón de "lentes" reportado. Habilitar el
-        // filtrado "seamless" hace que OpenGL interpole correctamente a través de
-        // las costuras, igual que hacen los motores de producción (Unity/Unreal).
-        GL.Enable(EnableCap.TextureCubeMapSeamless);
-
-        vertexArray = GL.GenVertexArray();
-        vertexBuffer = GL.GenBuffer();
-        shader = CreateShader();
-        mvpLocation = GL.GetUniformLocation(shader, "uMvp");
-
-        solidVertexArray = GL.GenVertexArray();
-        solidVertexBuffer = GL.GenBuffer();
-        dynamicInstanceBuffer = GL.GenBuffer();
-        InitializeInstanceBuffer();
-        solidShader = CreateSolidShader();
-        _shaderGraphDepthPrepassShader = CreateShaderGraphDepthPrepassShader();
-        _shaderGraphDepthPrepassViewProjLocation = GL.GetUniformLocation(_shaderGraphDepthPrepassShader, "u_ViewProj");
-        solidMvpLocation = GL.GetUniformLocation(solidShader, "uMvp");
-        solidModelLocation = GL.GetUniformLocation(solidShader, "uModel");
-        solidUseInstancingLocation = GL.GetUniformLocation(solidShader, "uUseInstancing");
-        solidUseSkinningLocation = GL.GetUniformLocation(solidShader, "uUseSkinning");
-        solidUseSurfaceUniformsLocation = GL.GetUniformLocation(solidShader, "uUseSurfaceUniforms");
-        solidSurfaceColorLocation = GL.GetUniformLocation(solidShader, "uSurfaceColor");
-        solidSurfaceMaterialLocation = GL.GetUniformLocation(solidShader, "uSurfaceMaterial");
-        solidSurfaceEmissionLocation = GL.GetUniformLocation(solidShader, "uSurfaceEmission");
-        solidTextureLocation = GL.GetUniformLocation(solidShader, "uTexture");
-        solidHasTextureLocation = GL.GetUniformLocation(solidShader, "uHasTexture");
-        solidNormalMapLocation = GL.GetUniformLocation(solidShader, "uNormalMap");
-        solidHasNormalMapLocation = GL.GetUniformLocation(solidShader, "uHasNormalMap");
-        solidRoughnessMapLocation = GL.GetUniformLocation(solidShader, "uRoughnessMap");
-        solidHasRoughnessMapLocation = GL.GetUniformLocation(solidShader, "uHasRoughnessMap");
-        solidMetallicMapLocation = GL.GetUniformLocation(solidShader, "uMetallicMap");
-        solidHasMetallicMapLocation = GL.GetUniformLocation(solidShader, "uHasMetallicMap");
-        solidLightMvpLocation = GL.GetUniformLocation(solidShader, "uLightMvp");
-        solidCascadeCountLocation = GL.GetUniformLocation(solidShader, "uCascadeCount");
-        solidCameraPositionLocation = GL.GetUniformLocation(solidShader, "uShadowCameraPos");
-        for (int i = 0; i < MaxDirectionalShadowCascades; i++)
-        {
-            solidCascadeLightMvpLocations[i] = GL.GetUniformLocation(solidShader, $"uCascadeLightMvp[{i}]");
-            solidCascadeSplitLocations[i] = GL.GetUniformLocation(solidShader, $"uCascadeSplit[{i}]");
-        }
-        solidShadowMapLocation = GL.GetUniformLocation(solidShader, "uShadowMap");
-        solidShadowEnabledLocation = GL.GetUniformLocation(solidShader, "uShadowEnabled");
-        solidShadowStrengthLocation = GL.GetUniformLocation(solidShader, "uShadowStrength");
-        solidShadowPcfRadiusLocation = GL.GetUniformLocation(solidShader, "uShadowPcfRadius");
-        solidSpotShadowMapLocation = GL.GetUniformLocation(solidShader, "uSpotShadowMap");
-        solidSpotLightMvpLocation = GL.GetUniformLocation(solidShader, "uSpotLightMvp");
-        solidSpotShadowEnabledLocation = GL.GetUniformLocation(solidShader, "uSpotShadowEnabled");
-        solidSpotShadowStrengthLocation = GL.GetUniformLocation(solidShader, "uSpotShadowStrength");
-        solidPointShadowCubeLocation = GL.GetUniformLocation(solidShader, "uPointShadowCube");
-        solidPointShadowEnabledLocation = GL.GetUniformLocation(solidShader, "uPointShadowEnabled");
-        solidPointShadowStrengthLocation = GL.GetUniformLocation(solidShader, "uPointShadowStrength");
-        solidPointShadowPosLocation = GL.GetUniformLocation(solidShader, "uPointShadowPos");
-        solidPointShadowFarLocation = GL.GetUniformLocation(solidShader, "uPointShadowFar");
-        solidShadowBiasScaleLocation = GL.GetUniformLocation(solidShader, "uShadowBiasScale");
-        for (int i = 0; i < MaxGpuBones; i++)
-            solidBoneMatrixLocations[i] = GL.GetUniformLocation(solidShader, $"uBones[{i}]");
-        uAmbientColor = GL.GetUniformLocation(solidShader, "uAmbientColor");
-        uAmbientIntensity = GL.GetUniformLocation(solidShader, "uAmbientIntensity");
-        uSkyStrength = GL.GetUniformLocation(solidShader, "uSkyStrength");
-        uDirDir = GL.GetUniformLocation(solidShader, "uDirDir");
-        uDirColor = GL.GetUniformLocation(solidShader, "uDirColor");
-        uDirIntensity = GL.GetUniformLocation(solidShader, "uDirIntensity");
-        uCameraPos = GL.GetUniformLocation(solidShader, "uCameraPos");
-        uPointCount = GL.GetUniformLocation(solidShader, "uPointCount");
-        for (int i = 0; i < MaxPointLights; i++)
-        {
-            uPointPos[i] = GL.GetUniformLocation(solidShader, $"uPointPos[{i}]");
-            uPointColor[i] = GL.GetUniformLocation(solidShader, $"uPointColor[{i}]");
-            uPointIntensity[i] = GL.GetUniformLocation(solidShader, $"uPointIntensity[{i}]");
-            uPointRange[i] = GL.GetUniformLocation(solidShader, $"uPointRange[{i}]");
-        }
-        uSpotCount = GL.GetUniformLocation(solidShader, "uSpotCount");
-        for (int i = 0; i < MaxSpotLights; i++)
-        {
-            uSpotPos[i] = GL.GetUniformLocation(solidShader, $"uSpotPos[{i}]");
-            uSpotDir[i] = GL.GetUniformLocation(solidShader, $"uSpotDir[{i}]");
-            uSpotColor[i] = GL.GetUniformLocation(solidShader, $"uSpotColor[{i}]");
-            uSpotIntensity[i] = GL.GetUniformLocation(solidShader, $"uSpotIntensity[{i}]");
-            uSpotRange[i] = GL.GetUniformLocation(solidShader, $"uSpotRange[{i}]");
-            uSpotAngle[i] = GL.GetUniformLocation(solidShader, $"uSpotAngle[{i}]");
-        }
-        uAreaCount = GL.GetUniformLocation(solidShader, "uAreaCount");
-        for (int i = 0; i < MaxAreaLights; i++)
-        {
-            uAreaPos[i] = GL.GetUniformLocation(solidShader, $"uAreaPos[{i}]");
-            uAreaDir[i] = GL.GetUniformLocation(solidShader, $"uAreaDir[{i}]");
-            uAreaColor[i] = GL.GetUniformLocation(solidShader, $"uAreaColor[{i}]");
-            uAreaIntensity[i] = GL.GetUniformLocation(solidShader, $"uAreaIntensity[{i}]");
-            uAreaRange[i] = GL.GetUniformLocation(solidShader, $"uAreaRange[{i}]");
-            uAreaSize[i] = GL.GetUniformLocation(solidShader, $"uAreaSize[{i}]");
-        }
-        uColorSpaceLinear = GL.GetUniformLocation(solidShader, "uColorSpaceLinear");
-        uUseIBL = GL.GetUniformLocation(solidShader, "uUseIBL");
-        uEnvMap = GL.GetUniformLocation(solidShader, "uEnvMap");
-        uHasEnvMap = GL.GetUniformLocation(solidShader, "uHasEnvMap");
-        uEnvMaxLod = GL.GetUniformLocation(solidShader, "uEnvMaxLod");
-        uAoStrength = GL.GetUniformLocation(solidShader, "uAoStrength");
-        uFogDensity = GL.GetUniformLocation(solidShader, "uFogDensity");
-        uFogColor = GL.GetUniformLocation(solidShader, "uFogColor");
-        uVolumetricStrength = GL.GetUniformLocation(solidShader, "uVolumetricStrength");
-        uDebugView = GL.GetUniformLocation(solidShader, "uDebugView");
-
-        terrainShader = CreateTerrainShader();
-        terrainMvpLocation = GL.GetUniformLocation(terrainShader, "uMvp");
-        terrainModelLocation = GL.GetUniformLocation(terrainShader, "uModel");
-        terrainSplatMapLocation = GL.GetUniformLocation(terrainShader, "uSplatMap");
-        for (int i = 0; i < 4; i++)
-        {
-            terrainLayerLocations[i] = GL.GetUniformLocation(terrainShader, $"uLayer{i}");
-            terrainHasLayerLocations[i] = GL.GetUniformLocation(terrainShader, $"uHasLayer{i}");
-            terrainTilingLocations[i] = GL.GetUniformLocation(terrainShader, $"uTiling{i}");
-        }
-        terrainAmbientColorLocation = GL.GetUniformLocation(terrainShader, "uAmbientColor");
-        terrainAmbientIntensityLocation = GL.GetUniformLocation(terrainShader, "uAmbientIntensity");
-        terrainSkyStrengthLocation = GL.GetUniformLocation(terrainShader, "uSkyStrength");
-        terrainDirDirLocation = GL.GetUniformLocation(terrainShader, "uDirDir");
-        terrainDirColorLocation = GL.GetUniformLocation(terrainShader, "uDirColor");
-        terrainDirIntensityLocation = GL.GetUniformLocation(terrainShader, "uDirIntensity");
-
-        GL.BindVertexArray(vertexArray);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, vertexBuffer);
-
-        int stride = Unsafe.SizeOf<LineVertex>();
-        GL.EnableVertexAttribArray(0);
-        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
-        GL.EnableVertexAttribArray(1);
-        GL.VertexAttribPointer(1, 4, VertexAttribPointerType.Float, false, stride, 12);
-
-        GL.BindVertexArray(0);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-
-        GL.BindVertexArray(solidVertexArray);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, solidVertexBuffer);
-
-        int solidStride = Unsafe.SizeOf<SolidVertex>();
-        GL.EnableVertexAttribArray(0);
-        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, solidStride, 0);
-        GL.EnableVertexAttribArray(1);
-        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, solidStride, 12);
-        GL.EnableVertexAttribArray(2);
-        GL.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, solidStride, 24);
-        GL.EnableVertexAttribArray(3);
-        GL.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, solidStride, 40);
-        GL.EnableVertexAttribArray(4);
-        GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, solidStride, 48);
-        GL.EnableVertexAttribArray(5);
-        GL.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, solidStride, 64);
-
-        GL.BindVertexArray(0);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-
-        // VAO/VBO para el batch estático (misma configuración de atributos)
-        _staticVertexArray = GL.GenVertexArray();
-        _staticVertexBuffer = GL.GenBuffer();
-        GL.BindVertexArray(_staticVertexArray);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _staticVertexBuffer);
-        GL.EnableVertexAttribArray(0);
-        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, solidStride, 0);
-        GL.EnableVertexAttribArray(1);
-        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, solidStride, 12);
-        GL.EnableVertexAttribArray(2);
-        GL.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, solidStride, 24);
-        GL.EnableVertexAttribArray(3);
-        GL.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, solidStride, 40);
-        GL.EnableVertexAttribArray(4);
-        GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, solidStride, 48);
-        GL.EnableVertexAttribArray(5);
-        GL.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, solidStride, 64);
-        GL.BindVertexArray(0);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-
-        // ── Particle shader + VAO ──────────────────────────────────
-        _particleShader = CreateParticleShader();
-        _particleMvpLoc = GL.GetUniformLocation(_particleShader, "uMvp");
-        _particleRightLoc = GL.GetUniformLocation(_particleShader, "uCamRight");
-        _particleUpLoc = GL.GetUniformLocation(_particleShader, "uCamUp");
-        _particleTexLoc = GL.GetUniformLocation(_particleShader, "uTexture");
-        _particleHasTexLoc = GL.GetUniformLocation(_particleShader, "uHasTexture");
-        _particleSoftLoc = GL.GetUniformLocation(_particleShader, "uSoftParticles");
-        _particleDepthTexLoc = GL.GetUniformLocation(_particleShader, "uDepthTex");
-        _particleScreenSizeLoc = GL.GetUniformLocation(_particleShader, "uScreenSize");
-        _particleSoftRangeLoc = GL.GetUniformLocation(_particleShader, "uSoftRange");
-
-        // Trail VAO (misma estructura que partículas)
-        _trailVao = GL.GenVertexArray();
-        _trailVbo = GL.GenBuffer();
-        GL.BindVertexArray(_trailVao);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _trailVbo);
-        int ps2 = Unsafe.SizeOf<ParticleVertex>();
-        GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, ps2, 0);
-        GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, ps2, 12);
-        GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, ps2, 20);
-        GL.EnableVertexAttribArray(3); GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, ps2, 36);
-        GL.EnableVertexAttribArray(4); GL.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, ps2, 40);
-        GL.EnableVertexAttribArray(5); GL.VertexAttribPointer(5, 1, VertexAttribPointerType.Float, false, ps2, 48);
-        GL.BindVertexArray(0);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-
-        // ── Skybox HDRI (IBL Fase 2) ───────────────────────────────
-        _skyboxShader = CreateSkyboxShader();
-        _skyboxVao = GL.GenVertexArray(); // VAO vacío: el triángulo fullscreen se genera con gl_VertexID
-        _skyEnvLoc = GL.GetUniformLocation(_skyboxShader, "uEnvMap");
-        _skyCamFrontLoc = GL.GetUniformLocation(_skyboxShader, "uCamFront");
-        _skyCamUpLoc = GL.GetUniformLocation(_skyboxShader, "uCamUp");
-        _skyTanHalfFovLoc = GL.GetUniformLocation(_skyboxShader, "uTanHalfFov");
-        _skyAspectLoc = GL.GetUniformLocation(_skyboxShader, "uAspect");
-        _skySunDirLoc = GL.GetUniformLocation(_skyboxShader, "uSunDir");
-        _skySunColorLoc = GL.GetUniformLocation(_skyboxShader, "uSunColor");
-        _skySunAngularLoc = GL.GetUniformLocation(_skyboxShader, "uSunAngular");
-        _skySunEnabledLoc = GL.GetUniformLocation(_skyboxShader, "uSunEnabled");
-
-        // VAO/VBO dedicado para occlusion query bounding boxes
-        _occVao = GL.GenVertexArray();
-        _occVbo = GL.GenBuffer();
-        GL.BindVertexArray(_occVao);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _occVbo);
-        int occStride = Unsafe.SizeOf<SolidVertex>();
-        GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, occStride, 0);
-        GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, occStride, 12);
-        GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, occStride, 24);
-        GL.EnableVertexAttribArray(3); GL.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, occStride, 40);
-        GL.EnableVertexAttribArray(4); GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, occStride, 48);
-        GL.EnableVertexAttribArray(5); GL.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, occStride, 64);
-        GL.BindVertexArray(0);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-
-        // Depth FBO — se dimensiona en el primer frame
-        _depthFbo = GL.GenFramebuffer();
-        _depthTex = GL.GenTexture();
-        _shadowShader = CreateShadowShader();
-        _shadowMvpLocation = GL.GetUniformLocation(_shadowShader, "uMvp");
-        _shadowModelLocation = GL.GetUniformLocation(_shadowShader, "uModel");
-        _shadowUseInstancingLocation = GL.GetUniformLocation(_shadowShader, "uUseInstancing");
-        _shadowUseSkinningLocation = GL.GetUniformLocation(_shadowShader, "uUseSkinning");
-        for (int i = 0; i < MaxGpuBones; i++)
-            _shadowBoneMatrixLocations[i] = GL.GetUniformLocation(_shadowShader, $"uBones[{i}]");
-        _pointShadowShader = CreatePointShadowShader();
-        _pointShadowMvpLocation = GL.GetUniformLocation(_pointShadowShader, "uMvp");
-        _pointShadowModelLocation = GL.GetUniformLocation(_pointShadowShader, "uModel");
-        _pointShadowUseInstancingLocation = GL.GetUniformLocation(_pointShadowShader, "uUseInstancing");
-        _pointShadowUseSkinningLocation = GL.GetUniformLocation(_pointShadowShader, "uUseSkinning");
-        _pointShadowLightPosLocation = GL.GetUniformLocation(_pointShadowShader, "uLightPos");
-        _pointShadowFarLocation = GL.GetUniformLocation(_pointShadowShader, "uFarPlane");
-        for (int i = 0; i < MaxGpuBones; i++)
-            _pointShadowBoneMatrixLocations[i] = GL.GetUniformLocation(_pointShadowShader, $"uBones[{i}]");
-        EnsureShadowResources();
-
-        _particleVao = GL.GenVertexArray();
-        _particleVbo = GL.GenBuffer();
-        GL.BindVertexArray(_particleVao);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _particleVbo);
-        int ps = Unsafe.SizeOf<ParticleVertex>();
-        GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, ps, 0);   // center
-        GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, ps, 12);  // offset
-        GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, ps, 20);  // color
-        GL.EnableVertexAttribArray(3); GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, ps, 36);  // rotation
-        GL.EnableVertexAttribArray(4); GL.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, ps, 40);  // uv
-        GL.EnableVertexAttribArray(5); GL.VertexAttribPointer(5, 1, VertexAttribPointerType.Float, false, ps, 48);  // absolute vertices
-        GL.BindVertexArray(0);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-    }
-
     public void Render(
         IReadOnlyList<GameObject> objects,
         GameObject? selected,
@@ -791,7 +477,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         _frameCount++;
         ResetRenderStats();
         long renderFrameStart = RenderTimestamp();
-        long buildPhaseStart = renderFrameStart;
+        long buildPhaseStart = BeginRenderPass(SceneRenderPass.BuildScene);
 
         // El usuario cambió la calidad de sombras desde el editor (Settings → Lighting):
         // reasignamos las texturas de profundidad al nuevo tamaño antes de generarlas
@@ -881,16 +567,16 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             GL.Enable(EnableCap.DepthTest);
             GL.Disable(EnableCap.Blend);
             GL.DepthMask(true);
-            _statsBuildSceneMs = RenderElapsedMs(buildPhaseStart);
+            EndRenderPass(SceneRenderPass.BuildScene, buildPhaseStart);
             if (_envLoaded && DrawEnvironmentBackground)
             {
-                long skyPhaseStart = RenderTimestamp();
+                long skyPhaseStart = BeginRenderPass(SceneRenderPass.Skybox);
                 DrawSkybox(ToTk(camera.Front), ToTk(camera.Up), camera.FOV, width / (float)Math.Max(1, height), FindPrimaryDirectionalLight(objects));
-                _statsSkyboxMs = RenderElapsedMs(skyPhaseStart);
+                EndRenderPass(SceneRenderPass.Skybox, skyPhaseStart);
             }
-            long particlesPhaseStarts = RenderTimestamp();
+            long particlesPhaseStarts = BeginRenderPass(SceneRenderPass.Particles);
             DrawParticles(objects, ref view, ref mvp, eye);
-            _statsParticlesMs = RenderElapsedMs(particlesPhaseStarts);
+            EndRenderPass(SceneRenderPass.Particles, particlesPhaseStarts);
             FinalizeRenderOther(renderFrameStart);
             PublishRenderStats(width, height);
             return;
@@ -906,10 +592,11 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         }
 
         SortDynamicMeshDrawsForStateReuse();
-        _statsBuildSceneMs = RenderElapsedMs(buildPhaseStart);
+        EndRenderPass(SceneRenderPass.BuildScene, buildPhaseStart);
 
+        long shadowPhaseStart = BeginRenderPass(SceneRenderPass.Shadows);
         var (shadowInfo, spotShadowInfo, pointShadowInfo) = PrepareRealtimeShadows(objects, camera, width, height);
-        _statsShadowMs = _statsDirectionalShadowMs + _statsSpotShadowMs + _statsPointShadowMs;
+        EndRenderPass(SceneRenderPass.Shadows, shadowPhaseStart);
 
         GL.Enable(EnableCap.DepthTest);
         GL.Disable(EnableCap.Blend);
@@ -920,12 +607,12 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         // ── Skybox HDRI de fondo (solo si hay HDRI cargado) ─────────
         if (_envLoaded && DrawEnvironmentBackground)
         {
-            long skyPhaseStart = RenderTimestamp();
+            long skyPhaseStart = BeginRenderPass(SceneRenderPass.Skybox);
             DrawSkybox(ToTk(camera.Front), ToTk(camera.Up), camera.FOV, width / (float)Math.Max(1, height), FindPrimaryDirectionalLight(objects));
-            _statsSkyboxMs = RenderElapsedMs(skyPhaseStart);
+            EndRenderPass(SceneRenderPass.Skybox, skyPhaseStart);
         }
 
-        long staticPhaseStart = RenderTimestamp();
+        long staticPhaseStart = BeginRenderPass(SceneRenderPass.StaticOpaque);
         // ── Dibujar static batch (1 setup, N draw calls por textura) ─
         if (_staticVertexCount > 0)
         {
@@ -949,9 +636,9 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             GL.UseProgram(0);
         }
 
-        _statsStaticOpaqueMs = RenderElapsedMs(staticPhaseStart);
+        EndRenderPass(SceneRenderPass.StaticOpaque, staticPhaseStart);
 
-        long dynamicPhaseStart = RenderTimestamp();
+        long dynamicPhaseStart = BeginRenderPass(SceneRenderPass.DynamicOpaque);
         // ── Dibujar objetos dinámicos ─────────────────────────────
         if (dynamicMeshDraws.Count > 0)
             DrawDynamicMeshDraws(ref mvp, shadowInfo, spotShadowInfo, pointShadowInfo, objects, ToTk(camera.Position));
@@ -980,9 +667,9 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             GL.BindVertexArray(0);
             GL.UseProgram(0);
         }
-        _statsDynamicOpaqueMs = RenderElapsedMs(dynamicPhaseStart);
+        EndRenderPass(SceneRenderPass.DynamicOpaque, dynamicPhaseStart);
 
-        long shaderGraphPhaseStart = RenderTimestamp();
+        long shaderGraphPhaseStart = BeginRenderPass(SceneRenderPass.ShaderGraph);
         // ── Dibujar objetos con material Shader Graph (shaders custom) ──
         bool needsShaderGraphSceneDepth =
             ShaderGraphRangesNeedSceneDepth(_staticRanges) ||
@@ -1005,27 +692,27 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             RenderShaderGraphDynamicMeshDraws(ref mvp, ToTk(camera.Position), width, height, objects, camera.NearClip, camera.FarClip);
         if (shaderGraphSkinnedMeshDraws.Count > 0)
             RenderShaderGraphSkinnedMeshDraws(ref mvp, ToTk(camera.Position), width, height, objects, camera.NearClip, camera.FarClip);
-        _statsShaderGraphMs = RenderElapsedMs(shaderGraphPhaseStart);
+        EndRenderPass(SceneRenderPass.ShaderGraph, shaderGraphPhaseStart);
 
-        long terrainPhaseStart = RenderTimestamp();
+        long terrainPhaseStart = BeginRenderPass(SceneRenderPass.Terrain);
         // ── Dibujar Terrain (pintura de capas vía splat map) ────────────
         if (_staticVertexCount > 0)
             RenderTerrainRanges(_staticRanges, _staticVertexArray, ref mvp, objects);
         if (solidVertices.Count > 0)
             RenderTerrainRanges(solidRanges, solidVertexArray, ref mvp, objects);
-        _statsTerrainMs = RenderElapsedMs(terrainPhaseStart);
+        EndRenderPass(SceneRenderPass.Terrain, terrainPhaseStart);
 
         GL.Disable(EnableCap.CullFace);
 
         // ── Issue occlusion queries after opaque geometry is drawn ─
         if (_occlusionCullingEnabled && _pendingOcclusionObjects.Count > 0)
         {
-            long occlusionPhaseStart = RenderTimestamp();
+            long occlusionPhaseStart = BeginRenderPass(SceneRenderPass.Occlusion);
             ProcessOcclusionQueries(ref mvp, objects);
-            _statsOcclusionMs = RenderElapsedMs(occlusionPhaseStart);
+            EndRenderPass(SceneRenderPass.Occlusion, occlusionPhaseStart);
         }
 
-        long linesPhaseStart = RenderTimestamp();
+        long linesPhaseStart = BeginRenderPass(SceneRenderPass.LinesGizmos);
         if (vertices.Count > 0)
         {
             EnsureCapacity(vertices.Count * Unsafe.SizeOf<LineVertex>());
@@ -1043,41 +730,20 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             GL.BindVertexArray(0);
             GL.UseProgram(0);
         }
-        _statsLinesGizmosMs = RenderElapsedMs(linesPhaseStart);
+        EndRenderPass(SceneRenderPass.LinesGizmos, linesPhaseStart);
 
         // ── Partículas billboard ───────────────────────────────────
-        long particlesPhaseStart = RenderTimestamp();
+        long particlesPhaseStart = BeginRenderPass(SceneRenderPass.Particles);
         DrawParticles(objects, ref view, ref mvp, eye);
-        _statsParticlesMs = RenderElapsedMs(particlesPhaseStart);
+        EndRenderPass(SceneRenderPass.Particles, particlesPhaseStart);
         FinalizeRenderOther(renderFrameStart);
         PublishRenderStats(width, height);
     }
-
-    
-
-
-    
-
 
     private readonly List<ParticleRenderRange> _particleRanges = new();
 
     // Buffer temporal para ordenar partículas por distancia (back-to-front)
     private readonly List<(Particle P, float Dist)> _sortBuf = new(512);
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
 
     private void ProcessSubEmitters(GameObject obj, IReadOnlyList<GameObject> allObjects)
     {
@@ -1107,9 +773,6 @@ internal sealed partial class SceneViewportRenderer : IDisposable
 
         foreach (var child in obj.Children) ProcessSubEmitters(child, allObjects);
     }
-
-    
-
 
     /// <summary>Quad estirado en la dirección de la velocidad (lluvia, chispas rápidas).</summary>
     private void AddStretchedQuad(Particle p, MiMotor.Mathematics.Vector3 worldPos, Vector3 right, Vector3 up,
@@ -1171,891 +834,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         _particleVerts.Add(new ParticleVertex(d2, Vector2.Zero, color, 0f, new Vector2(u0, v0), 1f));
     }
 
-    
-
-
-    
-
-
-    
-
-
-    private void BuildGrid()
-    {
-        float step = Math.Clamp(SceneGridSize, 0.01f, 1024f);
-        float opacity = Math.Clamp(SceneGridOpacity, 0f, 1f);
-        if (opacity <= 0f)
-            return;
-
-        int lines = 24;
-        if (cachedGridVertices.Length == 0 ||
-            cachedGridAxis != SceneGridAxis ||
-            MathF.Abs(cachedGridSize - step) > 0.0001f ||
-            MathF.Abs(cachedGridOpacity - opacity) > 0.0001f)
-        {
-            int start = vertices.Count;
-            if (SceneGridAxis == GridAxis.All)
-            {
-                BuildGridPlane(GridAxis.X, step, opacity * 0.55f, lines);
-                BuildGridPlane(GridAxis.Y, step, opacity, lines);
-                BuildGridPlane(GridAxis.Z, step, opacity * 0.55f, lines);
-            }
-            else
-            {
-                BuildGridPlane(SceneGridAxis, step, opacity, lines);
-            }
-
-            int count = vertices.Count - start;
-            cachedGridVertices = new LineVertex[count];
-            for (int i = 0; i < count; i++)
-                cachedGridVertices[i] = vertices[start + i];
-            vertices.RemoveRange(start, count);
-            cachedGridAxis = SceneGridAxis;
-            cachedGridSize = step;
-            cachedGridOpacity = opacity;
-        }
-
-        vertices.AddRange(cachedGridVertices);
-    }
-
-    private void BuildGridPlane(GridAxis axis, float step, float opacity, int lines)
-    {
-        float span = lines * step;
-        for (int i = -lines; i <= lines; i++)
-        {
-            float p = i * step;
-            Vector4 minor = new(0.24f, 0.28f, 0.32f, 0.45f * opacity);
-            Vector4 major = new(0.38f, 0.43f, 0.48f, 0.65f * opacity);
-            Vector4 xAxis = new(0.72f, 0.28f, 0.24f, 0.95f * opacity);
-            Vector4 yAxis = new(0.38f, 0.72f, 0.30f, 0.95f * opacity);
-            Vector4 zAxis = new(0.25f, 0.48f, 0.82f, 0.95f * opacity);
-
-            Vector4 aColor = i == 0 ? AxisColor(axis, true, xAxis, yAxis, zAxis) : i % 5 == 0 ? major : minor;
-            Vector4 bColor = i == 0 ? AxisColor(axis, false, xAxis, yAxis, zAxis) : i % 5 == 0 ? major : minor;
-
-            switch (axis)
-            {
-                case GridAxis.X:
-                    AddLine(new Vector3(0f, p, -span), new Vector3(0f, p, span), aColor);
-                    AddLine(new Vector3(0f, -span, p), new Vector3(0f, span, p), bColor);
-                    break;
-                case GridAxis.Z:
-                    AddLine(new Vector3(p, -span, 0f), new Vector3(p, span, 0f), aColor);
-                    AddLine(new Vector3(-span, p, 0f), new Vector3(span, p, 0f), bColor);
-                    break;
-                default:
-                    AddLine(new Vector3(p, 0f, -span), new Vector3(p, 0f, span), aColor);
-                    AddLine(new Vector3(-span, 0f, p), new Vector3(span, 0f, p), bColor);
-                    break;
-            }
-        }
-    }
-
-    private static Vector4 AxisColor(GridAxis plane, bool first, Vector4 xAxis, Vector4 yAxis, Vector4 zAxis) =>
-        plane switch
-        {
-            GridAxis.X => first ? yAxis : zAxis,
-            GridAxis.Z => first ? xAxis : yAxis,
-            _ => first ? zAxis : xAxis
-        };
-
-    private void AddQuadPrimitive(Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission)
-    {
-        var a = new Vector3(-0.5f, -0.5f, 0f);
-        var b = new Vector3(0.5f, -0.5f, 0f);
-        var c = new Vector3(0.5f, 0.5f, 0f);
-        var d = new Vector3(-0.5f, 0.5f, 0f);
-        AddQuadPrimitive(a, b, c, d, transform, color, material, emission);
-    }
-
-    private void AddCapsulePrimitive(Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission, int slices, int hemiRings)
-    {
-        float cylinderHalf = 0.5f;
-        for (int i = 0; i < slices; i++)
-        {
-            float u0 = i / (float)slices;
-            float u1 = (i + 1) / (float)slices;
-            float a0 = u0 * MathF.PI * 2f;
-            float a1 = u1 * MathF.PI * 2f;
-            var b0 = new Vector3(MathF.Cos(a0) * 0.5f, -cylinderHalf, MathF.Sin(a0) * 0.5f);
-            var b1 = new Vector3(MathF.Cos(a1) * 0.5f, -cylinderHalf, MathF.Sin(a1) * 0.5f);
-            var t0 = new Vector3(b0.X, cylinderHalf, b0.Z);
-            var t1 = new Vector3(b1.X, cylinderHalf, b1.Z);
-            var n0 = new Vector3(MathF.Cos(a0), 0f, MathF.Sin(a0)).Normalized();
-            var n1 = new Vector3(MathF.Cos(a1), 0f, MathF.Sin(a1)).Normalized();
-            AddTrianglePrimitiveSmooth(b0, b1, t1, n0, n1, n1, transform, color, material, emission);
-            AddTrianglePrimitiveSmooth(b0, t1, t0, n0, n1, n0, transform, color, material, emission);
-        }
-
-        AddCapsuleHemisphere(transform, color, material, emission, slices, hemiRings, cylinderHalf, top: true);
-        AddCapsuleHemisphere(transform, color, material, emission, slices, hemiRings, -cylinderHalf, top: false);
-    }
-
-    private void AddCapsuleHemisphere(Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission, int slices, int rings, float yOffset, bool top)
-    {
-        for (int y = 0; y < rings; y++)
-        {
-            float t0 = y == 0 ? 0.0001f : y / (float)rings;
-            float t1 = (y + 1) / (float)rings;
-            float phi0 = t0 * MathF.PI * 0.5f;
-            float phi1 = t1 * MathF.PI * 0.5f;
-            if (!top) { phi0 = -phi0; phi1 = -phi1; }
-            for (int x = 0; x < slices; x++)
-            {
-                float u0 = x / (float)slices;
-                float u1 = (x + 1) / (float)slices;
-                var p00 = CapsulePoint(u0, phi0, yOffset);
-                var p10 = CapsulePoint(u1, phi0, yOffset);
-                var p11 = CapsulePoint(u1, phi1, yOffset);
-                var p01 = CapsulePoint(u0, phi1, yOffset);
-                AddTrianglePrimitiveSmooth(p00, p10, p11, CapsuleNormal(p00, yOffset), CapsuleNormal(p10, yOffset), CapsuleNormal(p11, yOffset), transform, color, material, emission);
-                AddTrianglePrimitiveSmooth(p00, p11, p01, CapsuleNormal(p00, yOffset), CapsuleNormal(p11, yOffset), CapsuleNormal(p01, yOffset), transform, color, material, emission);
-            }
-        }
-    }
-
-    private static Vector3 CapsulePoint(float u, float phi, float yOffset)
-    {
-        float theta = u * MathF.PI * 2f;
-        float cp = MathF.Cos(phi);
-        return new Vector3(MathF.Cos(theta) * cp * 0.5f, yOffset + MathF.Sin(phi) * 0.5f, MathF.Sin(theta) * cp * 0.5f);
-    }
-
-    private static Vector3 CapsuleNormal(Vector3 p, float yOffset)
-    {
-        var normal = new Vector3(p.X, p.Y - yOffset, p.Z);
-        return normal.Length > 0.0001f ? normal.Normalized() : Vector3.UnitY;
-    }
-
-    private void AddQuadPrimitive(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission)
-    {
-        AddTrianglePrimitive(a, b, c, transform, color, material, emission, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(1f, 0f));
-        AddTrianglePrimitive(a, c, d, transform, color, material, emission, new Vector2(0f, 1f), new Vector2(1f, 0f), new Vector2(0f, 0f));
-    }
-
-    private void AddTrianglePrimitive(Vector3 a, Vector3 b, Vector3 c, Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission)
-        => AddTrianglePrimitive(a, b, c, transform, color, material, emission, Vector2.Zero, Vector2.UnitX, Vector2.UnitY);
-
-    private void AddTrianglePrimitive(Vector3 a, Vector3 b, Vector3 c, Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission, Vector2 uva, Vector2 uvb, Vector2 uvc)
-    {
-        var normal = Vector3.Cross(b - a, c - a).Normalized();
-        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(a, transform), Vector3.TransformNormal(normal, transform).Normalized(), color, uva, material, emission));
-        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(b, transform), Vector3.TransformNormal(normal, transform).Normalized(), color, uvb, material, emission));
-        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(c, transform), Vector3.TransformNormal(normal, transform).Normalized(), color, uvc, material, emission));
-    }
-
-    private void AddTrianglePrimitiveSmooth(Vector3 a, Vector3 b, Vector3 c, Vector3 na, Vector3 nb, Vector3 nc, Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission)
-        => AddTrianglePrimitiveSmooth(a, b, c, na, nb, nc, transform, color, material, emission, Vector2.Zero, Vector2.UnitX, Vector2.UnitY);
-
-    private void AddTrianglePrimitiveSmooth(Vector3 a, Vector3 b, Vector3 c, Vector3 na, Vector3 nb, Vector3 nc, Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission, Vector2 uva, Vector2 uvb, Vector2 uvc)
-    {
-        var geometric = Vector3.Cross(b - a, c - a);
-        var desired = na + nb + nc;
-        if (geometric.Length > 0.0001f && desired.Length > 0.0001f && Vector3.Dot(geometric, desired) < 0f)
-        {
-            (b, c) = (c, b);
-            (nb, nc) = (nc, nb);
-            (uvb, uvc) = (uvc, uvb);
-        }
-
-        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(a, transform), Vector3.TransformNormal(na, transform).Normalized(), color, uva, material, emission));
-        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(b, transform), Vector3.TransformNormal(nb, transform).Normalized(), color, uvb, material, emission));
-        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(c, transform), Vector3.TransformNormal(nc, transform).Normalized(), color, uvc, material, emission));
-    }
-
-    private void DrawPrimitiveWire(GameObject obj, Matrix4 transform, Vector4 lineColor)
-    {
-        if (obj.Type == 5)
-        {
-            var a = Vector3.TransformPosition(new Vector3(-0.5f, -0.5f, 0f), transform);
-            var b = Vector3.TransformPosition(new Vector3(0.5f, -0.5f, 0f), transform);
-            var c = Vector3.TransformPosition(new Vector3(0.5f, 0.5f, 0f), transform);
-            var d = Vector3.TransformPosition(new Vector3(-0.5f, 0.5f, 0f), transform);
-            AddLine(a, b, lineColor); AddLine(b, c, lineColor); AddLine(c, d, lineColor); AddLine(d, a, lineColor);
-            return;
-        }
-
-        int slices = 48;
-        float yMin = obj.Type is 4 or 6 ? -1f : -0.5f;
-        float yMax = obj.Type is 4 or 6 ? 1f : 0.5f;
-        for (int i = 0; i < slices; i++)
-        {
-            float a0 = i / (float)slices * MathF.PI * 2f;
-            float a1 = (i + 1) / (float)slices * MathF.PI * 2f;
-            AddLine(Vector3.TransformPosition(new Vector3(MathF.Cos(a0) * 0.5f, 0f, MathF.Sin(a0) * 0.5f), transform), Vector3.TransformPosition(new Vector3(MathF.Cos(a1) * 0.5f, 0f, MathF.Sin(a1) * 0.5f), transform), lineColor);
-            if (obj.Type is 4 or 6)
-            {
-                AddLine(Vector3.TransformPosition(new Vector3(MathF.Cos(a0) * 0.5f, yMin, MathF.Sin(a0) * 0.5f), transform), Vector3.TransformPosition(new Vector3(MathF.Cos(a1) * 0.5f, yMin, MathF.Sin(a1) * 0.5f), transform), lineColor);
-                AddLine(Vector3.TransformPosition(new Vector3(MathF.Cos(a0) * 0.5f, yMax, MathF.Sin(a0) * 0.5f), transform), Vector3.TransformPosition(new Vector3(MathF.Cos(a1) * 0.5f, yMax, MathF.Sin(a1) * 0.5f), transform), lineColor);
-            }
-        }
-    }
-
-    // Listas activas: según _buildingStatic, apuntan al buffer estático o dinámico
-    // ── Render del Terrain (Fase 1/3) ──────────────────────────────
-    // Igual que AddMeshTriangles + AddSolidRange, pero el rango se marca con
-    // TerrainObject para que el draw loop principal lo omita y se dibuje en
-    // un pase aparte con terrainShader (mezcla de capas vía splat map).
-    
-
-
-    // ── Render path para materiales con Shader Graph asignado ──────
-    // Cada .shadergraph compila su propio programa GLSL (vertex fijo +
-    // fragment generado por ShaderCodeGenerator) y se dibuja en un pase
-    // aparte, reutilizando el VAO/VBO ya subido del batch sólido.
-    /// <summary>Metadatos de una propiedad expuesta del Shader Graph para el Inspector (estilo Unity).</summary>
-    
-
-
-    internal sealed class ShaderGraphMaterialEntry
-    {
-        public int Program;
-        public DateTime FileTime;
-        public ShaderGraphModel? Model;
-        public string FragmentSource = string.Empty;
-        public List<string> Samplers = new();
-        public bool NeedsSceneDepth;
-        public int ViewProjLocation = -1;
-        public int TimeLocation = -1;
-        public int ResolutionLocation = -1;
-        public int CameraPosLocation = -1;
-        public int LightDirLocation = -1;
-        public int LightColorLocation = -1;
-        public int LightIntensityLocation = -1;
-        public int ColorSpaceLinearLocation = -1;
-        public int CameraNearLocation = -1;
-        public int CameraFarLocation = -1;
-        // Sombras direccionales por cascadas (recepción).
-        public int ShadowMapLocation = -1;
-        public int ShadowEnabledLocation = -1;
-        public int ShadowStrengthLocation = -1;
-        public int CascadeCountLocation = -1;
-        public int ShadowPcfRadiusLocation = -1;
-        public int ShadowBiasScaleLocation = -1;
-        public int ShadowCameraPosLocation = -1;
-        public int[] CascadeLightMvpLocations = new int[5];
-        public int[] CascadeSplitLocations = new int[5];
-        public int ModelLocation = -1;
-        public int UseModelLocation = -1;
-        public int UseSkinningLocation = -1;
-        public int[] BoneMatrixLocations = new int[MaxGpuBones];
-        public int SceneDepthSamplerIndex = -1;
-        public List<ShaderGraphSamplerBinding> SamplerBindings = new();
-        public List<ShaderGraphPropertyBinding> PropertyBindings = new();
-
-        /// <summary>Valores por defecto de cada uniform. Para colores HDR (vec3/vec4 con ColorMode=Hdr)
-        /// el RGB se guarda SIN multiplicar por la intensidad, y se añade un elemento extra al final
-        /// con la intensidad: vec3 HDR -> [r,g,b,intensity] (4), vec4 HDR -> [r,g,b,a,intensity] (5).</summary>
-        public Dictionary<string, float[]> PropertyDefaults = new(StringComparer.OrdinalIgnoreCase);
-
-        /// <summary>Solo las propiedades del Blackboard, para "Exposed Properties" en el Inspector.</summary>
-        public Dictionary<string, ShaderGraphExposedProperty> ExposedProperties = new(StringComparer.OrdinalIgnoreCase);
-
-        /// <summary>Ruta de textura por defecto (Blackboard) para cada uniform sampler2D.</summary>
-        public Dictionary<string, string> SamplerDefaults = new(StringComparer.OrdinalIgnoreCase);
-    }
-
-    
-
-    
-
-
-    private const string ShaderGraphVertexSource = """
-#version 330 core
-layout(location = 0) in vec3 a_Position;
-layout(location = 1) in vec3 a_Normal;
-layout(location = 3) in vec2 a_UV;
-layout(location = 10) in vec4 a_BoneIndices;
-layout(location = 11) in vec4 a_BoneWeights;
-
-uniform mat4 u_ViewProj;
-uniform mat4 u_Model;
-uniform int u_UseModel;
-uniform int u_UseSkinning;
-uniform mat4 u_Bones[128];
-
-out vec2 v_UV;
-out vec3 v_NormalWS;
-out vec3 v_WorldPos;
-out vec3 v_ObjectPos;
-out vec3 v_TangentWS;
-out vec4 v_ScreenPos;
-
-void main()
-{
-    mat4 model = u_UseModel != 0 ? u_Model : mat4(1.0);
-    vec4 world = vec4(a_Position, 1.0) * model;
-    vec3 normalWS = (vec4(a_Normal, 0.0) * model).xyz;
-
-    if (u_UseSkinning != 0)
-    {
-        vec4 skinnedPos = vec4(0.0);
-        vec3 skinnedNormal = vec3(0.0);
-        float totalWeight = 0.0;
-        for (int i = 0; i < 4; i++)
-        {
-            int boneIndex = int(a_BoneIndices[i] + 0.5);
-            float weight = a_BoneWeights[i];
-            if (boneIndex >= 0 && boneIndex < 128 && weight > 0.0)
-            {
-                mat4 bone = u_Bones[boneIndex];
-                skinnedPos += (vec4(a_Position, 1.0) * bone) * weight;
-                skinnedNormal += (vec4(a_Normal, 0.0) * bone).xyz * weight;
-                totalWeight += weight;
-            }
-        }
-        if (totalWeight > 0.0001)
-        {
-            world = skinnedPos;
-            normalWS = skinnedNormal;
-        }
-    }
-
-    v_WorldPos = world.xyz;
-    v_ObjectPos = a_Position;
-    v_NormalWS = length(normalWS) > 0.0001 ? normalize(normalWS) : vec3(0.0, 1.0, 0.0);
-    vec3 tangentOS = abs(a_Normal.y) > 0.99 ? vec3(1.0, 0.0, 0.0) : normalize(cross(vec3(0.0, 1.0, 0.0), a_Normal));
-    v_TangentWS = normalize((vec4(tangentOS, 0.0) * model).xyz);
-    v_UV = a_UV;
-    gl_Position = world * u_ViewProj;
-    v_ScreenPos = gl_Position;
-}
-""";
-
-    private static bool HasShaderGraphRange(List<SolidRange> ranges)
-        => ranges.Any(r => r.ShaderGraphPath != null);
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    // Pasa al shader del graph la sombra direccional por cascadas (la misma que usa el material estándar),
-    // para que los objetos con material de Shader Graph reciban sombras.
-    
-
-
-    
-
-
-    
-
-
-    
-
-    
-
-
-    
-
-
-    private static bool ShaderGraphModelNeedsSceneDepth(ShaderGraphModel? model)
-        => model?.Nodes?.Any(n => n.Kind is NodeKind.SceneDepth or NodeKind.DepthFade) == true;
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-    
-
-
-    /// <summary>Solo las propiedades declaradas en el Blackboard, para mostrar en "Exposed Properties" del Inspector (estilo Unity).</summary>
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    private static float ShaderGraphParseFloat(string? s, float fallback)
-        => float.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    // ── Vista previa de material en arrastre (estilo Unity): mientras se arrastra un .mat
-    // sobre el viewport, el objeto/sub-malla bajo el cursor muestra ese material sin soltarlo. ──
-    public string? PreviewMaterialObjectId;
-    public int PreviewMaterialSubmeshIndex = -1; // -1 = objeto de un solo material (componente Material)
-    public string? PreviewMaterialAssetPath;
-    private string? previewMaterialDataPath;
-    private DateTime previewMaterialDataFileTime;
-    private MaterialAssetData? previewMaterialData;
-
-    private MaterialAssetData? GetPreviewOverrideData(GameObject obj, int submeshIndex)
-    {
-        if (string.IsNullOrWhiteSpace(PreviewMaterialAssetPath) ||
-            PreviewMaterialObjectId != obj.EditorId ||
-            PreviewMaterialSubmeshIndex != submeshIndex ||
-            !System.IO.File.Exists(PreviewMaterialAssetPath))
-            return null;
-        return GetPreviewMaterialData(PreviewMaterialAssetPath);
-    }
-
-    private MaterialAssetData? GetPreviewMaterialData(string path)
-    {
-        DateTime fileTime;
-        try
-        {
-            fileTime = System.IO.File.GetLastWriteTimeUtc(path);
-        }
-        catch
-        {
-            return null;
-        }
-
-        if (previewMaterialData != null &&
-            previewMaterialDataFileTime == fileTime &&
-            string.Equals(previewMaterialDataPath, path, StringComparison.OrdinalIgnoreCase))
-            return previewMaterialData;
-
-        previewMaterialDataPath = path;
-        previewMaterialDataFileTime = fileTime;
-        previewMaterialData = MaterialAsset.Load(path);
-        return previewMaterialData;
-    }
-
-    private Vector4 GetObjectColor(GameObject obj, Vector4 fallback)
-    {
-        if (GetPreviewOverrideData(obj, -1) is { } over)
-            return new Vector4(Math.Clamp(over.R, 0f, 1f), Math.Clamp(over.G, 0f, 1f), Math.Clamp(over.B, 0f, 1f), 1f);
-
-        var material = obj.GetComponent<Material>();
-        return material == null
-            ? fallback
-            : new Vector4(material.R, material.G, material.B, 1f);
-    }
-
-    private string? GetObjectTexturePath(GameObject obj)
-    {
-        if (GetPreviewOverrideData(obj, -1) is { } over)
-            return string.IsNullOrWhiteSpace(MaterialAsset.GetAlbedo(over)) ? null : MaterialAsset.GetAlbedo(over);
-
-        var material = obj.GetComponent<Material>();
-        return material?.TexturePath;
-    }
-
-    
-
-
-    
-
-
-    
-
-
-    private (Vector4 Material, Vector4 Emission) GetObjectSurface(GameObject obj)
-    {
-        if (GetPreviewOverrideData(obj, -1) is { } over)
-            return (
-                new Vector4(Math.Clamp(over.Metallic, 0f, 1f), Math.Clamp(over.Roughness, 0.04f, 1f), 0f, 0f),
-                new Vector4(Math.Max(0f, over.EmissionR), Math.Max(0f, over.EmissionG), Math.Max(0f, over.EmissionB), Math.Max(0f, over.EmissionIntensity)));
-
-        var material = obj.GetComponent<Material>();
-        if (material == null)
-            return (new Vector4(0f, 0.5f, 0f, 0f), Vector4.Zero);
-
-        return (
-            new Vector4(Math.Clamp(material.Metallic, 0f, 1f), Math.Clamp(material.Roughness, 0.04f, 1f), 0f, 0f),
-            new Vector4(Math.Max(0f, material.EmissionR), Math.Max(0f, material.EmissionG), Math.Max(0f, material.EmissionB), Math.Max(0f, material.EmissionIntensity)));
-    }
-
-    private SurfaceMaps GetObjectSurfaceMaps(GameObject obj)
-    {
-        if (GetPreviewOverrideData(obj, -1) is { } over)
-            return new SurfaceMaps(over.NormalMapPath, over.RoughnessMapPath, over.MetallicMapPath);
-
-        var material = obj.GetComponent<Material>();
-        return material == null
-            ? new SurfaceMaps(null, null, null)
-            : new SurfaceMaps(material.NormalMapPath, material.RoughnessMapPath, material.MetallicMapPath);
-    }
-
-    private readonly record struct SubmeshSurface(
-        Vector4 Color,
-        string? TexturePath,
-        SurfaceMaps Maps,
-        Vector4 Material,
-        Vector4 Emission,
-        string? ShaderGraphPath,
-        IReadOnlyDictionary<string, float[]>? ShaderGraphProperties,
-        IReadOnlyDictionary<string, string>? ShaderGraphTextures);
-
-    // Resuelve el material de una sub-malla: si tiene un .mat asignado en MaterialSlots
-    // se usa ese; si no, se usan los datos embebidos del modelo importado (color/textura del FBX/OBJ).
-    private static SubmeshSurface GetSubmeshSurface(string? materialAssetPath, MeshSubmesh submesh, Vector4 fallbackColor)
-    {
-        if (!string.IsNullOrWhiteSpace(materialAssetPath) && System.IO.File.Exists(materialAssetPath))
-        {
-            var data = MaterialAsset.Load(materialAssetPath);
-            string? albedo = MaterialAsset.GetAlbedo(data);
-            return new SubmeshSurface(
-                new Vector4(Math.Clamp(data.R, 0f, 1f), Math.Clamp(data.G, 0f, 1f), Math.Clamp(data.B, 0f, 1f), 1f),
-                string.IsNullOrWhiteSpace(albedo) ? null : albedo,
-                new SurfaceMaps(data.NormalMapPath, data.RoughnessMapPath, data.MetallicMapPath),
-                new Vector4(Math.Clamp(data.Metallic, 0f, 1f), Math.Clamp(data.Roughness, 0.04f, 1f), 0f, 0f),
-                new Vector4(Math.Max(0f, data.EmissionR), Math.Max(0f, data.EmissionG), Math.Max(0f, data.EmissionB), Math.Max(0f, data.EmissionIntensity)),
-                string.IsNullOrWhiteSpace(data.ShaderGraphPath) ? null : data.ShaderGraphPath,
-                data.ShaderGraphProperties.Count > 0 ? data.ShaderGraphProperties : null,
-                data.ShaderGraphTextures.Count > 0 ? data.ShaderGraphTextures : null);
-        }
-
-        Vector4 color = string.IsNullOrWhiteSpace(submesh.TexturePath) && submesh.DiffuseR == 0.8f && submesh.DiffuseG == 0.8f && submesh.DiffuseB == 0.8f
-            ? fallbackColor
-            : new Vector4(submesh.DiffuseR, submesh.DiffuseG, submesh.DiffuseB, 1f);
-
-        return new SubmeshSurface(
-            color,
-            submesh.TexturePath,
-            new SurfaceMaps(null, null, null),
-            new Vector4(0f, 0.5f, 0f, 0f),
-            Vector4.Zero,
-            null, null, null);
-    }
-
-    private static string? NormalizeTexturePath(string? path) => NormalizeExistingAssetPath(path);
-
-    internal static string? NormalizeExistingAssetPath(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-            return null;
-
-        try
-        {
-            string fullPath = System.IO.Path.GetFullPath(path);
-            return System.IO.File.Exists(fullPath) ? fullPath : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private void LogAssetWarning(string message)
-    {
-        if (assetWarningLog.Add(message))
-            GrokoEngine.Debug.LogWarning(message);
-    }
-
-    // ── Recolección de luces de escena ───────────────────────────────────────
-    // Réplica mínima de la parte ambiente + direccional de ApplySceneLighting,
-    // pero apuntando a las uniform locations de terrainShader.
-    
-
-
-    // Sube/actualiza la textura RGBA del splat map del Terrain a la GPU,
-    // re-subiendo solo cuando SplatVersion cambia (pintura) o la primera vez.
-    
-
-
-    // Pase de dibujo dedicado para los rangos de Terrain: mezcla hasta 4
-    // texturas de capa según el splat map, con iluminación simplificada
-    // (ambiente + direccional), siguiendo el patrón de RenderShaderGraphRanges.
-    
-
-
-    // Recolecta luces + ajustes una sola vez por Render (memoizado por _frameCount). Esto evita
-    // recorrer el árbol de escena ~7 veces por cada pase sólido (antes: estático+dinámico+skinned).
-    // ── God rays: posicion del sol en pantalla (para el pase radial del post-proceso) ──
-    public Vector2 SunScreenUv { get; private set; }
-    public bool    SunGodRaysActive { get; private set; }
-    public float   SunGodRaysStrength { get; private set; }
-    public Vector3 SunGodRayColor { get; private set; }
-
-    private void ComputeSunScreenPosition(IReadOnlyList<GameObject> objects, Vector3 eye, Matrix4 mvp, Vector3 camFront)
-    {
-        SunGodRaysActive = false;
-        var sun = FindPrimaryDirectionalLight(objects);
-        if (sun == null || !sun.GodRays || sun.Intensity <= 0.0001f)
-            return;
-        // El sol en el cielo esta en la direccion OPUESTA a la que viaja la luz; debe estar delante.
-        Vector3 sunSky = (ToTk(sun.GetNormalizedDirection()).Normalized() * -1f);
-        if (Vector3.Dot(sunSky, camFront.Normalized()) <= 0.05f)
-            return;
-        var clip = new Vector4(eye + sunSky * 100000f, 1f) * mvp;
-        if (clip.W <= 0.0001f)
-            return;
-        SunScreenUv = new Vector2((clip.X / clip.W) * 0.5f + 0.5f, (clip.Y / clip.W) * 0.5f + 0.5f);
-        SunGodRaysActive = true;
-        SunGodRaysStrength = sun.GodRaysStrength;
-        SunGodRayColor = ToTk(sun.GetEffectiveColor());
-    }
-
-    private void CollectFrameLighting(IReadOnlyList<GameObject> objects)
-    {
-        if (_frameLightsCollectedFor == _frameCount)
-            return;
-        _frameLightsCollectedFor = _frameCount;
-
-        _frameAmbient = FindComponent<AmbientLight>(objects);
-        _framePostProcess = FindComponent<PostProcessSettings>(objects);
-        _frameDir = FindPrimaryDirectionalLight(objects);
-
-        _framePointLights.Clear();
-        CollectComponents(objects, _framePointLights, MaxPointLights);
-        _frameSpotLights.Clear();
-        CollectComponents(objects, _frameSpotLights, MaxSpotLights);
-        _frameAreaLights.Clear();
-        CollectComponents(objects, _frameAreaLights, MaxAreaLights);
-        _frameRectLights.Clear();
-        CollectComponents(objects, _frameRectLights, Math.Max(0, MaxAreaLights - _frameAreaLights.Count));
-    }
-
-    private void ApplySceneLighting(IReadOnlyList<GameObject> objects, Vector3 cameraPosition)
-    {
-        CollectFrameLighting(objects);   // recolección 1x por Render; aquí solo se SUBEN los uniforms
-
-        // Ambient
-        var ambient = _frameAmbient;
-        var ambColor = ambient != null
-            ? new Vector3(ambient.R, ambient.G, ambient.B)
-            : new Vector3(0.3f, 0.32f, 0.36f);
-        float ambIntensity = ambient?.Intensity ?? 0.22f;
-        // Indirect Multiplier del sol: su luz de rebote escala el fill ambiente (aprox. de GI).
-        if (_frameDir != null) ambIntensity *= _frameDir.IndirectMultiplier;
-        GL.Uniform3(uAmbientColor, ambColor);
-        GL.Uniform1(uAmbientIntensity, ambIntensity);
-        GL.Uniform1(uSkyStrength, ambient?.SkyStrength ?? 0.08f);
-        GL.Uniform3(uCameraPos, cameraPosition);
-
-        var pp = _framePostProcess;
-        bool ppEnabled = pp?.Enabled ?? false;
-        // Modo PRO: espacio de color seleccionable desde Settings → Lighting.
-        // El shader de objetos sólo lo usa para decidir si decodifica sRGB->linear
-        // a la ENTRADA (albedo/texturas). La exposición, el tonemap ACES y la
-        // codificación final a sRGB viven en el post-proceso (un único display
-        // transform), por eso uExposure/uGamma/uToneMapping/uBloomStrength ya no
-        // se suben aquí: hacerlo además rompía el bloom y duplicaba la gamma.
-        GL.Uniform1(uColorSpaceLinear, ColorSpace == ColorSpace.Linear ? 1 : 0);
-        GL.Uniform1(uUseIBL, ImageBasedLighting ? 1 : 0);
-        // HDRI de entorno en la unidad 7 (libre: 0-6 las usan albedo/sombras/mapas).
-        if (_envLoaded)
-        {
-            GL.ActiveTexture(TextureUnit.Texture7);
-            GL.BindTexture(TextureTarget.Texture2D, _envTexture);
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.Uniform1(uEnvMap, 7);
-            GL.Uniform1(uHasEnvMap, 1);
-            GL.Uniform1(uEnvMaxLod, _envMaxLod);
-        }
-        else
-        {
-            GL.Uniform1(uHasEnvMap, 0);
-        }
-        GL.Uniform1(uAoStrength, 0f);
-        GL.Uniform1(uFogDensity, ppEnabled && pp!.Fog ? pp.FogDensity : 0f);
-        GL.Uniform3(uFogColor, ppEnabled ? new Vector3(pp!.FogR, pp.FogG, pp.FogB) : new Vector3(0.48f, 0.58f, 0.68f));
-        GL.Uniform1(uVolumetricStrength, ppEnabled ? pp!.VolumetricLightStrength : 0f);
-        GL.Uniform1(uDebugView, DebugView);
-
-        // Directional light — dirección calculada desde la rotación del GameObject,
-        // igual que la cámara: RotY=0 → +Z, RotX positivo → apunta hacia abajo.
-        var dir = _frameDir;
-        if (dir != null && dir.gameObject != null)
-        {
-            GL.Uniform3(uDirDir, ToTk(dir.GetNormalizedDirection()).Normalized());
-            GL.Uniform3(uDirColor, ToTk(dir.GetEffectiveColor()));   // Filter * temperatura (Kelvin)
-            GL.Uniform1(uDirIntensity, dir.Intensity);
-        }
-        else
-        {
-            // Sin DirectionalLight en escena: sin sol de relleno (iluminación limpia, solo ambiente).
-            GL.Uniform3(uDirDir, new Vector3(0f, -1f, 0f));
-            GL.Uniform3(uDirColor, Vector3.Zero);
-            GL.Uniform1(uDirIntensity, 0f);
-        }
-
-        // Point lights (ya recolectadas en CollectFrameLighting)
-        GL.Uniform1(uPointCount, _framePointLights.Count);
-        for (int i = 0; i < _framePointLights.Count; i++)
-        {
-            var pl = _framePointLights[i];
-            var pos = pl.gameObject != null ? ComputeWorldPosition(pl.gameObject) : Vector3.Zero;
-            GL.Uniform3(uPointPos[i], pos);
-            GL.Uniform3(uPointColor[i], ToTk(pl.GetEffectiveColor()));   // Filter * temperatura
-            GL.Uniform1(uPointIntensity[i], pl.Intensity);
-            GL.Uniform1(uPointRange[i], pl.Range);
-        }
-
-        GL.Uniform1(uSpotCount, _frameSpotLights.Count);
-        for (int i = 0; i < _frameSpotLights.Count; i++)
-        {
-            var sl = _frameSpotLights[i];
-            var pos = sl.gameObject != null ? ComputeWorldPosition(sl.gameObject) : Vector3.Zero;
-            var spotDirection = ResolveSpotDirection(sl);
-            GL.Uniform3(uSpotPos[i], pos);
-            GL.Uniform3(uSpotDir[i], spotDirection);
-            GL.Uniform3(uSpotColor[i], ToTk(sl.GetEffectiveColor()));   // Filter * temperatura
-            GL.Uniform1(uSpotIntensity[i], sl.Intensity);
-            GL.Uniform1(uSpotRange[i], sl.Range);
-            GL.Uniform1(uSpotAngle[i], MathHelper.DegreesToRadians(sl.Angle));
-        }
-
-        int areaCount = Math.Min(MaxAreaLights, _frameAreaLights.Count + _frameRectLights.Count);
-        GL.Uniform1(uAreaCount, areaCount);
-        int areaIndex = 0;
-        foreach (var area in _frameAreaLights)
-        {
-            if (areaIndex >= MaxAreaLights) break;
-            UploadAreaLight(areaIndex++, area.gameObject, area.R, area.G, area.B, area.Intensity, area.Range, area.Width, area.Height);
-        }
-        foreach (var rect in _frameRectLights)
-        {
-            if (areaIndex >= MaxAreaLights) break;
-            UploadAreaLight(areaIndex++, rect.gameObject, rect.R, rect.G, rect.B, rect.Intensity, rect.Range, rect.Width, rect.Height);
-        }
-    }
-
-    private void UploadAreaLight(int index, GameObject? obj, float r, float g, float b, float intensity, float range, float width, float height)
-    {
-        var pos = obj != null ? ComputeWorldPosition(obj) : Vector3.Zero;
-        var dir = obj != null ? ForwardFromGameObject(obj) : new Vector3(0f, -1f, 0f);
-        GL.Uniform3(uAreaPos[index], pos);
-        GL.Uniform3(uAreaDir[index], dir);
-        GL.Uniform3(uAreaColor[index], new Vector3(r, g, b));
-        GL.Uniform1(uAreaIntensity[index], intensity);
-        GL.Uniform1(uAreaRange[index], range);
-        GL.Uniform2(uAreaSize[index], new Vector2(width, height));
-    }
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-    
-
-    
-
-
-    private static Vector3[] GetCameraFrustumCorners(
-        ImGuiEditorApp.EditorCameraState camera,
-        Matrix4 view,
-        float aspect,
-        float nearClip,
-        float farClip)
-    {
-        Matrix4 projection = camera.Orthographic
-            ? Matrix4.CreateOrthographic(Math.Max(0.01f, camera.OrthoSize) * 2f * aspect, Math.Max(0.01f, camera.OrthoSize) * 2f, nearClip, farClip)
-            : Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(camera.FOV), aspect, nearClip, farClip);
-        Matrix4.Invert(view * projection, out var invViewProj);
-
-        var corners = new Vector3[8];
-        int idx = 0;
-        for (int z = 0; z < 2; z++)
-        {
-            float cz = z == 0 ? -1f : 1f;
-            for (int y = 0; y < 2; y++)
-            {
-                float cy = y == 0 ? -1f : 1f;
-                for (int x = 0; x < 2; x++)
-                {
-                    float cx = x == 0 ? -1f : 1f;
-                    var world = Vector4.TransformRow(new Vector4(cx, cy, cz, 1f), invViewProj);
-                    corners[idx++] = new Vector3(world.X, world.Y, world.Z) / MathF.Max(world.W, 0.0001f);
-                }
-            }
-        }
-
-        return corners;
-    }
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
+    // Depth/shadow batching helpers kept close to renderer type definitions.
 
     private static bool CanDepthInstanceTogether(DynamicMeshDraw a, DynamicMeshDraw b) =>
         a.CastShadows &&
@@ -2064,341 +843,8 @@ void main()
         a.Start == b.Start &&
         a.Count == b.Count;
 
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    
-
-
-    // Mismos criterios que BuildObjectRecursive/DrawDepthGeometry para decidir si un objeto
-    // aporta geometría real al render (y por tanto al shadow map): cubo, plano o malla cargada.
-    // Luces, cámaras y GameObjects vacíos no dibujan geometría y no deben influir en el
-    // encuadre de la cámara de sombra direccional.
-    
-
-    private (Vector3 Center, float Radius) EstimateObjectBound(GameObject obj)
-    {
-        var center = ComputeWorldPosition(obj);
-        float radius;
-        if (obj.GetComponent<MeshFilter>() is { } mf && !string.IsNullOrWhiteSpace(mf.MeshPath) && GetParsedMesh(mf.MeshPath) is { } mesh)
-        {
-            float s = mf.ImportScale <= 0f ? 1f : mf.ImportScale;
-            var min = new Vector3(mesh.BoundsMin.X * s, mesh.BoundsMin.Y * s, mesh.BoundsMin.Z * s);
-            var max = new Vector3(mesh.BoundsMax.X * s, mesh.BoundsMax.Y * s, mesh.BoundsMax.Z * s);
-            radius = (max - min).Length * 0.5f * MathF.Max(MathF.Abs(obj.ScaleX), MathF.Max(MathF.Abs(obj.ScaleY), MathF.Abs(obj.ScaleZ)));
-        }
-        else if (obj.Type == 2)
-        {
-            radius = MathF.Sqrt(obj.ScaleX * obj.ScaleX + obj.ScaleZ * obj.ScaleZ) * 0.75f;
-        }
-        else if (obj.Type is 3 or 4 or 5 or 6)
-        {
-            radius = MathF.Sqrt(obj.ScaleX * obj.ScaleX + obj.ScaleY * obj.ScaleY + obj.ScaleZ * obj.ScaleZ) * (obj.Type == 6 ? 0.85f : 0.65f);
-        }
-        else
-        {
-            radius = MathF.Sqrt(obj.ScaleX * obj.ScaleX + obj.ScaleY * obj.ScaleY + obj.ScaleZ * obj.ScaleZ) * 0.75f;
-        }
-        return (center, MathF.Max(radius, 0.5f));
-    }
-
-    
-
-
-    /// <summary>
-    /// Convierte la rotación (RotX, RotY) de un GameObject en su vector "forward" mundo.
-    /// Misma convención que la cámara: RotY=0 → +Z, RotX positivo → apunta abajo.
-    /// </summary>
-    
-
-
-    
-
-
-    // Selecciona "la" luz direccional usada tanto para iluminar como para proyectar sombra.
-    // Antes se usaba FindComponent<DirectionalLight> (la primera encontrada en el árbol)
-    // tanto para los uniforms de iluminación como para decidir si se genera el shadow map:
-    // si la escena tenía varias DirectionalLight, bastaba con que la PRIMERA encontrada
-    // tuviera Shadows = false para que las sombras de OTRA luz (con Shadows = true)
-    // desaparecieran del todo. Igual que con Spot/Point (FindShadowCaster), priorizamos
-    // la que realmente proyecta sombra; así la dirección de iluminación y la del shadow
-    // map siempre coinciden y añadir una segunda luz no "borra" las sombras existentes.
-    
-
-
-    private static T? FindComponent<T>(IReadOnlyList<GameObject> objects) where T : Component
-    {
-        foreach (var obj in objects)
-        {
-            if (!obj.IsActive) continue;
-            var c = obj.GetComponent<T>();
-            if (c != null && c.Enabled) return c;   // respeta el checkbox Enabled del componente
-            var found = FindComponent<T>(obj.Children);
-            if (found != null) return found;
-        }
-        return null;
-    }
-
-    private static void CollectComponents<T>(IReadOnlyList<GameObject> objects, List<T> result, int max)
-        where T : Component
-    {
-        foreach (var obj in objects)
-        {
-            if (result.Count >= max) return;
-            if (!obj.IsActive) continue;
-            var c = obj.GetComponent<T>();
-            if (c != null && c.Enabled) result.Add(c);   // respeta el checkbox Enabled del componente
-            CollectComponents(obj.Children, result, max);
-        }
-    }
-
-    private static T? FindShadowCaster<T>(IReadOnlyList<GameObject> objects, Func<T, bool> predicate)
-        where T : Component
-    {
-        foreach (var obj in objects)
-        {
-            if (!obj.IsActive) continue;
-            if (obj.GetComponent<T>() is { Enabled: true } component && predicate(component))
-                return component;
-            var found = FindShadowCaster(obj.Children, predicate);
-            if (found != null) return found;
-        }
-        return null;
-    }
-
-    private static Vector3 ToTk(MiMotor.Mathematics.Vector3 value) =>
-        new(value.X, value.Y, value.Z);
+    // Dedicated scratch buffers for bounds and occlusion debug drawing.
 
     private readonly List<SolidVertex> _bboxScratch = new(36);
     private SolidVertex[] _bboxUploadBuffer = Array.Empty<SolidVertex>();
-
-    /// <summary>
-    /// Dibuja la AABB del mesh usando el VAO/VBO dedicado (_occVao/_occVbo),
-    /// completamente independiente del solidVertexBuffer principal.
-    /// </summary>
-    
-
-
-    /// <summary>Direct quad push to an explicit list (bypasses the ActiveSolidVertices indirection).</summary>
-    
-
-
-    /// <summary>
-    /// Remove occlusion query state for objects that no longer exist in the scene.
-    /// Call this after the object list changes (scene load, object deletion).
-    /// </summary>
-    
-
-
-    
-
-
-    public void Dispose()
-    {
-        foreach (int texture in textureCache.Values)
-            if (texture != 0)
-                GL.DeleteTexture(texture);
-        textureCache.Clear();
-        textureFileTimeCache.Clear();
-        parsedMeshCache.Clear();
-        ClearGpuMeshCache();
-        ClearSkinnedGpuMeshCache();
-        assetWarningLog.Clear();
-        GL.DeleteBuffer(vertexBuffer);
-        GL.DeleteBuffer(solidVertexBuffer);
-        GL.DeleteBuffer(_staticVertexBuffer);
-        GL.DeleteBuffer(_particleVbo);
-        GL.DeleteBuffer(_trailVbo);
-        if (dynamicInstanceBuffer != 0) GL.DeleteBuffer(dynamicInstanceBuffer);
-        GL.DeleteVertexArray(vertexArray);
-        GL.DeleteVertexArray(solidVertexArray);
-        GL.DeleteVertexArray(_staticVertexArray);
-        GL.DeleteVertexArray(_particleVao);
-        GL.DeleteVertexArray(_trailVao);
-        if (_depthTex != 0) GL.DeleteTexture(_depthTex);
-        if (_depthFbo != 0) GL.DeleteFramebuffer(_depthFbo);
-        if (_occVbo != 0) GL.DeleteBuffer(_occVbo);
-        if (_occVao != 0) GL.DeleteVertexArray(_occVao);
-        if (_shadowArrayTex != 0) GL.DeleteTexture(_shadowArrayTex);
-        if (_shadowFbo != 0) GL.DeleteFramebuffer(_shadowFbo);
-        if (_spotShadowTex != 0) GL.DeleteTexture(_spotShadowTex);
-        if (_spotShadowFbo != 0) GL.DeleteFramebuffer(_spotShadowFbo);
-        if (_pointShadowCube != 0) GL.DeleteTexture(_pointShadowCube);
-        if (_pointShadowFbo != 0) GL.DeleteFramebuffer(_pointShadowFbo);
-        if (_shaderGraphWhiteTex != 0) GL.DeleteTexture(_shaderGraphWhiteTex);
-        foreach (var entry in _shaderGraphCache.Values)
-            if (entry.Program != 0)
-                GL.DeleteProgram(entry.Program);
-        _shaderGraphCache.Clear();
-        GL.DeleteProgram(shader);
-        GL.DeleteProgram(solidShader);
-        if (_shaderGraphDepthPrepassShader != 0) GL.DeleteProgram(_shaderGraphDepthPrepassShader);
-        if (_shadowShader != 0) GL.DeleteProgram(_shadowShader);
-        if (_pointShadowShader != 0) GL.DeleteProgram(_pointShadowShader);
-        GL.DeleteProgram(_particleShader);
-        if (_skyboxShader != 0) GL.DeleteProgram(_skyboxShader);
-        if (_skyboxVao != 0) GL.DeleteVertexArray(_skyboxVao);
-        if (_envTexture != 0) GL.DeleteTexture(_envTexture);
-
-        // Delete any in-flight occlusion query objects
-        foreach (var qid in _occlusionQueries.Values)
-            GL.DeleteQuery(qid);
-        _occlusionQueries.Clear();
-        _occlusionVisible.Clear();
-        _occlusionQueryFrame.Clear();
-    }
-
-    private readonly record struct LineVertex(Vector3 Position, Vector4 Color);
-    private readonly record struct SolidVertex
-    {
-        public readonly Vector3 Position;
-        public readonly Vector3 Normal;
-        public readonly Vector4 Color;
-        public readonly Vector2 Uv;
-        public readonly Vector4 Material;
-        public readonly Vector4 Emission;
-
-        public SolidVertex(Vector3 position, Vector3 normal, Vector4 color, Vector2 uv)
-            : this(position, normal, color, uv, new Vector4(0f, 0.5f, 0f, 0f), Vector4.Zero)
-        {
-        }
-
-        public SolidVertex(Vector3 position, Vector3 normal, Vector4 color, Vector2 uv, Vector4 material, Vector4 emission)
-        {
-            Position = position;
-            Normal = normal;
-            Color = color;
-            Uv = uv;
-            Material = material;
-            Emission = emission;
-        }
-    }
-    private readonly record struct SolidRange(int Start, int Count, string? TexturePath, string? NormalMapPath, string? RoughnessMapPath, string? MetallicMapPath, string? ShaderGraphPath = null, IReadOnlyDictionary<string, float[]>? ShaderGraphProperties = null, IReadOnlyDictionary<string, string>? ShaderGraphTextures = null, GameObject? TerrainObject = null);
-    private readonly record struct DynamicMeshDraw(CachedGpuMesh Mesh, Matrix4 World, int Start, int Count, string? TexturePath, string? NormalMapPath, string? RoughnessMapPath, string? MetallicMapPath, Vector4 Color, Vector4 Material, Vector4 Emission, bool CastShadows = true, bool ReceiveShadows = true);
-    private readonly record struct SkinnedMeshDraw(CachedSkinnedGpuMesh Mesh, Matrix4 World, System.Numerics.Matrix4x4[] Skin, int Start, int Count, string? TexturePath, string? NormalMapPath, string? RoughnessMapPath, string? MetallicMapPath, Vector4 Color, Vector4 Material, Vector4 Emission);
-    
-    private readonly record struct SurfaceMaps(string? NormalMapPath, string? RoughnessMapPath, string? MetallicMapPath);
-    private readonly record struct MeshVertData(Vector3 Position, Vector3 Normal, Vector2 Uv);
-    private readonly struct SkinnedVertex
-    {
-        public readonly Vector3 Position;
-        public readonly Vector3 Normal;
-        public readonly Vector4 Color;
-        public readonly Vector2 Uv;
-        public readonly Vector4 Material;
-        public readonly Vector4 Emission;
-        public readonly Vector4 BoneIndices;
-        public readonly Vector4 BoneWeights;
-
-        public SkinnedVertex(Vector3 position, Vector3 normal, Vector4 color, Vector2 uv, Vector4 material, Vector4 emission, Vector4 boneIndices, Vector4 boneWeights)
-        {
-            Position = position;
-            Normal = normal;
-            Color = color;
-            Uv = uv;
-            Material = material;
-            Emission = emission;
-            BoneIndices = boneIndices;
-            BoneWeights = boneWeights;
-        }
-    }
-    private sealed class CachedSkinnedRange
-    {
-        public CachedSkinnedRange(SolidVertex[] vertices) => Vertices = vertices;
-        public SolidVertex[] Vertices { get; }
-    }
-    private readonly record struct CachedParsedMesh(ParsedMesh Mesh, DateTime FileTime);
-    private sealed class CachedGpuMesh
-    {
-        public CachedGpuMesh(int vao, int vbo, int count, DateTime fileTime)
-        {
-            Vao = vao;
-            Vbo = vbo;
-            Count = count;
-            FileTime = fileTime;
-        }
-
-        public int Vao { get; }
-        public int Vbo { get; }
-        public int Count { get; }
-        public DateTime FileTime { get; }
-    }
-
-    private sealed class CachedSkinnedGpuMesh
-    {
-        public CachedSkinnedGpuMesh(int vao, int vbo, int count, DateTime fileTime)
-        {
-            Vao = vao;
-            Vbo = vbo;
-            Count = count;
-            FileTime = fileTime;
-        }
-
-        public int Vao { get; }
-        public int Vbo { get; }
-        public int Count { get; }
-        public DateTime FileTime { get; }
-    }
-
-    // center(3) + offset(2) + color(4) + rotation(1) + uv(2) + absolute(1) = 13 floats = 52 bytes
-    
-
-    
-
-    private readonly struct CachedMeshVerts(MeshVertData[] verts, int count, DateTime fileTime)
-    {
-        public readonly MeshVertData[] Verts = verts;
-        public readonly int Count = count;
-        public readonly DateTime FileTime = fileTime;
-    }
-
-    /// <summary>Frustum de 6 planos extraídos de la matriz VP (Gribb-Hartmann).</summary>
-    private readonly struct Frustum
-    {
-        private readonly Vector4 _left, _right, _bottom, _top, _near, _far;
-
-        public Frustum(Matrix4 vp)
-        {
-            var r0 = vp.Row0; var r1 = vp.Row1; var r2 = vp.Row2; var r3 = vp.Row3;
-            _left = Norm(r3 + r0);
-            _right = Norm(r3 - r0);
-            _bottom = Norm(r3 + r1);
-            _top = Norm(r3 - r1);
-            _near = Norm(r3 + r2);
-            _far = Norm(r3 - r2);
-        }
-
-        /// <summary>True si la esfera es potencialmente visible (no completamente fuera de ningún plano).</summary>
-        public bool ContainsSphere(Vector3 c, float r)
-        {
-            var p = new Vector4(c.X, c.Y, c.Z, 1f);
-            return Vector4.Dot(_left, p) >= -r &&
-                   Vector4.Dot(_right, p) >= -r &&
-                   Vector4.Dot(_bottom, p) >= -r &&
-                   Vector4.Dot(_top, p) >= -r &&
-                   Vector4.Dot(_near, p) >= -r &&
-                   Vector4.Dot(_far, p) >= -r;
-        }
-
-        private static Vector4 Norm(Vector4 p)
-        {
-            float len = MathF.Sqrt(p.X * p.X + p.Y * p.Y + p.Z * p.Z);
-            return len > 1e-6f ? p / len : p;
-        }
-    }
 }

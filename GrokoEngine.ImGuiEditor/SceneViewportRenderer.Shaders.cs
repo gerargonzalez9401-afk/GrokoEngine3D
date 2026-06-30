@@ -226,6 +226,16 @@ internal sealed partial class SceneViewportRenderer
             uniform sampler2D uEnvMap;
             uniform int       uHasEnvMap;
             uniform float     uEnvMaxLod;
+            uniform vec3      uEnvDiffuseColor;
+            uniform int       uUseEnvSh;
+            uniform vec3      uEnvSh[9];
+            uniform samplerCube uEnvPrefilterMap;
+            uniform int       uHasEnvPrefilterMap;
+            uniform float     uEnvPrefilterMaxLod;
+            uniform sampler2D uBrdfLut;
+            uniform int       uHasBrdfLut;
+            uniform float     uIblDiffuseStrength;
+            uniform float     uIblSpecularStrength;
             uniform float uAoStrength;
             uniform float uFogDensity;
             uniform vec3  uFogColor;
@@ -252,34 +262,29 @@ internal sealed partial class SceneViewportRenderer
                 return a2 / max(PI * denom * denom, 0.0001);
             }
 
-            float GeometrySchlickGGX(float ndv, float roughness)
-            {
-                float r = roughness + 1.0;
-                float k = (r * r) / 8.0;
-                return ndv / max(ndv * (1.0 - k) + k, 0.0001);
-            }
-
-            float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness)
-            {
-                return GeometrySchlickGGX(max(dot(N, V), 0.0), roughness) *
-                       GeometrySchlickGGX(max(dot(N, L), 0.0), roughness);
-            }
-
             vec3 FresnelSchlick(float cosTheta, vec3 F0)
             {
                 return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
             }
 
-            vec3 AddDirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, float intensity, vec3 albedo, float roughness, float metallic)
+            vec3 AddDirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, float intensity, vec3 albedo, float roughness, float metallic, float specularHighlights)
             {
                 float ndl = max(dot(N, L), 0.0);
                 if (ndl <= 0.0) return vec3(0.0);
                 vec3 H = normalize(L + V);
                 vec3 F0 = mix(vec3(0.04), albedo, metallic);
                 float D = DistributionGGX(N, H, roughness);
-                float G = GeometrySmith(N, V, L, roughness);
                 vec3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
-                vec3 specular = (D * G * F) / max(4.0 * max(dot(N, V), 0.0) * ndl, 0.0001);
+                // Visibilidad estable estilo Unity URP (BRDF.hlsl
+                // DirectBRDFSpecular). El denominador clasico 4*NoV*NoL explota
+                // en angulos rasantes y con roughness baja (fireflies /
+                // specular reventado). Unity lo cambia por una aprox combinada
+                // V*F acotada con max(0.1, LoH^2), que limita el pico y elimina
+                // los destellos. Se conserva el 1/PI de D para no descalibrar.
+                float LoH  = max(dot(L, H), 0.0);
+                float a    = roughness * roughness;
+                float visF = 1.0 / (4.0 * max(0.1, LoH * LoH) * (a + 0.5));
+                vec3 specular = D * visF * F * specularHighlights;
                 vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
                 vec3 diffuse = kD * albedo / PI;
                 return (diffuse + specular) * radiance * intensity * ndl;
@@ -480,6 +485,41 @@ internal sealed partial class SceneViewportRenderer
                 return mix(1.0, 1.0 - shadow, uPointShadowStrength);
             }
 
+            vec3 CascadeDebugColor(float viewDistance)
+            {
+                int cascade = max(uCascadeCount - 1, 0);
+                for (int i = 0; i < 5; i++)
+                {
+                    if (i >= uCascadeCount) break;
+                    if (viewDistance <= uCascadeSplit[i])
+                    {
+                        cascade = i;
+                        break;
+                    }
+                }
+
+                if (cascade == 0) return vec3(0.25, 0.95, 0.35);
+                if (cascade == 1) return vec3(0.20, 0.55, 1.00);
+                if (cascade == 2) return vec3(1.00, 0.85, 0.20);
+                if (cascade == 3) return vec3(1.00, 0.35, 0.85);
+                return vec3(1.00, 0.45, 0.20);
+            }
+
+            vec3 MaterialHealthDebug(vec3 albedoLinear, float metallic, float roughness)
+            {
+                float luminance = dot(albedoLinear, vec3(0.2126, 0.7152, 0.0722));
+                float overbright = smoothstep(0.86, 1.15, luminance);
+                float tooDark = 1.0 - smoothstep(0.015, 0.065, luminance);
+                float metalTooBright = metallic * smoothstep(0.62, 0.92, luminance);
+                float roughnessExtreme = max(1.0 - smoothstep(0.035, 0.12, roughness), smoothstep(0.96, 1.0, roughness));
+                vec3 ok = vec3(0.10, 0.75, 0.35);
+                vec3 warn = vec3(1.00, 0.75, 0.15);
+                vec3 bad = vec3(1.00, 0.12, 0.08);
+                float warning = clamp(overbright + tooDark + roughnessExtreme * 0.55, 0.0, 1.0);
+                float error = clamp(metalTooBright + overbright * 0.7, 0.0, 1.0);
+                return mix(mix(ok, warn, warning), bad, error);
+            }
+
             vec3 ApplyNormalMap(vec3 normal)
             {
                 if (!uHasNormalMap) return normal;
@@ -551,6 +591,44 @@ internal sealed partial class SceneViewportRenderer
                 return specColor * AB.x + AB.y;
             }
 
+            vec3 EnvBRDF(vec3 specColor, float roughness, float NoV)
+            {
+                if (uHasBrdfLut == 1)
+                {
+                    vec2 ab = texture(uBrdfLut, vec2(clamp(NoV, 0.0, 1.0), clamp(roughness, 0.0, 1.0))).rg;
+                    return specColor * ab.x + ab.y;
+                }
+
+                return EnvBRDFApprox(specColor, roughness, NoV);
+            }
+
+            vec3 IrradianceFromSH(vec3 n)
+            {
+                if (uUseEnvSh == 0)
+                    return uEnvDiffuseColor;
+
+                const float PI = 3.14159265359;
+                const float A0 = 3.14159265359;
+                const float A1 = 2.09439510239;
+                const float A2 = 0.78539816339;
+                float x = n.x;
+                float y = n.y;
+                float z = n.z;
+
+                vec3 e = vec3(0.0);
+                e += uEnvSh[0] * (A0 * 0.282095);
+                e += uEnvSh[1] * (A1 * -0.488603 * y);
+                e += uEnvSh[2] * (A1 *  0.488603 * z);
+                e += uEnvSh[3] * (A1 * -0.488603 * x);
+                e += uEnvSh[4] * (A2 *  1.092548 * x * y);
+                e += uEnvSh[5] * (A2 * -1.092548 * y * z);
+                e += uEnvSh[6] * (A2 *  0.315392 * (3.0 * z * z - 1.0));
+                e += uEnvSh[7] * (A2 * -1.092548 * x * z);
+                e += uEnvSh[8] * (A2 *  0.546274 * (x * x - y * y));
+
+                return max(e / PI, vec3(0.0));
+            }
+
             void main()
             {
                 vec3  N    = ApplyNormalMap(normalize(vNormal));
@@ -565,6 +643,24 @@ internal sealed partial class SceneViewportRenderer
                 vec3  base = uColorSpaceLinear == 1 ? pow(rawColor, vec3(2.2)) : rawColor;
                 float metallic = clamp(uHasMetallicMap ? texture(uMetallicMap, vUv).r : vMaterial.x, 0.0, 1.0);
                 float roughness = clamp(uHasRoughnessMap ? texture(uRoughnessMap, vUv).r : vMaterial.y, 0.04, 1.0);
+                float specularHighlights = vMaterial.z >= 0.5 ? 1.0 : 0.0;
+                float environmentReflections = vMaterial.w >= 0.5 ? 1.0 : 0.0;
+
+                // Geometric Specular AA (Unity HDRP GeometricNormalFiltering /
+                // Tokuyoshi-Kaplanyan). En bordes, costuras y pliegues la normal
+                // cambia muy rapido entre pixeles y el brillo especular se
+                // colapsa en chispas blancas (specular aliasing). Esto sube el
+                // roughness localmente segun la variacion de la normal en
+                // pantalla, suavizando esos destellos sin afectar superficies
+                // planas. screenSpaceVariance=0.25, threshold=0.18 (valores HDRP).
+                {
+                    vec3 dNdx = dFdx(N);
+                    vec3 dNdy = dFdy(N);
+                    float kernelVar = 0.25 * (dot(dNdx, dNdx) + dot(dNdy, dNdy));
+                    float alpha = roughness * roughness;
+                    float alpha2Filtered = clamp(alpha * alpha + min(2.0 * kernelVar, 0.18), 0.0, 1.0);
+                    roughness = sqrt(sqrt(alpha2Filtered));
+                }
 
                 const float SKY_DIFFUSE_FILL = 0.48;
                 vec3 sky = uAmbientColor * (uAmbientIntensity + max(N.y, 0.0) * uSkyStrength * SKY_DIFFUSE_FILL);
@@ -575,7 +671,7 @@ internal sealed partial class SceneViewportRenderer
                 // Direccional
                 vec3 sunL = normalize(-uDirDir);
                 float sunShadow = ShadowFactor(N, uDirDir);
-                vec3 directLight = AddDirectLight(N, V, sunL, uDirColor, uDirIntensity * sunShadow, base, roughness, metallic);
+                vec3 directLight = AddDirectLight(N, V, sunL, uDirColor, uDirIntensity * sunShadow, base, roughness, metallic, specularHighlights);
 
                 // Point lights
                 for (int i = 0; i < MAX_POINT_LIGHTS; i++)
@@ -586,7 +682,7 @@ internal sealed partial class SceneViewportRenderer
                     if (dist >= uPointRange[i]) continue;
                     float atten   = RangeAttenuation(dist, uPointRange[i]);
                     float pshadow = i == 0 ? PointShadowFactor(N, vWorldPos) : 1.0;
-                    directLight  += AddDirectLight(N, V, normalize(toLight), uPointColor[i], uPointIntensity[i] * atten * pshadow, base, roughness, metallic);
+                    directLight  += AddDirectLight(N, V, normalize(toLight), uPointColor[i], uPointIntensity[i] * atten * pshadow, base, roughness, metallic, specularHighlights);
                 }
 
                 // Spot lights
@@ -603,7 +699,7 @@ internal sealed partial class SceneViewportRenderer
                     float spot = smoothstep(outer, inner, cone);
                     float atten = RangeAttenuation(dist, uSpotRange[i]) * spot;
                     float sshadow = i == 0 ? SpotShadowFactor(N, -uSpotDir[i]) : 1.0;
-                    directLight += AddDirectLight(N, V, L, uSpotColor[i], uSpotIntensity[i] * atten * sshadow, base, roughness, metallic);
+                    directLight += AddDirectLight(N, V, L, uSpotColor[i], uSpotIntensity[i] * atten * sshadow, base, roughness, metallic, specularHighlights);
                 }
 
                 // Area lights, soft approximation.
@@ -617,7 +713,7 @@ internal sealed partial class SceneViewportRenderer
                     float facing = clamp(dot(normalize(-uAreaDir[i]), L), 0.0, 1.0);
                     float sizeBoost = clamp((uAreaSize[i].x + uAreaSize[i].y) * 0.18, 0.25, 1.6);
                     float atten = RangeAttenuation(dist, uAreaRange[i]) * (0.35 + 0.65 * facing) * sizeBoost;
-                    directLight += AddDirectLight(N, V, L, uAreaColor[i], uAreaIntensity[i] * atten, base, roughness, metallic);
+                    directLight += AddDirectLight(N, V, L, uAreaColor[i], uAreaIntensity[i] * atten, base, roughness, metallic, specularHighlights);
                 }
 
                 float ao = 1.0 - uAoStrength * clamp(1.0 - N.y, 0.0, 1.0) * 0.45;
@@ -627,34 +723,49 @@ internal sealed partial class SceneViewportRenderer
                 // by roughness (Karis split-sum, no precomputed textures). This is
                 // what stops metals from looking flat.
                 vec3 ambientTerm;
+                vec3 debugIblSpecular = vec3(0.0);
                 if (uUseIBL == 1)
                 {
-                    vec3  R       = reflect(-V, N);
-                    float NoV     = max(dot(N, V), 1e-4);
-                    vec3  F0      = mix(vec3(0.04), base, metallic);
-                    vec3  envBRDF = EnvBRDFApprox(F0, roughness, NoV);
-
                     vec3 irradiance;
-                    vec3 prefiltered;
                     if (uHasEnvMap == 1)
                     {
-                        // Real HDRI: diffuse irradiance ~ a high mip sampled at N;
-                        // specular ~ mip selected by roughness sampled at R (the
-                        // mip chain approximates prefiltering).
-                        irradiance  = textureLod(uEnvMap, DirToEquirectUV(N), max(uEnvMaxLod - 1.0, 0.0)).rgb * 0.58;
-                        prefiltered = textureLod(uEnvMap, DirToEquirectUV(R), roughness * uEnvMaxLod).rgb * 0.82;
+                        // IBL fase 1: diffuse irradiance estable desde SH.
+                        // No usa reflection/specular todavía; evita artefactos con normal maps.
+                        irradiance = IrradianceFromSH(N);
                     }
                     else
                     {
-                        // Procedural environment (no HDRI loaded). Sharp when
-                        // smooth, blended toward the average as roughness rises.
-                        vec3 avgEnv = uAmbientColor * uAmbientIntensity * 0.75;
                         irradiance  = ambientLight;
-                        prefiltered = mix(SampleEnv(R), avgEnv, roughness);
                     }
-                    vec3 diffuseIBL  = base * irradiance * (1.0 - metallic);
-                    vec3 specularIBL = prefiltered * envBRDF;
-                    ambientTerm = diffuseIBL + specularIBL;
+
+                    float diffuseBlend = clamp(uIblDiffuseStrength, 0.0, 1.5);
+                    vec3 safeDiffuse = base * mix(ambientLight, irradiance, clamp(diffuseBlend, 0.0, 1.0));
+                    ambientTerm = safeDiffuse * mix(1.0, 0.85, metallic);
+
+                    float specBlend = clamp(uIblSpecularStrength, 0.0, 0.35) * environmentReflections * specularHighlights;
+                    if (specBlend > 0.001)
+                    {
+                        vec3 R = reflect(-V, N);
+                        float NoV = max(dot(N, V), 0.001);
+                        vec3 F0 = mix(vec3(0.04), base, metallic);
+
+                        // Reflections seguro estilo Unity: roughness minimo, mas blur
+                        // cuando hay normal map, clamp HDR y fade en rasantes.
+                        float reflectionRoughness = max(roughness, uHasNormalMap ? 0.45 : 0.28);
+                        vec3 prefiltered;
+                        if (uHasEnvPrefilterMap == 1)
+                            prefiltered = textureLod(uEnvPrefilterMap, R, reflectionRoughness * uEnvPrefilterMaxLod).rgb;
+                        else if (uHasEnvMap == 1)
+                            prefiltered = textureLod(uEnvMap, DirToEquirectUV(R), reflectionRoughness * uEnvMaxLod).rgb;
+                        else
+                            prefiltered = mix(SampleEnv(R), ambientLight, reflectionRoughness);
+
+                        prefiltered = min(prefiltered, vec3(4.0));
+                        float grazingFade = smoothstep(0.05, 0.30, NoV);
+                        vec3 envBrdf = EnvBRDF(F0, reflectionRoughness, NoV);
+                        debugIblSpecular = prefiltered * envBrdf * specBlend * grazingFade;
+                        ambientTerm += debugIblSpecular;
+                    }
                 }
                 else
                 {
@@ -669,6 +780,9 @@ internal sealed partial class SceneViewportRenderer
                 if (uDebugView == 3) { outColor = vec4(vec3(roughness), 1.0); return; }
                 if (uDebugView == 4) { outColor = vec4(vec3(metallic), 1.0); return; }
                 if (uDebugView == 5) { outColor = vec4(vec3(sunShadow), 1.0); return; }
+                if (uDebugView == 6) { outColor = vec4(CascadeDebugColor(viewDistance) * (0.45 + 0.55 * sunShadow), 1.0); return; }
+                if (uDebugView == 7) { outColor = vec4(debugIblSpecular / (debugIblSpecular + vec3(1.0)), 1.0); return; }
+                if (uDebugView == 8) { outColor = vec4(MaterialHealthDebug(base, metallic, roughness), 1.0); return; }
 
                 float fogAmount = 1.0 - exp(-viewDistance * max(uFogDensity, 0.0));
                 float forwardFog = pow(max(dot(normalize(uCameraPos - vWorldPos), normalize(-uDirDir)), 0.0), 8.0);

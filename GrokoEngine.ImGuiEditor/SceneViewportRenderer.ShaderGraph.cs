@@ -12,17 +12,148 @@ using GrokoShaderGraphPro.Models;
 using GrokoShaderGraphPro.Services;
 using MediaColor = System.Windows.Media.Color;
 using MediaColorConverter = System.Windows.Media.ColorConverter;
+
 namespace GrokoEngine.ImGuiEditor;
 
 internal sealed partial class SceneViewportRenderer
 {
-internal readonly record struct ShaderGraphExposedProperty(string DisplayName, PinType Type, bool IsHdr);
+    internal readonly record struct ShaderGraphExposedProperty(string DisplayName, PinType Type, bool IsHdr);
 
-internal readonly record struct ShaderGraphSamplerBinding(string Name, int Location, int TextureUnitIndex);
+    internal readonly record struct ShaderGraphSamplerBinding(string Name, int Location, int TextureUnitIndex);
 
-internal readonly record struct ShaderGraphPropertyBinding(string Name, string Type, int Location);
+    internal readonly record struct ShaderGraphPropertyBinding(string Name, string Type, int Location);
 
-private bool ShaderGraphRangesNeedSceneDepth(List<SolidRange> ranges)
+
+    // Render path para materiales con Shader Graph asignado.
+    // Cada .shadergraph compila su propio programa GLSL (vertex fijo +
+    // fragment generado por ShaderCodeGenerator) y se dibuja en un pase
+    // aparte, reutilizando el VAO/VBO ya subido del batch sólido.
+    /// <summary>Metadatos de una propiedad expuesta del Shader Graph para el Inspector (estilo Unity).</summary>
+
+    internal sealed class ShaderGraphMaterialEntry
+    {
+        public int Program;
+        public DateTime FileTime;
+        public ShaderGraphModel? Model;
+        public string FragmentSource = string.Empty;
+        public List<string> Samplers = new();
+        public bool NeedsSceneDepth;
+        public int ViewProjLocation = -1;
+        public int TimeLocation = -1;
+        public int ResolutionLocation = -1;
+        public int CameraPosLocation = -1;
+        public int LightDirLocation = -1;
+        public int LightColorLocation = -1;
+        public int LightIntensityLocation = -1;
+        public int ColorSpaceLinearLocation = -1;
+        public int CameraNearLocation = -1;
+        public int CameraFarLocation = -1;
+        // Sombras direccionales por cascadas (recepción).
+        public int ShadowMapLocation = -1;
+        public int ShadowEnabledLocation = -1;
+        public int ShadowStrengthLocation = -1;
+        public int CascadeCountLocation = -1;
+        public int ShadowPcfRadiusLocation = -1;
+        public int ShadowBiasScaleLocation = -1;
+        public int ShadowCameraPosLocation = -1;
+        public int[] CascadeLightMvpLocations = new int[5];
+        public int[] CascadeSplitLocations = new int[5];
+        public int ModelLocation = -1;
+        public int UseModelLocation = -1;
+        public int UseSkinningLocation = -1;
+        public int[] BoneMatrixLocations = new int[MaxGpuBones];
+        public int SceneDepthSamplerIndex = -1;
+        public List<ShaderGraphSamplerBinding> SamplerBindings = new();
+        public List<ShaderGraphPropertyBinding> PropertyBindings = new();
+
+        /// <summary>Valores por defecto de cada uniform. Para colores HDR (vec3/vec4 con ColorMode=Hdr)
+        /// el RGB se guarda SIN multiplicar por la intensidad, y se añade un elemento extra al final
+        /// con la intensidad: vec3 HDR -> [r,g,b,intensity] (4), vec4 HDR -> [r,g,b,a,intensity] (5).</summary>
+        public Dictionary<string, float[]> PropertyDefaults = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Solo las propiedades del Blackboard, para "Exposed Properties" en el Inspector.</summary>
+        public Dictionary<string, ShaderGraphExposedProperty> ExposedProperties = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Ruta de textura por defecto (Blackboard) para cada uniform sampler2D.</summary>
+        public Dictionary<string, string> SamplerDefaults = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private const string ShaderGraphVertexSource = """
+#version 330 core
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec3 a_Normal;
+layout(location = 3) in vec2 a_UV;
+layout(location = 10) in vec4 a_BoneIndices;
+layout(location = 11) in vec4 a_BoneWeights;
+
+uniform mat4 u_ViewProj;
+uniform mat4 u_Model;
+uniform int u_UseModel;
+uniform int u_UseSkinning;
+uniform mat4 u_Bones[128];
+
+out vec2 v_UV;
+out vec3 v_NormalWS;
+out vec3 v_WorldPos;
+out vec3 v_ObjectPos;
+out vec3 v_TangentWS;
+out vec4 v_ScreenPos;
+
+void main()
+{
+    mat4 model = u_UseModel != 0 ? u_Model : mat4(1.0);
+    vec4 world = vec4(a_Position, 1.0) * model;
+    vec3 normalWS = (vec4(a_Normal, 0.0) * model).xyz;
+
+    if (u_UseSkinning != 0)
+    {
+        vec4 skinnedPos = vec4(0.0);
+        vec3 skinnedNormal = vec3(0.0);
+        float totalWeight = 0.0;
+        for (int i = 0; i < 4; i++)
+        {
+            int boneIndex = int(a_BoneIndices[i] + 0.5);
+            float weight = a_BoneWeights[i];
+            if (boneIndex >= 0 && boneIndex < 128 && weight > 0.0)
+            {
+                mat4 bone = u_Bones[boneIndex];
+                skinnedPos += (vec4(a_Position, 1.0) * bone) * weight;
+                skinnedNormal += (vec4(a_Normal, 0.0) * bone).xyz * weight;
+                totalWeight += weight;
+            }
+        }
+        if (totalWeight > 0.0001)
+        {
+            world = skinnedPos;
+            normalWS = skinnedNormal;
+        }
+    }
+
+    v_WorldPos = world.xyz;
+    v_ObjectPos = a_Position;
+    v_NormalWS = length(normalWS) > 0.0001 ? normalize(normalWS) : vec3(0.0, 1.0, 0.0);
+    vec3 tangentOS = abs(a_Normal.y) > 0.99 ? vec3(1.0, 0.0, 0.0) : normalize(cross(vec3(0.0, 1.0, 0.0), a_Normal));
+    v_TangentWS = normalize((vec4(tangentOS, 0.0) * model).xyz);
+    v_UV = a_UV;
+    gl_Position = world * u_ViewProj;
+    v_ScreenPos = gl_Position;
+}
+""";
+
+    private static bool HasShaderGraphRange(List<SolidRange> ranges)
+        => ranges.Any(r => r.ShaderGraphPath != null);
+
+    // Pasa al shader del graph la sombra direccional por cascadas (la misma que usa el material estándar),
+    // para que los objetos con material de Shader Graph reciban sombras.
+
+    private static bool ShaderGraphModelNeedsSceneDepth(ShaderGraphModel? model)
+        => model?.Nodes?.Any(n => n.Kind is NodeKind.SceneDepth or NodeKind.DepthFade) == true;
+
+    private static float ShaderGraphParseFloat(string? s, float fallback)
+        => float.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+
+
+    private bool ShaderGraphRangesNeedSceneDepth(List<SolidRange> ranges)
     {
         foreach (var range in ranges)
         {
@@ -37,7 +168,7 @@ private bool ShaderGraphRangesNeedSceneDepth(List<SolidRange> ranges)
         return false;
     }
 
-private bool ShaderGraphDynamicDrawsNeedSceneDepth()
+    private bool ShaderGraphDynamicDrawsNeedSceneDepth()
     {
         foreach (var draw in shaderGraphDynamicMeshDraws)
         {
@@ -49,7 +180,7 @@ private bool ShaderGraphDynamicDrawsNeedSceneDepth()
         return false;
     }
 
-private bool ShaderGraphSkinnedDrawsNeedSceneDepth()
+    private bool ShaderGraphSkinnedDrawsNeedSceneDepth()
     {
         foreach (var draw in shaderGraphSkinnedMeshDraws)
         {
@@ -61,7 +192,7 @@ private bool ShaderGraphSkinnedDrawsNeedSceneDepth()
         return false;
     }
 
-private void RenderShaderGraphDepthPrepass(List<SolidRange> ranges, int vao, ref Matrix4 mvp)
+    private void RenderShaderGraphDepthPrepass(List<SolidRange> ranges, int vao, ref Matrix4 mvp)
     {
         if (_shaderGraphDepthPrepassShader == 0 || ranges.Count == 0)
             return;
@@ -97,7 +228,7 @@ private void RenderShaderGraphDepthPrepass(List<SolidRange> ranges, int vao, ref
         }
     }
 
-private static bool ShouldRenderShaderGraphDepthPrepass(ShaderGraphMaterialEntry? entry)
+    private static bool ShouldRenderShaderGraphDepthPrepass(ShaderGraphMaterialEntry? entry)
     {
         var model = entry?.Model;
         if (entry == null || entry.Program == 0 || model == null)
@@ -109,7 +240,7 @@ private static bool ShouldRenderShaderGraphDepthPrepass(ShaderGraphMaterialEntry
         return !entry.NeedsSceneDepth;
     }
 
-private void RenderShaderGraphRanges(List<SolidRange> ranges, int vao, ref Matrix4 mvp, Vector3 cameraPosition, int viewportWidth, int viewportHeight, IReadOnlyList<GameObject> objects, float cameraNear, float cameraFar)
+    private void RenderShaderGraphRanges(List<SolidRange> ranges, int vao, ref Matrix4 mvp, Vector3 cameraPosition, int viewportWidth, int viewportHeight, IReadOnlyList<GameObject> objects, float cameraNear, float cameraFar)
     {
         ResolveShaderGraphLighting(objects, out var lightDir, out var lightColor, out var lightIntensity);
         var identity = Matrix4.Identity;
@@ -140,7 +271,7 @@ private void RenderShaderGraphRanges(List<SolidRange> ranges, int vao, ref Matri
         ResetShaderGraphRenderState();
     }
 
-private void RenderShaderGraphDynamicMeshDraws(ref Matrix4 mvp, Vector3 cameraPosition, int viewportWidth, int viewportHeight, IReadOnlyList<GameObject> objects, float cameraNear, float cameraFar)
+    private void RenderShaderGraphDynamicMeshDraws(ref Matrix4 mvp, Vector3 cameraPosition, int viewportWidth, int viewportHeight, IReadOnlyList<GameObject> objects, float cameraNear, float cameraFar)
     {
         ResolveShaderGraphLighting(objects, out var lightDir, out var lightColor, out var lightIntensity);
         int boundVao = 0;
@@ -175,7 +306,7 @@ private void RenderShaderGraphDynamicMeshDraws(ref Matrix4 mvp, Vector3 cameraPo
         ResetShaderGraphRenderState();
     }
 
-private void RenderShaderGraphSkinnedMeshDraws(ref Matrix4 mvp, Vector3 cameraPosition, int viewportWidth, int viewportHeight, IReadOnlyList<GameObject> objects, float cameraNear, float cameraFar)
+    private void RenderShaderGraphSkinnedMeshDraws(ref Matrix4 mvp, Vector3 cameraPosition, int viewportWidth, int viewportHeight, IReadOnlyList<GameObject> objects, float cameraNear, float cameraFar)
     {
         ResolveShaderGraphLighting(objects, out var lightDir, out var lightColor, out var lightIntensity);
         int boundVao = 0;
@@ -211,7 +342,7 @@ private void RenderShaderGraphSkinnedMeshDraws(ref Matrix4 mvp, Vector3 cameraPo
         ResetShaderGraphRenderState();
     }
 
-private void ResolveShaderGraphLighting(IReadOnlyList<GameObject> objects, out Vector3 lightDir, out Vector3 lightColor, out float lightIntensity)
+    private void ResolveShaderGraphLighting(IReadOnlyList<GameObject> objects, out Vector3 lightDir, out Vector3 lightColor, out float lightIntensity)
     {
         var dirLight = FindPrimaryDirectionalLight(objects);
         if (dirLight != null && dirLight.gameObject != null)
@@ -227,17 +358,17 @@ private void ResolveShaderGraphLighting(IReadOnlyList<GameObject> objects, out V
         lightIntensity = 0f;
     }
 
-private void ApplyShaderGraphFrameUniforms(
-        ShaderGraphMaterialEntry entry,
-        ref Matrix4 mvp,
-        Vector3 cameraPosition,
-        int viewportWidth,
-        int viewportHeight,
-        Vector3 lightDir,
-        Vector3 lightColor,
-        float lightIntensity,
-        float cameraNear,
-        float cameraFar)
+    private void ApplyShaderGraphFrameUniforms(
+            ShaderGraphMaterialEntry entry,
+            ref Matrix4 mvp,
+            Vector3 cameraPosition,
+            int viewportWidth,
+            int viewportHeight,
+            Vector3 lightDir,
+            Vector3 lightColor,
+            float lightIntensity,
+            float cameraNear,
+            float cameraFar)
     {
         if (entry.ViewProjLocation >= 0)
             GL.UniformMatrix4(entry.ViewProjLocation, true, ref mvp);
@@ -254,7 +385,7 @@ private void ApplyShaderGraphFrameUniforms(
         ApplyShaderGraphShadowUniforms(entry);
     }
 
-private void ApplyShaderGraphShadowUniforms(ShaderGraphMaterialEntry entry)
+    private void ApplyShaderGraphShadowUniforms(ShaderGraphMaterialEntry entry)
     {
         var shadow = _cachedDirectionalShadow;
         SetIntUniform(entry.ShadowEnabledLocation, shadow.Enabled ? 1 : 0);
@@ -285,10 +416,10 @@ private void ApplyShaderGraphShadowUniforms(ShaderGraphMaterialEntry entry)
         }
     }
 
-private void BindShaderGraphResources(
-        ShaderGraphMaterialEntry entry,
-        IReadOnlyDictionary<string, string>? textures,
-        IReadOnlyDictionary<string, float[]>? properties)
+    private void BindShaderGraphResources(
+            ShaderGraphMaterialEntry entry,
+            IReadOnlyDictionary<string, string>? textures,
+            IReadOnlyDictionary<string, float[]>? properties)
     {
         BindShaderGraphSamplers(entry, textures);
         BindShaderGraphPropertyDefaults(entry, properties);
@@ -301,7 +432,7 @@ private void BindShaderGraphResources(
         }
     }
 
-private static void ApplyShaderGraphRenderState(ShaderGraphModel? model)
+    private static void ApplyShaderGraphRenderState(ShaderGraphModel? model)
     {
         if (model == null)
         {
@@ -359,18 +490,18 @@ private static void ApplyShaderGraphRenderState(ShaderGraphModel? model)
         }
     }
 
-private static DepthFunction GetShaderGraphDepthFunction(string? zTest)
-        => zTest switch
-        {
-            "Less" => DepthFunction.Less,
-            "Equal" => DepthFunction.Equal,
-            "Greater" => DepthFunction.Greater,
-            "GEqual" => DepthFunction.Gequal,
-            "Always" => DepthFunction.Always,
-            _ => DepthFunction.Lequal
-        };
+    private static DepthFunction GetShaderGraphDepthFunction(string? zTest)
+            => zTest switch
+            {
+                "Less" => DepthFunction.Less,
+                "Equal" => DepthFunction.Equal,
+                "Greater" => DepthFunction.Greater,
+                "GEqual" => DepthFunction.Gequal,
+                "Always" => DepthFunction.Always,
+                _ => DepthFunction.Lequal
+            };
 
-private static void ResetShaderGraphRenderState()
+    private static void ResetShaderGraphRenderState()
     {
         GL.Enable(EnableCap.DepthTest);
         GL.DepthFunc(DepthFunction.Lequal);
@@ -382,7 +513,7 @@ private static void ResetShaderGraphRenderState()
         GL.ColorMask(true, true, true, true);
     }
 
-internal ShaderGraphMaterialEntry? GetShaderGraphEntry(string path)
+    internal ShaderGraphMaterialEntry? GetShaderGraphEntry(string path)
     {
         var fileTime = System.IO.File.GetLastWriteTimeUtc(path);
         if (_shaderGraphCache.TryGetValue(path, out var cached) && cached.FileTime == fileTime)
@@ -465,7 +596,7 @@ internal ShaderGraphMaterialEntry? GetShaderGraphEntry(string path)
         return entry;
     }
 
-private static void CacheShaderGraphUniformLocations(ShaderGraphMaterialEntry entry)
+    private static void CacheShaderGraphUniformLocations(ShaderGraphMaterialEntry entry)
     {
         if (entry.Program == 0)
             return;
@@ -521,12 +652,12 @@ private static void CacheShaderGraphUniformLocations(ShaderGraphMaterialEntry en
         }
     }
 
-private static bool IsShaderGraphEngineUniform(string name)
-        => name is "u_Time" or "u_Resolution" or "u_CameraPos" or "u_LightDir" or "u_LightColor"
-            or "u_LightIntensity" or "u_CameraNear" or "u_CameraFar" or "u_ColorSpaceLinear"
-            or "u_ShadowStrength" or "u_ShadowBiasScale" or "u_ShadowCameraPos";
+    private static bool IsShaderGraphEngineUniform(string name)
+            => name is "u_Time" or "u_Resolution" or "u_CameraPos" or "u_LightDir" or "u_LightColor"
+                or "u_LightIntensity" or "u_CameraNear" or "u_CameraFar" or "u_ColorSpaceLinear"
+                or "u_ShadowStrength" or "u_ShadowBiasScale" or "u_ShadowCameraPos";
 
-private void BindShaderGraphSamplers(ShaderGraphMaterialEntry entry, IReadOnlyDictionary<string, string>? overrides)
+    private void BindShaderGraphSamplers(ShaderGraphMaterialEntry entry, IReadOnlyDictionary<string, string>? overrides)
     {
         if (_shaderGraphWhiteTex == 0)
             _shaderGraphWhiteTex = CreateShaderGraphWhiteTexture();
@@ -553,7 +684,7 @@ private void BindShaderGraphSamplers(ShaderGraphMaterialEntry entry, IReadOnlyDi
         GL.ActiveTexture(TextureUnit.Texture0);
     }
 
-private void BindShaderGraphPropertyDefaults(ShaderGraphMaterialEntry entry, IReadOnlyDictionary<string, float[]>? overrides)
+    private void BindShaderGraphPropertyDefaults(ShaderGraphMaterialEntry entry, IReadOnlyDictionary<string, float[]>? overrides)
     {
         foreach (var binding in entry.PropertyBindings)
         {
@@ -581,7 +712,7 @@ private void BindShaderGraphPropertyDefaults(ShaderGraphMaterialEntry entry, IRe
         }
     }
 
-private static float[] ShaderGraphDefaultFor(string type) => type switch
+    private static float[] ShaderGraphDefaultFor(string type) => type switch
     {
         "float" => new[] { 0.5f },
         "vec2" => new[] { 0f, 0f },
@@ -590,7 +721,7 @@ private static float[] ShaderGraphDefaultFor(string type) => type switch
         _ => new[] { 0f }
     };
 
-private static Dictionary<string, float[]> BuildShaderGraphPropertyDefaults(ShaderGraphModel model)
+    private static Dictionary<string, float[]> BuildShaderGraphPropertyDefaults(ShaderGraphModel model)
     {
         var dict = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
 
@@ -606,22 +737,22 @@ private static Dictionary<string, float[]> BuildShaderGraphPropertyDefaults(Shad
                     dict[name] = ShaderGraphParseVec(p.DefaultValue, 2);
                     break;
                 case PinType.Vec3:
-                {
-                    var c3 = ShaderGraphColorToVec3(p.ColorHex, 1f);
-                    dict[name] = p.ColorMode == PropertyColorMode.Hdr
-                        ? new[] { c3[0], c3[1], c3[2], p.ColorIntensity }
-                        : c3;
-                    break;
-                }
+                    {
+                        var c3 = ShaderGraphColorToVec3(p.ColorHex, 1f);
+                        dict[name] = p.ColorMode == PropertyColorMode.Hdr
+                            ? new[] { c3[0], c3[1], c3[2], p.ColorIntensity }
+                            : c3;
+                        break;
+                    }
                 case PinType.Vec4:
-                {
-                    var c4 = ShaderGraphColorToVec3(p.ColorHex, 1f);
-                    var a4 = ShaderGraphColorAlpha(p.ColorHex);
-                    dict[name] = p.ColorMode == PropertyColorMode.Hdr
-                        ? new[] { c4[0], c4[1], c4[2], a4, p.ColorIntensity }
-                        : new[] { c4[0], c4[1], c4[2], a4 };
-                    break;
-                }
+                    {
+                        var c4 = ShaderGraphColorToVec3(p.ColorHex, 1f);
+                        var a4 = ShaderGraphColorAlpha(p.ColorHex);
+                        dict[name] = p.ColorMode == PropertyColorMode.Hdr
+                            ? new[] { c4[0], c4[1], c4[2], a4, p.ColorIntensity }
+                            : new[] { c4[0], c4[1], c4[2], a4 };
+                        break;
+                    }
             }
         }
 
@@ -656,7 +787,7 @@ private static Dictionary<string, float[]> BuildShaderGraphPropertyDefaults(Shad
         return dict;
     }
 
-private static Dictionary<string, ShaderGraphExposedProperty> BuildShaderGraphExposedProperties(ShaderGraphModel model)
+    private static Dictionary<string, ShaderGraphExposedProperty> BuildShaderGraphExposedProperties(ShaderGraphModel model)
     {
         var dict = new Dictionary<string, ShaderGraphExposedProperty>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in model.Properties ?? new List<GraphProperty>())
@@ -668,7 +799,7 @@ private static Dictionary<string, ShaderGraphExposedProperty> BuildShaderGraphEx
         return dict;
     }
 
-private static Dictionary<string, string> BuildShaderGraphSamplerDefaults(ShaderGraphModel model)
+    private static Dictionary<string, string> BuildShaderGraphSamplerDefaults(ShaderGraphModel model)
     {
         var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -698,13 +829,13 @@ private static Dictionary<string, string> BuildShaderGraphSamplerDefaults(Shader
         return dict;
     }
 
-private static string ShaderGraphPropertyUniformName(ShaderNode node)
+    private static string ShaderGraphPropertyUniformName(ShaderNode node)
     {
         var value = string.IsNullOrWhiteSpace(node.TextValue) ? node.Title : node.TextValue.Trim();
         return value.StartsWith("u_", StringComparison.OrdinalIgnoreCase) ? value : "u_" + value;
     }
 
-private static string ShaderGraphTextureUniformName(ShaderNode node)
+    private static string ShaderGraphTextureUniformName(ShaderNode node)
     {
         var value = string.IsNullOrWhiteSpace(node.TextValue) ? string.Empty : node.TextValue.Trim();
         if (!string.IsNullOrWhiteSpace(node.TexturePath) && IsDefaultShaderGraphTextureUniformName(value))
@@ -719,7 +850,7 @@ private static string ShaderGraphTextureUniformName(ShaderNode node)
         return value;
     }
 
-private static bool IsDefaultShaderGraphTextureUniformName(string? value)
+    private static bool IsDefaultShaderGraphTextureUniformName(string? value)
     {
         var v = (value ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(v))
@@ -737,7 +868,7 @@ private static bool IsDefaultShaderGraphTextureUniformName(string? value)
             || v.Equals("u_AOMap", StringComparison.OrdinalIgnoreCase);
     }
 
-private static string LocalShaderGraphTextureUniformName(ShaderNode node)
+    private static string LocalShaderGraphTextureUniformName(ShaderNode node)
     {
         var prefix = node.Kind switch
         {
@@ -752,14 +883,14 @@ private static string LocalShaderGraphTextureUniformName(ShaderNode node)
         return prefix + node.Id.ToString("N")[..8];
     }
 
-private static string ShaderGraphSanitizeIdentifier(string value)
+    private static string ShaderGraphSanitizeIdentifier(string value)
     {
         var chars = value.Select((c, i) => (char.IsLetter(c) || c == '_' || (i > 0 && char.IsDigit(c))) ? c : '_').ToArray();
         var result = new string(chars);
         return string.IsNullOrWhiteSpace(result) ? "u_MainTex" : result;
     }
 
-private static float[] ShaderGraphParseVec(string? s, int n)
+    private static float[] ShaderGraphParseVec(string? s, int n)
     {
         var parts = (s ?? string.Empty).Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         var result = new float[n];
@@ -768,7 +899,7 @@ private static float[] ShaderGraphParseVec(string? s, int n)
         return result;
     }
 
-private static float ShaderGraphColorAlpha(string colorHex)
+    private static float ShaderGraphColorAlpha(string colorHex)
     {
         try
         {
@@ -782,7 +913,7 @@ private static float ShaderGraphColorAlpha(string colorHex)
         return 1f;
     }
 
-private static float[] ShaderGraphColorToVec3(string colorHex, float intensity)
+    private static float[] ShaderGraphColorToVec3(string colorHex, float intensity)
     {
         try
         {
@@ -796,7 +927,7 @@ private static float[] ShaderGraphColorToVec3(string colorHex, float intensity)
         return new[] { 1f, 0f, 1f };
     }
 
-private static int CreateShaderGraphWhiteTexture()
+    private static int CreateShaderGraphWhiteTexture()
     {
         int tex = GL.GenTexture();
         GL.BindTexture(TextureTarget.Texture2D, tex);
@@ -807,51 +938,51 @@ private static int CreateShaderGraphWhiteTexture()
         return tex;
     }
 
-private static void SetUniformIfPresent(int program, string name, float value)
+    private static void SetUniformIfPresent(int program, string name, float value)
     {
         int loc = GL.GetUniformLocation(program, name);
         if (loc >= 0) GL.Uniform1(loc, value);
     }
 
-private static void SetUniformIfPresent(int loc, float value)
+    private static void SetUniformIfPresent(int loc, float value)
     {
         if (loc >= 0) GL.Uniform1(loc, value);
     }
 
-private static void SetUniformIfPresent(int program, string name, int value)
+    private static void SetUniformIfPresent(int program, string name, int value)
     {
         int loc = GL.GetUniformLocation(program, name);
         if (loc >= 0) GL.Uniform1(loc, value);
     }
 
-private static void SetUniformIfPresent(int loc, int value)
+    private static void SetUniformIfPresent(int loc, int value)
     {
         if (loc >= 0) GL.Uniform1(loc, value);
     }
 
-private static void SetUniformIfPresent(int program, string name, Vector2 value)
+    private static void SetUniformIfPresent(int program, string name, Vector2 value)
     {
         int loc = GL.GetUniformLocation(program, name);
         if (loc >= 0) GL.Uniform2(loc, value);
     }
 
-private static void SetUniformIfPresent(int loc, Vector2 value)
+    private static void SetUniformIfPresent(int loc, Vector2 value)
     {
         if (loc >= 0) GL.Uniform2(loc, value);
     }
 
-private static void SetUniformIfPresent(int program, string name, Vector3 value)
+    private static void SetUniformIfPresent(int program, string name, Vector3 value)
     {
         int loc = GL.GetUniformLocation(program, name);
         if (loc >= 0) GL.Uniform3(loc, value);
     }
 
-private static void SetUniformIfPresent(int loc, Vector3 value)
+    private static void SetUniformIfPresent(int loc, Vector3 value)
     {
         if (loc >= 0) GL.Uniform3(loc, value);
     }
 
-private string? GetObjectShaderGraphPath(GameObject obj)
+    private string? GetObjectShaderGraphPath(GameObject obj)
     {
         if (GetPreviewOverrideData(obj, -1) is { } over)
             return string.IsNullOrWhiteSpace(over.ShaderGraphPath) ? null : over.ShaderGraphPath;
@@ -860,7 +991,7 @@ private string? GetObjectShaderGraphPath(GameObject obj)
         return string.IsNullOrWhiteSpace(material?.ShaderGraphPath) ? null : material.ShaderGraphPath;
     }
 
-private IReadOnlyDictionary<string, float[]>? GetObjectShaderGraphProperties(GameObject obj)
+    private IReadOnlyDictionary<string, float[]>? GetObjectShaderGraphProperties(GameObject obj)
     {
         if (GetPreviewOverrideData(obj, -1) is { } over)
             return over.ShaderGraphProperties.Count == 0 ? null : over.ShaderGraphProperties;
@@ -869,7 +1000,7 @@ private IReadOnlyDictionary<string, float[]>? GetObjectShaderGraphProperties(Gam
         return material == null || material.ShaderGraphProperties.Count == 0 ? null : material.ShaderGraphProperties;
     }
 
-private IReadOnlyDictionary<string, string>? GetObjectShaderGraphTextures(GameObject obj)
+    private IReadOnlyDictionary<string, string>? GetObjectShaderGraphTextures(GameObject obj)
     {
         if (GetPreviewOverrideData(obj, -1) is { } over)
             return over.ShaderGraphTextures.Count == 0 ? null : over.ShaderGraphTextures;
@@ -878,7 +1009,7 @@ private IReadOnlyDictionary<string, string>? GetObjectShaderGraphTextures(GameOb
         return material == null || material.ShaderGraphTextures.Count == 0 ? null : material.ShaderGraphTextures;
     }
 
-private static int CreateShaderGraphDepthPrepassShader()
+    private static int CreateShaderGraphDepthPrepassShader()
     {
         const string fragmentSource = """
             #version 330 core
@@ -903,7 +1034,7 @@ private static int CreateShaderGraphDepthPrepassShader()
         return program;
     }
 
-private readonly record struct ShaderGraphDynamicMeshDraw(CachedGpuMesh Mesh, Matrix4 World, int Start, int Count, string ShaderGraphPath, IReadOnlyDictionary<string, float[]>? ShaderGraphProperties, IReadOnlyDictionary<string, string>? ShaderGraphTextures);
+    private readonly record struct ShaderGraphDynamicMeshDraw(CachedGpuMesh Mesh, Matrix4 World, int Start, int Count, string ShaderGraphPath, IReadOnlyDictionary<string, float[]>? ShaderGraphProperties, IReadOnlyDictionary<string, string>? ShaderGraphTextures);
 
-private readonly record struct ShaderGraphSkinnedMeshDraw(CachedSkinnedGpuMesh Mesh, Matrix4 World, System.Numerics.Matrix4x4[] Skin, int Start, int Count, string ShaderGraphPath, IReadOnlyDictionary<string, float[]>? ShaderGraphProperties, IReadOnlyDictionary<string, string>? ShaderGraphTextures);
+    private readonly record struct ShaderGraphSkinnedMeshDraw(CachedSkinnedGpuMesh Mesh, Matrix4 World, System.Numerics.Matrix4x4[] Skin, int Start, int Count, string ShaderGraphPath, IReadOnlyDictionary<string, float[]>? ShaderGraphProperties, IReadOnlyDictionary<string, string>? ShaderGraphTextures);
 }

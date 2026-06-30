@@ -345,9 +345,12 @@ private void DrawProjectAssetListRowVirtual(ProjectAssetEntry entry, IReadOnlyLi
         if (selectedItem || hovered)
         {
             uint bg = selectedItem
-                ? ImGui.GetColorU32(new System.Numerics.Vector4(0.20f, 0.36f, 0.55f, 0.80f))
-                : ImGui.GetColorU32(new System.Numerics.Vector4(0.24f, 0.25f, 0.27f, 0.34f));
-            drawList.AddRectFilled(rowMin, rowMax, bg, 3f);
+                ? ImGui.GetColorU32(new System.Numerics.Vector4(0.34f, 0.34f, 0.34f, 0.88f))
+                : ImGui.GetColorU32(new System.Numerics.Vector4(0.30f, 0.30f, 0.30f, 0.38f));
+            drawList.AddRectFilled(rowMin + new Vector2(1f, 1f), rowMax - new Vector2(1f, 1f), bg, 5f);
+            if (selectedItem)
+                drawList.AddRect(rowMin + new Vector2(1f, 1f), rowMax - new Vector2(1f, 1f),
+                    ImGui.GetColorU32(new System.Numerics.Vector4(0.52f, 0.58f, 0.64f, 0.85f)), 5f);
         }
 
         float indent = entry.IsVirtualSubAsset ? 18f : 0f;
@@ -379,11 +382,11 @@ private void DrawProjectAssetListRowVirtual(ProjectAssetEntry entry, IReadOnlyLi
             DrawAtlasIconOrFallback(drawList, icon, rowMin + new Vector2(4f + indent, 3f), 14f, iconColor);
         }
 
-        uint textColor = ImGui.GetColorU32(selectedItem ? new System.Numerics.Vector4(0.80f, 0.90f, 1f, 1f) : UiText);
+        uint textColor = ImGui.GetColorU32(selectedItem ? new System.Numerics.Vector4(0.92f, 0.92f, 0.88f, 1f) : UiText);
         float typeX = rowMin.X + contentWidth * 0.54f;
         float sizeX = rowMin.X + contentWidth * 0.70f;
         float modifiedX = rowMin.X + contentWidth * 0.84f;
-        drawList.AddText(rowMin + new Vector2(24f + indent, 3f), textColor, entry.Name);
+        drawList.AddText(rowMin + new Vector2(26f + indent, 3f), textColor, entry.Name);
         drawList.AddText(new Vector2(typeX, rowMin.Y + 3f), ImGui.GetColorU32(new System.Numerics.Vector4(0.62f, 0.66f, 0.70f, 1f)), isDirectory ? "Folder" : entry.Kind);
         drawList.AddText(new Vector2(sizeX, rowMin.Y + 3f), ImGui.GetColorU32(new System.Numerics.Vector4(0.62f, 0.66f, 0.70f, 1f)), isDirectory ? "-" : $"{entry.SizeBytes / 1024f:F1} KB");
         drawList.AddText(new Vector2(modifiedX, rowMin.Y + 3f), ImGui.GetColorU32(new System.Numerics.Vector4(0.62f, 0.66f, 0.70f, 1f)), entry.ModifiedUtc.ToLocalTime().ToString("HH:mm"));
@@ -406,9 +409,9 @@ private void DrawProjectAssetListRow(ProjectAssetEntry entry, IReadOnlyList<Proj
         ImGui.PushID(path);
         bool selectedItem = IsProjectEntrySelected(entry);
         if (selectedItem)
-            ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(0.58f, 0.78f, 1f, 1f));
+            ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(0.92f, 0.92f, 0.88f, 1f));
 
-        if (ImGui.Selectable("##assetRow", selectedItem, ImGuiSelectableFlags.SpanAllColumns, new Vector2(0f, 20f)))
+        if (ImGui.Selectable("##assetRow", selectedItem, ImGuiSelectableFlags.SpanAllColumns, new Vector2(0f, 22f)))
         {
             HandleProjectEntrySelection(entry, visibleEntries, index);
         }
@@ -418,6 +421,18 @@ private void DrawProjectAssetListRow(ProjectAssetEntry entry, IReadOnlyList<Proj
         var rowMin = ImGui.GetItemRectMin();
         var rowMax = ImGui.GetItemRectMax();
         RegisterProjectAssetSelectionRect(entry, rowMin, rowMax);
+        var drawList = ImGui.GetWindowDrawList();
+        bool hovered = ImGui.IsItemHovered();
+        if (selectedItem || hovered)
+        {
+            uint bg = selectedItem
+                ? ImGui.GetColorU32(new System.Numerics.Vector4(0.34f, 0.34f, 0.34f, 0.88f))
+                : ImGui.GetColorU32(new System.Numerics.Vector4(0.30f, 0.30f, 0.30f, 0.38f));
+            drawList.AddRectFilled(rowMin + new Vector2(1f, 1f), rowMax - new Vector2(1f, 1f), bg, 5f);
+            if (selectedItem)
+                drawList.AddRect(rowMin + new Vector2(1f, 1f), rowMax - new Vector2(1f, 1f),
+                    ImGui.GetColorU32(new System.Numerics.Vector4(0.52f, 0.58f, 0.64f, 0.85f)), 5f);
+        }
         var icon = isDirectory ? EditorIcon.Folder : IconForAssetKind(entry.Kind);
         var iconColor = isDirectory
             ? ImGui.GetColorU32(new System.Numerics.Vector4(0.95f, 0.68f, 0.24f, 1f))
@@ -425,31 +440,31 @@ private void DrawProjectAssetListRow(ProjectAssetEntry entry, IReadOnlyList<Proj
 
         float indent = entry.IsVirtualSubAsset ? 18f : 0f;
         if (!isDirectory && entry.Kind == "MESH" && !entry.IsVirtualSubAsset)
-            DrawMeshFoldoutGlyph(ImGui.GetWindowDrawList(), rowMin + new Vector2(5f, 4f), 12f, IsMeshEntryExpanded(entry));
+            DrawMeshFoldoutGlyph(drawList, rowMin + new Vector2(5f, 5f), 12f, IsMeshEntryExpanded(entry));
 
         if (!isDirectory && entry.Kind == "CS")
         {
             if (TryGetEditorScriptIconTexture(out var scriptTextureId))
-                ImGui.GetWindowDrawList().AddImage(scriptTextureId, rowMin + new Vector2(4f + indent, 2f), rowMin + new Vector2(18f + indent, 18f), Vector2.Zero, Vector2.One);
+                drawList.AddImage(scriptTextureId, rowMin + new Vector2(5f + indent, 3f), rowMin + new Vector2(19f + indent, 17f), Vector2.Zero, Vector2.One);
             else
-                DrawScriptAssetPreview(ImGui.GetWindowDrawList(), rowMin + new Vector2(1f + indent, 1f), 18f);
+                DrawScriptAssetPreview(drawList, rowMin + new Vector2(2f + indent, 2f), 18f);
         }
         else if (entry.IsVirtualSubAsset && entry.Kind == "SUBMESH")
         {
-            DrawSubmeshAssetPreview(ImGui.GetWindowDrawList(), rowMin + new Vector2(4f + indent, 2f), 16f);
+            DrawSubmeshAssetPreview(drawList, rowMin + new Vector2(5f + indent, 3f), 16f);
         }
         else if (!isDirectory && entry.Kind == "PART")
         {
-            DrawParticlePresetAssetPreview(ImGui.GetWindowDrawList(), rowMin + new Vector2(4f + indent, 2f), 16f);
+            DrawParticlePresetAssetPreview(drawList, rowMin + new Vector2(5f + indent, 3f), 16f);
         }
         else
         {
-            DrawAtlasIconOrFallback(ImGui.GetWindowDrawList(), icon, rowMin + new Vector2(4f + indent, 3f), 14f, iconColor);
+            DrawAtlasIconOrFallback(drawList, icon, rowMin + new Vector2(5f + indent, 4f), 14f, iconColor);
         }
 
-        ImGui.GetWindowDrawList().AddText(
-            rowMin + new Vector2(24f + indent, 3f),
-            ImGui.GetColorU32(selectedItem ? new System.Numerics.Vector4(0.80f, 0.90f, 1f, 1f) : UiText),
+        drawList.AddText(
+            rowMin + new Vector2(26f + indent, 4f),
+            ImGui.GetColorU32(selectedItem ? new System.Numerics.Vector4(0.92f, 0.92f, 0.88f, 1f) : UiText),
             entry.Name);
 
         if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))

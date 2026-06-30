@@ -428,7 +428,7 @@ private bool TryResolveParticleVisualMesh(GrokoEngine.ParticleSystem ps, out Par
                 meshPath,
                 surface,
                 new SurfaceMaps(null, null, null),
-                new Vector4(0f, 0.5f, 0f, 0f),
+                new Vector4(0f, 0.5f, 1f, 1f),
                 Vector4.Zero);
             return true;
         }

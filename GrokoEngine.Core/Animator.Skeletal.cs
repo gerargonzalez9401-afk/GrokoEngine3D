@@ -302,7 +302,11 @@ namespace GrokoEngine
         {
             string key;
             try { key = Path.GetFullPath(modelPath); }
-            catch { key = modelPath; }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Animator] No se pudo normalizar la ruta del modelo '{modelPath}': {ex.Message}");
+                key = modelPath;
+            }
 
             if (sourceRestPoseMap != null && string.Equals(sourceRestPoseKey, key, StringComparison.OrdinalIgnoreCase))
                 return sourceRestPoseMap;
@@ -314,7 +318,10 @@ namespace GrokoEngine
                 if (mesh?.Hierarchy != null)
                     CollectSourceRestPoses(mesh.Hierarchy, map);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Animator] No se pudo leer rest pose de '{modelPath}': {ex.Message}");
+            }
 
             sourceRestPoseMap = map;
             sourceRestPoseKey = key;

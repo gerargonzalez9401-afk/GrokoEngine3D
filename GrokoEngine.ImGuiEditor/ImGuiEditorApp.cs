@@ -36,16 +36,16 @@ internal sealed partial class ImGuiEditorApp : GameWindow
 {
     private const float GizmoHitRadius = 8.5f;
     private static ImGuiEditorApp? currentDrawingApp;
-    private static readonly System.Numerics.Vector4 UiAccent = new(0.18f, 0.40f, 0.64f, 1f);
-    private static readonly System.Numerics.Vector4 UiAccentHover = new(0.24f, 0.48f, 0.72f, 1f);
-    private static readonly System.Numerics.Vector4 UiAccentActive = new(0.28f, 0.56f, 0.84f, 1f);
+    private static readonly System.Numerics.Vector4 UiAccent = new(0.30f, 0.40f, 0.52f, 1f);
+    private static readonly System.Numerics.Vector4 UiAccentHover = new(0.38f, 0.48f, 0.60f, 1f);
+    private static readonly System.Numerics.Vector4 UiAccentActive = new(0.48f, 0.58f, 0.68f, 1f);
     private static readonly System.Numerics.Vector4 UiPanel = new(0.20f, 0.20f, 0.20f, 1f);
     private static readonly System.Numerics.Vector4 UiPanelSoft = new(0.17f, 0.17f, 0.17f, 1f);
     private static readonly System.Numerics.Vector4 UiText = new(0.74f, 0.74f, 0.74f, 1f);
     private static readonly System.Numerics.Vector4 UiDanger = new(0.56f, 0.16f, 0.14f, 1f);
     private static readonly System.Numerics.Vector4 UiDangerHover = new(0.72f, 0.22f, 0.18f, 1f);
     private static readonly System.Numerics.Vector4 UiIcon = new(0.72f, 0.74f, 0.76f, 1f);
-    private static readonly System.Numerics.Vector4 UiIconActive = new(0.90f, 0.94f, 1f, 1f);
+    private static readonly System.Numerics.Vector4 UiIconActive = new(0.92f, 0.92f, 0.88f, 1f);
     private readonly string projectPath;
     private readonly string rootAssetsPath;
     private readonly string scenePath;
@@ -299,6 +299,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private ShadowQuality shadowQuality = ShadowQuality.High;
     private ColorSpace colorSpace = ColorSpace.Linear;
     private bool iblEnabled = true;
+    private float iblDiffuseStrength = 0.65f;
+    private float iblSpecularStrength;
     private string hdriPath = "";
     private readonly EditorProfiler profiler = new();
     private bool showProfiler;
@@ -817,6 +819,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.ShadowBias = shadowBias;
         sceneRenderer.ColorSpace = colorSpace;
         sceneRenderer.ImageBasedLighting = iblEnabled;
+        sceneRenderer.IblDiffuseStrength = iblDiffuseStrength;
+        sceneRenderer.IblSpecularStrength = iblSpecularStrength;
         sceneRenderer.EnvironmentHdriPath = hdriPath;
         sceneRenderer.DrawEnvironmentBackground = !gameView || gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
         sceneRenderer.RenderRealtimeShadows = gameView;
@@ -886,6 +890,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.ShadowBias = shadowBias;
         sceneRenderer.ColorSpace = colorSpace;
         sceneRenderer.ImageBasedLighting = iblEnabled;
+        sceneRenderer.IblDiffuseStrength = iblDiffuseStrength;
+        sceneRenderer.IblSpecularStrength = iblSpecularStrength;
         sceneRenderer.EnvironmentHdriPath = hdriPath;
         sceneRenderer.DrawEnvironmentBackground = gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
         sceneRenderer.RenderRealtimeShadows = true;
@@ -1100,8 +1106,10 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             !int.TryParse(File.ReadAllText(versionPath).Trim(), out int savedVersion) ||
             savedVersion < LayoutVersion)
         {
-            try { File.Delete(imguiLayoutPath); } catch { }
-            try { File.Delete(versionPath); } catch { }
+            try { File.Delete(imguiLayoutPath); }
+            catch (Exception ex) { GrokoEngine.Debug.LogWarning($"No se pudo borrar el layout viejo de ImGui: {ex.Message}"); }
+            try { File.Delete(versionPath); }
+            catch (Exception ex) { GrokoEngine.Debug.LogWarning($"No se pudo borrar la version vieja del layout de ImGui: {ex.Message}"); }
             return;
         }
 
@@ -1163,6 +1171,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             shadowQuality = Enum.TryParse<ShadowQuality>(settings.ShadowQuality, out var shadowQ) ? shadowQ : ShadowQuality.High;
             colorSpace = Enum.TryParse<ColorSpace>(settings.ColorSpace, out var colorSp) ? colorSp : ColorSpace.Linear;
             iblEnabled = settings.ImageBasedLighting;
+            iblDiffuseStrength = Math.Clamp(settings.IblDiffuseStrength <= 0f ? 0.65f : settings.IblDiffuseStrength, 0f, 1.5f);
+            iblSpecularStrength = Math.Clamp(settings.IblSpecularStrength <= 0f ? 0.16f : settings.IblSpecularStrength, 0f, 0.35f);
             hdriPath = settings.HdriPath ?? "";
             projectListView = settings.ProjectListView;
             projectTileScale = Math.Clamp(settings.ProjectTileScale, ProjectTileScaleMin, ProjectTileScaleMax);
@@ -1223,6 +1233,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
                 ShadowQuality = shadowQuality.ToString(),
                 ColorSpace = colorSpace.ToString(),
                 ImageBasedLighting = iblEnabled,
+                IblDiffuseStrength = iblDiffuseStrength,
+                IblSpecularStrength = iblSpecularStrength,
                 HdriPath = hdriPath,
                 ProjectListView = projectListView,
                 ProjectTileScale = projectTileScale,

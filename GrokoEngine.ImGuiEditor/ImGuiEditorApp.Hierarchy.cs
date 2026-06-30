@@ -42,10 +42,10 @@ internal sealed partial class ImGuiEditorApp
         ImGui.Separator();
 
         ImGui.PushStyleColor(ImGuiCol.DragDropTarget, new System.Numerics.Vector4(0.92f, 0.94f, 0.97f, 0.55f));
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(18f, 10f)); // margen interior estilo Unity
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(12f, 10f)); // margen interior estilo Unity
         ImGui.BeginChild("HierarchyTree", new Vector2(0f, -34f), ImGuiChildFlags.None);
-        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 1f));
-        ImGui.PushStyleVar(ImGuiStyleVar.IndentSpacing, 14f);
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 2f));
+        ImGui.PushStyleVar(ImGuiStyleVar.IndentSpacing, 16f);
         var rootSnapshot = objects.ToList();
         for (int i = 0; i < rootSnapshot.Count; i++)
         {
@@ -179,31 +179,30 @@ internal sealed partial class ImGuiEditorApp
         // Resaltado de selección redondeado, de fila completa (estilo Unity de la referencia).
         var rowMin = ImGui.GetCursorScreenPos();
         float rowWidth = ImGui.GetContentRegionAvail().X;
+        const float rowHeight = 24f;
+        var rowRectMin = new Vector2(rowMin.X - 6f, rowMin.Y - 2f);
+        var rowRectMax = new Vector2(rowMin.X + rowWidth - 2f, rowMin.Y + rowHeight - 2f);
         if (isSelected)
         {
             var dl = ImGui.GetWindowDrawList();
-            dl.AddRectFilled(
-                new Vector2(rowMin.X - 6f, rowMin.Y - 1f),
-                new Vector2(rowMin.X + rowWidth - 2f, rowMin.Y + 16f),
-                ImGui.GetColorU32(new System.Numerics.Vector4(0.29f, 0.31f, 0.35f, 1f)), 4f);
+            dl.AddRectFilled(rowRectMin, rowRectMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.330f, 0.330f, 0.330f, 0.96f)), 6f);
+            dl.AddRect(rowRectMin, rowRectMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.560f, 0.600f, 0.640f, 0.75f)), 6f, ImDrawFlags.None, 1f);
         }
         // Nuestra selección es redondeada → ocultamos el resaltado cuadrado del TreeNode.
         ImGui.PushStyleColor(ImGuiCol.Header, new System.Numerics.Vector4(0f, 0f, 0f, 0f));
         ImGui.PushStyleColor(ImGuiCol.HeaderActive, new System.Numerics.Vector4(0f, 0f, 0f, 0f));
-        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new System.Numerics.Vector4(1f, 1f, 1f, 0.06f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new System.Numerics.Vector4(0.72f, 0.72f, 0.72f, 0.10f));
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(2f, 3f));
 
-        if (obj.GetComponent<Camera>() != null || obj.IsCamera)
-            DrawInlineIcon(EditorIcon.Camera, "Camera", 16f);
-        else
-            DrawInlineCubeIcon(GetObjectIconTooltip(obj), 16f);
-        ImGui.SameLine(0f, 4f);
+        DrawInlineIcon(GetObjectIcon(obj), GetObjectIconTooltip(obj), 18f);
+        ImGui.SameLine(0f, 6f);
 
         bool prefab = !string.IsNullOrWhiteSpace(obj.PrefabAssetPath);
         bool renaming = inlineRenameObjectId == obj.EditorId;
         if (!active)
             ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(0.48f, 0.50f, 0.52f, 1f));
         else if (prefab)
-            ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(0.56f, 0.76f, 1f, 1f));
+            ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(0.80f, 0.84f, 0.88f, 1f));
         bool open;
         if (renaming)
         {
@@ -230,6 +229,8 @@ internal sealed partial class ImGuiEditorApp
         }
         if (!active || prefab)
             ImGui.PopStyleColor();
+        DrawHierarchyRowBadges(obj, rowRectMax);
+        ImGui.PopStyleVar();
         ImGui.PopStyleColor(3); // Header / HeaderActive / HeaderHovered
         DrawHierarchyBranchLine();
         if (!renaming && ImGui.IsItemClicked())
@@ -273,6 +274,38 @@ internal sealed partial class ImGuiEditorApp
         // Sin líneas de guía ni subrayado de hover: la fila se resalta con el rect redondeado.
     }
 
+    private static void DrawHierarchyRowBadges(GameObject obj, Vector2 rowMax)
+    {
+        var drawList = ImGui.GetWindowDrawList();
+        float x = rowMax.X - 8f;
+        float y = rowMax.Y - 12f;
+
+        void Dot(System.Numerics.Vector4 color)
+        {
+            drawList.AddCircleFilled(new Vector2(x, y), 3.2f, ImGui.GetColorU32(color), 12);
+            x -= 10f;
+        }
+
+        Dot(obj.IsActive
+            ? new System.Numerics.Vector4(0.35f, 0.95f, 0.62f, 0.95f)
+            : new System.Numerics.Vector4(0.45f, 0.48f, 0.54f, 0.80f));
+
+        if (!string.IsNullOrWhiteSpace(obj.PrefabAssetPath))
+            Dot(new System.Numerics.Vector4(0.62f, 0.70f, 0.78f, 0.95f));
+
+        int enabledComponents = obj.Components.Count(c => c.Enabled);
+        if (enabledComponents <= 0)
+            return;
+
+        string label = enabledComponents > 9 ? "9+" : enabledComponents.ToString(CultureInfo.InvariantCulture);
+        var textSize = ImGui.CalcTextSize(label);
+        var min = new Vector2(x - textSize.X - 9f, rowMax.Y - 20f);
+        var max = new Vector2(x + 1f, rowMax.Y - 7f);
+        drawList.AddRectFilled(min, max, ImGui.GetColorU32(new System.Numerics.Vector4(0.10f, 0.13f, 0.17f, 0.92f)), 5f);
+        drawList.AddRect(min, max, ImGui.GetColorU32(new System.Numerics.Vector4(0.22f, 0.30f, 0.40f, 0.85f)), 5f);
+        drawList.AddText(min + new Vector2(5f, -1f), ImGui.GetColorU32(new System.Numerics.Vector4(0.72f, 0.82f, 0.95f, 1f)), label);
+    }
+
     private string GetHierarchyLabel(GameObject obj)
     {
         return obj.Name;
@@ -293,6 +326,8 @@ internal sealed partial class ImGuiEditorApp
         if (obj.GetComponent<Camera>() != null || obj.IsCamera) return EditorIcon.Camera;
         if (obj.Components.Any(IsLightComponent)) return EditorIcon.Light;
         if (obj.GetComponent<MeshFilter>() != null) return EditorIcon.Mesh;
+        if (obj.Type == 1 || obj.Type == 3 || obj.Type == 4 || obj.Type == 6) return EditorIcon.Cube;
+        if (obj.Type == 2 || obj.Type == 5) return EditorIcon.Plane;
         if (obj.Components.Any(c => c is MonoBehaviour)) return EditorIcon.Script;
         return EditorIcon.Transform;
     }

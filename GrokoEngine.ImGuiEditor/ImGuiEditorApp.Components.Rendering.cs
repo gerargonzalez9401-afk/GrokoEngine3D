@@ -227,7 +227,7 @@ private static void DrawLightColor(float r, float g, float b, Action<float, floa
     {
         FieldRow("Color");
         var color = new System.Numerics.Vector3(r, g, b);
-        if (ImGui.ColorEdit3("##Color", ref color))
+        if (ColorField("##Color", ref color))
             set(color.X, color.Y, color.Z);
     }
 

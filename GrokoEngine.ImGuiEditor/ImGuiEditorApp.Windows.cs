@@ -209,8 +209,12 @@ internal sealed partial class ImGuiEditorApp
                 ImGui.Spacing();
 
                 ImGui.TextUnformatted("Environment Lighting (IBL)");
-                ImGui.Checkbox("Image-Based Lighting", ref iblEnabled);
-                ImGui.TextDisabled("Procedural IBL: surfaces reflect the environment (sky/ground derived from the Ambient light), so metals and glossy materials stop looking flat. Diffuse is energy-conserving (metals lose diffuse) and specular uses Karis' analytic split-sum — no precomputed textures, zero extra GPU memory. Toggle to compare A/B. Best paired with Linear color space.");
+                ImGui.Checkbox("IBL Diffuse Irradiance", ref iblEnabled);
+                DrawUnitySliderFloat("Diffuse Strength##lightingIbl", ref iblDiffuseStrength, 0f, 1.5f, 0.01f);
+                iblDiffuseStrength = Math.Clamp(iblDiffuseStrength, 0f, 1.5f);
+                DrawUnitySliderFloat("Reflection Strength##lightingIblSpec", ref iblSpecularStrength, 0f, 0.35f, 0.005f);
+                iblSpecularStrength = Math.Clamp(iblSpecularStrength, 0f, 0.35f);
+                ImGui.TextDisabled("Diffuse irradiance + reflections seguras por material. Usa Environment Reflections y Specular Highlights en cada Material para comparar A/B.");
 
                 ImGui.Spacing();
                 ImGui.TextUnformatted("HDRI Environment (.hdr)");
@@ -246,6 +250,12 @@ internal sealed partial class ImGuiEditorApp
                         ? "Loaded — surfaces reflect this HDRI."
                         : "Not loaded (file missing or not a .hdr). See Console.");
                 ImGui.TextDisabled("Click the slot to browse for a Radiance .hdr (RGBE), or drag one from the Project panel. When set, IBL reflects this image instead of the procedural sky. (.exr is NOT supported.)");
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Render Pro"))
+            {
+                DrawRenderProSettingsTab();
                 ImGui.EndTabItem();
             }
 
@@ -640,6 +650,213 @@ internal sealed partial class ImGuiEditorApp
         return changed;
     }
 
+    private void DrawRenderProSettingsTab()
+    {
+        ImGui.TextColored(new Vec4(0.45f, 0.86f, 1.0f, 1f), "Render Debug / Quality");
+        ImGui.TextDisabled("Panel profesional para calibrar IBL, sombras, AO y materiales sin tocar codigo.");
+        ImGui.Separator();
+
+        if (ImGui.BeginTable("##renderProGrid", 2, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.BordersInnerV))
+        {
+            ImGui.TableNextColumn();
+            DrawRenderProSection("Frame");
+            DrawUnitySliderFloat("Render Scale##pro", ref renderScale, 0.25f, 2f, 0.01f);
+            renderScale = Math.Clamp(renderScale, 0.25f, 2f);
+            SmallCheckbox("FXAA##pro", ref fxaaEnabled);
+            ImGui.TextDisabled($"Target: {GetViewportRenderSize().Width} x {GetViewportRenderSize().Height}");
+
+            ImGui.Spacing();
+            DrawRenderProSection("Post");
+            DrawQualityCombo("Bloom Quality##pro", ref bloomQuality);
+            DrawQualityCombo("AO Quality##pro", ref ambientOcclusionQuality);
+            ImGui.TextDisabled("AO usa sampling tipo GTAO para contacto moderno.");
+
+            ImGui.Spacing();
+            DrawRenderProSection("Presets");
+            if (ImGui.Button("Balanced##renderPreset", new Vector2(106f, 26f)))
+                ApplyRenderQualityPreset(1);
+            ImGui.SameLine();
+            if (ImGui.Button("Performance##renderPreset", new Vector2(116f, 26f)))
+                ApplyRenderQualityPreset(0);
+            ImGui.SameLine();
+            if (ImGui.Button("Cinematic##renderPreset", new Vector2(106f, 26f)))
+                ApplyRenderQualityPreset(2);
+
+            ImGui.TableNextColumn();
+            DrawRenderProSection("Debug View");
+            if (ImGui.BeginCombo("Mode##renderDebug", LightingDebugViewLabel(lightingDebugView)))
+            {
+                foreach (LightingDebugView view in Enum.GetValues<LightingDebugView>())
+                {
+                    bool selected = lightingDebugView == view;
+                    if (ImGui.Selectable(LightingDebugViewLabel(view), selected))
+                        lightingDebugView = view;
+                    if (selected)
+                        ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
+            }
+            ImGui.TextDisabled(LightingDebugViewDescription(lightingDebugView));
+            if (ImGui.Button("Final##debugFast", new Vector2(76f, 24f)))
+                lightingDebugView = LightingDebugView.Final;
+            ImGui.SameLine();
+            if (ImGui.Button("Material Health##debugFast", new Vector2(136f, 24f)))
+                lightingDebugView = LightingDebugView.MaterialHealth;
+            ImGui.SameLine();
+            if (ImGui.Button("Cascades##debugFast", new Vector2(96f, 24f)))
+                lightingDebugView = LightingDebugView.ShadowCascades;
+
+            ImGui.Spacing();
+            DrawRenderProSection("Lighting / IBL");
+            SmallCheckbox("IBL Diffuse Irradiance##pro", ref iblEnabled);
+            DrawUnitySliderFloat("IBL Diffuse##pro", ref iblDiffuseStrength, 0f, 1.5f, 0.01f);
+            iblDiffuseStrength = Math.Clamp(iblDiffuseStrength, 0f, 1.5f);
+            DrawUnitySliderFloat("IBL Reflections##pro", ref iblSpecularStrength, 0f, 0.35f, 0.005f);
+            iblSpecularStrength = Math.Clamp(iblSpecularStrength, 0f, 0.35f);
+            ImGui.TextDisabled("Reflections filtradas: cada material puede apagarlas con Environment Reflections. Normal maps reciben blur extra para evitar artefactos.");
+            if (ImGui.BeginCombo("Color Space##pro", colorSpace.ToString()))
+            {
+                foreach (ColorSpace space in Enum.GetValues<ColorSpace>())
+                {
+                    bool selected = colorSpace == space;
+                    if (ImGui.Selectable(space.ToString(), selected))
+                        colorSpace = space;
+                    if (selected) ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
+            }
+            ImGui.TextDisabled(colorSpace == ColorSpace.Linear
+                ? "Linear recomendado para PBR fisico."
+                : "Gamma mantiene look legacy/estilizado.");
+
+            ImGui.Spacing();
+            DrawRenderProSection("Shadows");
+            if (ImGui.BeginCombo("Shadow Quality##pro", shadowQuality.ToString()))
+            {
+                foreach (ShadowQuality quality in Enum.GetValues<ShadowQuality>())
+                {
+                    bool selected = shadowQuality == quality;
+                    if (ImGui.Selectable(quality.ToString(), selected))
+                        shadowQuality = quality;
+                    if (selected) ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
+            }
+            DrawUnitySliderFloat("Shadow Bias##pro", ref shadowBias, 0.1f, 4f, 0.01f);
+            shadowBias = Math.Clamp(shadowBias, 0.1f, 4f);
+            ImGui.TextDisabled(ShadowQualityDescription(shadowQuality));
+
+            ImGui.EndTable();
+        }
+
+        ImGui.Separator();
+        DrawRenderProSection("HDRI Environment");
+        string hdriSlot = string.IsNullOrWhiteSpace(hdriPath)
+            ? "None - click to choose .hdr"
+            : Path.GetFileName(hdriPath);
+        if (ImGui.Button(hdriSlot + "##hdriSlotPro", new Vector2(320f, 28f)))
+        {
+            string? picked = BrowseForHdri();
+            if (picked != null)
+                hdriPath = picked;
+        }
+        if (ImGui.BeginDragDropTarget())
+        {
+            bool delivered = AcceptDragDropOnRelease("GROKO_ASSET");
+            if (delivered && draggingAssetPath != null && File.Exists(draggingAssetPath) && GrokoEngine.HdrLoader.IsHdr(draggingAssetPath))
+            {
+                hdriPath = draggingAssetPath;
+                draggingAssetPath = null;
+            }
+            ImGui.EndDragDropTarget();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Clear##hdriPro", new Vector2(72f, 28f)))
+            hdriPath = "";
+        ImGui.SameLine();
+        ImGui.TextDisabled(sceneRenderer.EnvironmentLoaded ? "Loaded" : "No HDRI loaded");
+
+        ImGui.Spacing();
+        DrawRenderProSection("Material Calibration Checklist");
+        ImGui.BulletText("Albedo: revisa que no este quemado; Material Health marca valores peligrosos.");
+        ImGui.BulletText("Metallic: metal puro debe tener albedo oscuro/realista y reflejo fuerte.");
+        ImGui.BulletText("Roughness: usa Roughness debug para evitar extremos accidentales.");
+        ImGui.BulletText("Shadows: usa Shadow Cascades para revisar cortes de cascadas.");
+    }
+
+    private void ApplyRenderQualityPreset(int preset)
+    {
+        switch (preset)
+        {
+            case 0:
+                renderScale = 0.75f;
+                fxaaEnabled = true;
+                bloomQuality = 1;
+                ambientOcclusionQuality = 1;
+                shadowQuality = ShadowQuality.Medium;
+                shadowBias = 1.25f;
+                iblDiffuseStrength = 0.45f;
+                iblSpecularStrength = 0.10f;
+                break;
+            case 2:
+                renderScale = 1f;
+                fxaaEnabled = true;
+                bloomQuality = 3;
+                ambientOcclusionQuality = 3;
+                shadowQuality = ShadowQuality.Ultra;
+                shadowBias = 0.85f;
+                iblDiffuseStrength = 0.85f;
+                iblSpecularStrength = 0.22f;
+                break;
+            default:
+                renderScale = 1f;
+                fxaaEnabled = true;
+                bloomQuality = 2;
+                ambientOcclusionQuality = 2;
+                shadowQuality = ShadowQuality.High;
+                shadowBias = 1f;
+                iblDiffuseStrength = 0.65f;
+                iblSpecularStrength = 0.16f;
+                break;
+        }
+
+        lightingDebugView = LightingDebugView.Final;
+        statusMessage = "Render quality preset applied";
+    }
+
+    private static void DrawRenderProSection(string title)
+    {
+        ImGui.TextColored(new Vec4(0.74f, 0.82f, 0.96f, 1f), title);
+    }
+
+    private static string LightingDebugViewLabel(LightingDebugView view) => view switch
+    {
+        LightingDebugView.Final => "Final",
+        LightingDebugView.Albedo => "Albedo",
+        LightingDebugView.Normals => "Normals",
+        LightingDebugView.Roughness => "Roughness",
+        LightingDebugView.Metallic => "Metallic",
+        LightingDebugView.Shadows => "Shadow Mask",
+        LightingDebugView.ShadowCascades => "Shadow Cascades",
+        LightingDebugView.IblSpecular => "IBL Specular",
+        LightingDebugView.MaterialHealth => "Material Health",
+        _ => view.ToString()
+    };
+
+    private static string LightingDebugViewDescription(LightingDebugView view) => view switch
+    {
+        LightingDebugView.Final => "Render final con postprocess, IBL, sombras y materiales.",
+        LightingDebugView.Albedo => "Color base sin iluminacion. Util para detectar albedo quemado.",
+        LightingDebugView.Normals => "Normales en espacio mundo. Util para normal maps invertidos o rotos.",
+        LightingDebugView.Roughness => "Blanco = rugoso, negro = espejo. Ideal para calibrar PBR.",
+        LightingDebugView.Metallic => "Blanco = metal, negro = dielectrico.",
+        LightingDebugView.Shadows => "Mascara de sombra principal.",
+        LightingDebugView.ShadowCascades => "Colores por cascada de sombra direccional.",
+        LightingDebugView.IblSpecular => "Solo la energia especular del IBL.",
+        LightingDebugView.MaterialHealth => "Semaforo de materiales: verde OK, amarillo revisar, rojo peligro.",
+        _ => string.Empty
+    };
+
     private void HandleEngineLogMessage(string message, string severity)
     {
         pendingConsoleLog.Enqueue(new ConsoleEntry(DateTime.Now, ParseConsoleSeverity(severity), message));
@@ -683,6 +900,7 @@ internal sealed partial class ImGuiEditorApp
         statusMessageValue = message;
         lastStatusSeverity = entry.Severity;
         lastStatusFlashTime = GLFW.GetTime();
+        EditorDiagnostics.Log(message, entry.Severity.ToString());
         if (consoleLog.Count == 0 || consoleLog[^1].Message != entry.Message || consoleLog[^1].Severity != entry.Severity)
             consoleLog.Add(entry);
         if (consoleLog.Count > 500)

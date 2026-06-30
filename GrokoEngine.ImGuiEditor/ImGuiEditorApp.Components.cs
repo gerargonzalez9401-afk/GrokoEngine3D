@@ -893,6 +893,22 @@ internal sealed partial class ImGuiEditorApp
                             SaveMaterialComponentToAsset(mat);
                         }
                         EndMaterialEdit(obj, mat);
+                        DrawCheckRow("Specular Highlights", mat.SpecularHighlights, v =>
+                        {
+                            BeginMaterialEdit(obj);
+                            mat.SpecularHighlights = v;
+                            sceneRenderer.InvalidateStaticBatch();
+                            SaveMaterialComponentToAsset(mat);
+                        });
+                        EndMaterialEdit(obj, mat);
+                        DrawCheckRow("Environment Reflections", mat.EnvironmentReflections, v =>
+                        {
+                            BeginMaterialEdit(obj);
+                            mat.EnvironmentReflections = v;
+                            sceneRenderer.InvalidateStaticBatch();
+                            SaveMaterialComponentToAsset(mat);
+                        });
+                        EndMaterialEdit(obj, mat);
                         ImGui.Dummy(new Vector2(0f, 3f));
                     }
                     if (!hasShaderGraph && SectionHeader("Emission"))
@@ -921,8 +937,7 @@ internal sealed partial class ImGuiEditorApp
                     FieldRow("Background");
                     {
                         var background = new Vec4(cam.BackgroundR, cam.BackgroundG, cam.BackgroundB, cam.BackgroundA);
-                        ImGui.SetNextItemWidth(-1f);
-                        if (ImGui.ColorEdit4("##camera_background", ref background, ImGuiColorEditFlags.AlphaPreviewHalf))
+                        if (ColorField4("##camera_background", ref background))
                         {
                             cam.BackgroundR = Math.Clamp(background.X, 0f, 1f);
                             cam.BackgroundG = Math.Clamp(background.Y, 0f, 1f);
@@ -2131,7 +2146,11 @@ internal sealed partial class ImGuiEditorApp
                 continue;
             if (field.IsInitOnly)
                 continue;
-            try { field.SetValue(target, field.GetValue(source)); } catch { }
+            try { field.SetValue(target, field.GetValue(source)); }
+            catch (Exception ex)
+            {
+                GrokoEngine.Debug.LogWarning($"No se pudo copiar campo '{field.Name}' en {target.GetType().Name}: {ex.Message}");
+            }
         }
 
         foreach (var prop in target.GetType().GetProperties(flags))
@@ -2140,7 +2159,11 @@ internal sealed partial class ImGuiEditorApp
                 continue;
             if (prop.GetIndexParameters().Length > 0)
                 continue;
-            try { prop.SetValue(target, prop.GetValue(source)); } catch { }
+            try { prop.SetValue(target, prop.GetValue(source)); }
+            catch (Exception ex)
+            {
+                GrokoEngine.Debug.LogWarning($"No se pudo copiar propiedad '{prop.Name}' en {target.GetType().Name}: {ex.Message}");
+            }
         }
     }
 
@@ -2159,7 +2182,11 @@ internal sealed partial class ImGuiEditorApp
         {
             if (!prop.CanRead || prop.GetIndexParameters().Length > 0 || prop.Name is nameof(Component.gameObject) or "Physics")
                 continue;
-            try { lines.Add($"{prop.Name}: {prop.GetValue(component)}"); } catch { }
+            try { lines.Add($"{prop.Name}: {prop.GetValue(component)}"); }
+            catch (Exception ex)
+            {
+                GrokoEngine.Debug.LogWarning($"No se pudo leer propiedad '{prop.Name}' en {component.GetType().Name}: {ex.Message}");
+            }
         }
 
         ImGui.SetClipboardText(string.Join(Environment.NewLine, lines));

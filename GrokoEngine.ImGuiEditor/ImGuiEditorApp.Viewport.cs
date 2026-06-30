@@ -1357,12 +1357,17 @@ internal sealed partial class ImGuiEditorApp
         var drawList = ImGui.GetWindowDrawList();
         var min = ImGui.GetCursorScreenPos();
         float width = ImGui.GetContentRegionAvail().X;
-        float height = 22f;
-        var headerMin = min - new Vector2(4f, 4f);
-        var headerMax = min + new Vector2(width + 4f, height);
-        drawList.AddRectFilled(headerMin, headerMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.12f, 0.12f, 0.12f, 1f)));
-        drawList.AddLine(headerMin + new Vector2(0f, height + 4f), headerMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.08f, 0.08f, 0.08f, 1f)));
+        float height = 30f;
+        var headerMin = min - new Vector2(2f, 3f);
+        var headerMax = min + new Vector2(width + 2f, height);
+        uint bg = ImGui.GetColorU32(new System.Numerics.Vector4(0.070f, 0.088f, 0.112f, 0.98f));
+        uint border = ImGui.GetColorU32(new System.Numerics.Vector4(0.145f, 0.190f, 0.250f, 0.95f));
+        uint accent = ImGui.GetColorU32(new System.Numerics.Vector4(0.22f, 0.58f, 0.95f, 0.95f));
+        drawList.AddRectFilled(headerMin, headerMax, bg, 7f);
+        drawList.AddRect(headerMin, headerMax, border, 7f, ImDrawFlags.None, 1f);
+        drawList.AddRectFilled(headerMin, headerMin + new Vector2(3f, height + 3f), accent, 7f);
 
+        ImGui.SetCursorScreenPos(min + new Vector2(8f, 4f));
         ImGui.PushStyleColor(ImGuiCol.Text, UiText);
         ImGui.TextUnformatted(title);
         RegisterGuiElement(GuiStyleClass.Panel, title);
@@ -1370,6 +1375,7 @@ internal sealed partial class ImGuiEditorApp
         if (!string.IsNullOrWhiteSpace(meta))
         {
             ImGui.SameLine();
+            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 5f);
             ImGui.TextDisabled(meta);
         }
         if (trailing != null)
@@ -1377,7 +1383,7 @@ internal sealed partial class ImGuiEditorApp
             ImGui.SameLine(Math.Max(ImGui.GetCursorPosX() + 6f, width - trailingWidth));
             trailing();
         }
-        ImGui.Dummy(new Vector2(0f, 2f));
+        ImGui.SetCursorScreenPos(new Vector2(min.X, headerMax.Y + 5f));
     }
 
     private void DrawTransformGizmo(ImDrawListPtr drawList)

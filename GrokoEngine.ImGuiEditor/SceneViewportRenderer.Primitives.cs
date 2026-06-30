@@ -266,4 +266,136 @@ internal sealed partial class SceneViewportRenderer
         }
     }
 
+
+    private void AddQuadPrimitive(Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission)
+    {
+        var a = new Vector3(-0.5f, -0.5f, 0f);
+        var b = new Vector3(0.5f, -0.5f, 0f);
+        var c = new Vector3(0.5f, 0.5f, 0f);
+        var d = new Vector3(-0.5f, 0.5f, 0f);
+        AddQuadPrimitive(a, b, c, d, transform, color, material, emission);
+    }
+
+    private void AddCapsulePrimitive(Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission, int slices, int hemiRings)
+    {
+        float cylinderHalf = 0.5f;
+        for (int i = 0; i < slices; i++)
+        {
+            float u0 = i / (float)slices;
+            float u1 = (i + 1) / (float)slices;
+            float a0 = u0 * MathF.PI * 2f;
+            float a1 = u1 * MathF.PI * 2f;
+            var b0 = new Vector3(MathF.Cos(a0) * 0.5f, -cylinderHalf, MathF.Sin(a0) * 0.5f);
+            var b1 = new Vector3(MathF.Cos(a1) * 0.5f, -cylinderHalf, MathF.Sin(a1) * 0.5f);
+            var t0 = new Vector3(b0.X, cylinderHalf, b0.Z);
+            var t1 = new Vector3(b1.X, cylinderHalf, b1.Z);
+            var n0 = new Vector3(MathF.Cos(a0), 0f, MathF.Sin(a0)).Normalized();
+            var n1 = new Vector3(MathF.Cos(a1), 0f, MathF.Sin(a1)).Normalized();
+            AddTrianglePrimitiveSmooth(b0, b1, t1, n0, n1, n1, transform, color, material, emission);
+            AddTrianglePrimitiveSmooth(b0, t1, t0, n0, n1, n0, transform, color, material, emission);
+        }
+
+        AddCapsuleHemisphere(transform, color, material, emission, slices, hemiRings, cylinderHalf, top: true);
+        AddCapsuleHemisphere(transform, color, material, emission, slices, hemiRings, -cylinderHalf, top: false);
+    }
+
+    private void AddCapsuleHemisphere(Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission, int slices, int rings, float yOffset, bool top)
+    {
+        for (int y = 0; y < rings; y++)
+        {
+            float t0 = y == 0 ? 0.0001f : y / (float)rings;
+            float t1 = (y + 1) / (float)rings;
+            float phi0 = t0 * MathF.PI * 0.5f;
+            float phi1 = t1 * MathF.PI * 0.5f;
+            if (!top) { phi0 = -phi0; phi1 = -phi1; }
+            for (int x = 0; x < slices; x++)
+            {
+                float u0 = x / (float)slices;
+                float u1 = (x + 1) / (float)slices;
+                var p00 = CapsulePoint(u0, phi0, yOffset);
+                var p10 = CapsulePoint(u1, phi0, yOffset);
+                var p11 = CapsulePoint(u1, phi1, yOffset);
+                var p01 = CapsulePoint(u0, phi1, yOffset);
+                AddTrianglePrimitiveSmooth(p00, p10, p11, CapsuleNormal(p00, yOffset), CapsuleNormal(p10, yOffset), CapsuleNormal(p11, yOffset), transform, color, material, emission);
+                AddTrianglePrimitiveSmooth(p00, p11, p01, CapsuleNormal(p00, yOffset), CapsuleNormal(p11, yOffset), CapsuleNormal(p01, yOffset), transform, color, material, emission);
+            }
+        }
+    }
+
+    private static Vector3 CapsulePoint(float u, float phi, float yOffset)
+    {
+        float theta = u * MathF.PI * 2f;
+        float cp = MathF.Cos(phi);
+        return new Vector3(MathF.Cos(theta) * cp * 0.5f, yOffset + MathF.Sin(phi) * 0.5f, MathF.Sin(theta) * cp * 0.5f);
+    }
+
+    private static Vector3 CapsuleNormal(Vector3 p, float yOffset)
+    {
+        var normal = new Vector3(p.X, p.Y - yOffset, p.Z);
+        return normal.Length > 0.0001f ? normal.Normalized() : Vector3.UnitY;
+    }
+
+    private void AddQuadPrimitive(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission)
+    {
+        AddTrianglePrimitive(a, b, c, transform, color, material, emission, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(1f, 0f));
+        AddTrianglePrimitive(a, c, d, transform, color, material, emission, new Vector2(0f, 1f), new Vector2(1f, 0f), new Vector2(0f, 0f));
+    }
+
+    private void AddTrianglePrimitive(Vector3 a, Vector3 b, Vector3 c, Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission)
+        => AddTrianglePrimitive(a, b, c, transform, color, material, emission, Vector2.Zero, Vector2.UnitX, Vector2.UnitY);
+
+    private void AddTrianglePrimitive(Vector3 a, Vector3 b, Vector3 c, Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission, Vector2 uva, Vector2 uvb, Vector2 uvc)
+    {
+        var normal = Vector3.Cross(b - a, c - a).Normalized();
+        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(a, transform), Vector3.TransformNormal(normal, transform).Normalized(), color, uva, material, emission));
+        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(b, transform), Vector3.TransformNormal(normal, transform).Normalized(), color, uvb, material, emission));
+        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(c, transform), Vector3.TransformNormal(normal, transform).Normalized(), color, uvc, material, emission));
+    }
+
+    private void AddTrianglePrimitiveSmooth(Vector3 a, Vector3 b, Vector3 c, Vector3 na, Vector3 nb, Vector3 nc, Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission)
+        => AddTrianglePrimitiveSmooth(a, b, c, na, nb, nc, transform, color, material, emission, Vector2.Zero, Vector2.UnitX, Vector2.UnitY);
+
+    private void AddTrianglePrimitiveSmooth(Vector3 a, Vector3 b, Vector3 c, Vector3 na, Vector3 nb, Vector3 nc, Matrix4 transform, Vector4 color, Vector4 material, Vector4 emission, Vector2 uva, Vector2 uvb, Vector2 uvc)
+    {
+        var geometric = Vector3.Cross(b - a, c - a);
+        var desired = na + nb + nc;
+        if (geometric.Length > 0.0001f && desired.Length > 0.0001f && Vector3.Dot(geometric, desired) < 0f)
+        {
+            (b, c) = (c, b);
+            (nb, nc) = (nc, nb);
+            (uvb, uvc) = (uvc, uvb);
+        }
+
+        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(a, transform), Vector3.TransformNormal(na, transform).Normalized(), color, uva, material, emission));
+        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(b, transform), Vector3.TransformNormal(nb, transform).Normalized(), color, uvb, material, emission));
+        ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(c, transform), Vector3.TransformNormal(nc, transform).Normalized(), color, uvc, material, emission));
+    }
+
+    private void DrawPrimitiveWire(GameObject obj, Matrix4 transform, Vector4 lineColor)
+    {
+        if (obj.Type == 5)
+        {
+            var a = Vector3.TransformPosition(new Vector3(-0.5f, -0.5f, 0f), transform);
+            var b = Vector3.TransformPosition(new Vector3(0.5f, -0.5f, 0f), transform);
+            var c = Vector3.TransformPosition(new Vector3(0.5f, 0.5f, 0f), transform);
+            var d = Vector3.TransformPosition(new Vector3(-0.5f, 0.5f, 0f), transform);
+            AddLine(a, b, lineColor); AddLine(b, c, lineColor); AddLine(c, d, lineColor); AddLine(d, a, lineColor);
+            return;
+        }
+
+        int slices = 48;
+        float yMin = obj.Type is 4 or 6 ? -1f : -0.5f;
+        float yMax = obj.Type is 4 or 6 ? 1f : 0.5f;
+        for (int i = 0; i < slices; i++)
+        {
+            float a0 = i / (float)slices * MathF.PI * 2f;
+            float a1 = (i + 1) / (float)slices * MathF.PI * 2f;
+            AddLine(Vector3.TransformPosition(new Vector3(MathF.Cos(a0) * 0.5f, 0f, MathF.Sin(a0) * 0.5f), transform), Vector3.TransformPosition(new Vector3(MathF.Cos(a1) * 0.5f, 0f, MathF.Sin(a1) * 0.5f), transform), lineColor);
+            if (obj.Type is 4 or 6)
+            {
+                AddLine(Vector3.TransformPosition(new Vector3(MathF.Cos(a0) * 0.5f, yMin, MathF.Sin(a0) * 0.5f), transform), Vector3.TransformPosition(new Vector3(MathF.Cos(a1) * 0.5f, yMin, MathF.Sin(a1) * 0.5f), transform), lineColor);
+                AddLine(Vector3.TransformPosition(new Vector3(MathF.Cos(a0) * 0.5f, yMax, MathF.Sin(a0) * 0.5f), transform), Vector3.TransformPosition(new Vector3(MathF.Cos(a1) * 0.5f, yMax, MathF.Sin(a1) * 0.5f), transform), lineColor);
+            }
+        }
+    }
 }

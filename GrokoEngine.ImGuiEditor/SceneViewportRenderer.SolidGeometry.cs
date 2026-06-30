@@ -64,7 +64,7 @@ internal sealed partial class SceneViewportRenderer
     }
 
     private void AddQuad(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 normal, Vector4 color)
-        => AddQuad(a, b, c, d, normal, color, new Vector4(0f, 0.5f, 0f, 0f), Vector4.Zero);
+        => AddQuad(a, b, c, d, normal, color, new Vector4(0f, 0.5f, 1f, 1f), Vector4.Zero);
 
     private void AddQuad(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 normal, Vector4 color, Vector4 material, Vector4 emission)
     {

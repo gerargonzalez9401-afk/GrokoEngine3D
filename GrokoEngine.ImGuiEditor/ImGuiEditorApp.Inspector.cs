@@ -137,9 +137,9 @@ internal sealed partial class ImGuiEditorApp
         const float addW = 200f;
         float addAvail = ImGui.GetContentRegionAvail().X;
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0f, (addAvail - addW) * 0.5f));
-        ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.24f, 0.34f, 0.52f, 1f));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new System.Numerics.Vector4(0.29f, 0.44f, 0.66f, 1f));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new System.Numerics.Vector4(0.24f, 0.48f, 0.74f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.30f, 0.30f, 0.30f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new System.Numerics.Vector4(0.38f, 0.38f, 0.38f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, UiAccentActive);
         if (ImGui.Button("Add Component", new Vector2(addW, 26f)))
         {
             addComponentSearch = string.Empty;
@@ -155,10 +155,19 @@ internal sealed partial class ImGuiEditorApp
 
     private void DrawSelectedObjectHeader(GameObject obj)
     {
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, new System.Numerics.Vector4(0.095f, 0.108f, 0.126f, 1f));
-        ImGui.BeginChild("InspectorObjectHeader", new Vector2(0f, 42f), ImGuiChildFlags.None);
+        var min = ImGui.GetCursorScreenPos();
+        float width = Math.Max(120f, ImGui.GetContentRegionAvail().X);
+        var max = min + new Vector2(width, 48f);
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(min, max, ImGui.GetColorU32(new System.Numerics.Vector4(0.205f, 0.205f, 0.205f, 1f)), 7f);
+        drawList.AddRect(min, max, ImGui.GetColorU32(new System.Numerics.Vector4(0.285f, 0.285f, 0.285f, 1f)), 7f);
+        drawList.AddRectFilled(min, min + new Vector2(3f, 48f), ImGui.GetColorU32(UiAccent), 7f);
+
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new System.Numerics.Vector4(0f, 0f, 0f, 0f));
+        ImGui.BeginChild("InspectorObjectHeader", new Vector2(0f, 48f), ImGuiChildFlags.None);
+        ImGui.SetCursorPos(new Vector2(10f, 12f));
         DrawInlineIcon(GetObjectIcon(obj), GetObjectIconTooltip(obj), 22f);
-        ImGui.SameLine(0f, 6f);
+        ImGui.SameLine(0f, 8f);
         bool active = obj.IsActive;
         if (SmallCheckbox("##HeaderObjectActive", ref active))
             CommitSceneMutation(active ? "Activate Object" : "Deactivate Object", () =>
@@ -180,7 +189,7 @@ internal sealed partial class ImGuiEditorApp
             ImGui.SameLine();
             ImGui.TextDisabled($"{obj.Components.Count} comp   {obj.Children.Count} child");
         }
-        ImGui.SameLine(Math.Max(ImGui.GetCursorPosX() + 8f, ImGui.GetWindowWidth() - staticW - 12f));
+        ImGui.SameLine(Math.Max(ImGui.GetCursorPosX() + 8f, ImGui.GetWindowWidth() - staticW - 16f));
         bool isStatic = obj.IsStatic;
         if (SmallCheckbox("##HeaderObjectStatic", ref isStatic))
         {
@@ -193,6 +202,7 @@ internal sealed partial class ImGuiEditorApp
         ImGui.TextDisabled("Static");
         ImGui.EndChild();
         ImGui.PopStyleColor();
+        ImGui.Spacing();
     }
 
     private void DrawObjectEditorMeta(GameObject obj)
@@ -649,9 +659,14 @@ internal sealed partial class ImGuiEditorApp
                 if (previewTime >= assetTime)
                     return true;
             }
-            catch
+            catch (Exception ex)
             {
-                try { File.Delete(previewPath); } catch { }
+                GrokoEngine.Debug.LogWarning($"No se pudo validar preview cache '{previewPath}': {ex.Message}");
+                try { File.Delete(previewPath); }
+                catch (Exception deleteEx)
+                {
+                    GrokoEngine.Debug.LogWarning($"No se pudo borrar preview cache corrupto '{previewPath}': {deleteEx.Message}");
+                }
             }
         }
 
@@ -691,7 +706,10 @@ internal sealed partial class ImGuiEditorApp
                 if (File.Exists(tempPath))
                     File.Delete(tempPath);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                GrokoEngine.Debug.LogWarning($"No se pudo borrar preview temporal '{tempPath}': {ex.Message}");
+            }
 
             bitmap.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
             File.SetLastWriteTimeUtc(tempPath, assetTime);
@@ -1296,20 +1314,23 @@ internal sealed partial class ImGuiEditorApp
             open = true;
 
         ImGui.PushID(stateId);
-        float rowH = 21f;
+        float rowH = 25f;
         float avail = Math.Max(120f, ImGui.GetContentRegionAvail().X);
         Vector2 rowMin = ImGui.GetCursorScreenPos();
         Vector2 rowMax = rowMin + new Vector2(avail, rowH);
         var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(rowMin, rowMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.185f, 0.185f, 0.190f, 1f)));
-        drawList.AddLine(rowMin, rowMin + new Vector2(avail, 0f), ImGui.GetColorU32(new System.Numerics.Vector4(0.245f, 0.245f, 0.250f, 1f)));
-        drawList.AddLine(rowMin + new Vector2(0f, rowH - 1f), rowMax - new Vector2(0f, 1f), ImGui.GetColorU32(new System.Numerics.Vector4(0.105f, 0.105f, 0.110f, 1f)));
+        bool headerHovered = ImGui.IsMouseHoveringRect(rowMin, rowMax);
+        drawList.AddRectFilled(rowMin, rowMax, ImGui.GetColorU32(headerHovered
+            ? new System.Numerics.Vector4(0.255f, 0.255f, 0.255f, 1f)
+            : new System.Numerics.Vector4(0.215f, 0.215f, 0.215f, 1f)), 6f);
+        drawList.AddRect(rowMin, rowMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.305f, 0.305f, 0.305f, 0.90f)), 6f);
+        drawList.AddRectFilled(rowMin, rowMin + new Vector2(3f, rowH), ImGui.GetColorU32(UiAccent), 6f);
 
         ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0f, 0f, 0f, 0f));
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new System.Numerics.Vector4(0.26f, 0.26f, 0.27f, 0.85f));
         ImGui.PushStyleColor(ImGuiCol.ButtonActive, new System.Numerics.Vector4(0.30f, 0.30f, 0.31f, 0.95f));
-        ImGui.SetCursorScreenPos(rowMin + new Vector2(2f, 2f));
-        if (ImGui.Button(open ? "v##fold" : ">##fold", new Vector2(17f, 18f)))
+        ImGui.SetCursorScreenPos(rowMin + new Vector2(5f, 3f));
+        if (ImGui.Button(open ? "v##fold" : ">##fold", new Vector2(18f, 19f)))
         {
             open = !open;
             componentFoldoutStates[stateId] = open;
@@ -1317,10 +1338,10 @@ internal sealed partial class ImGuiEditorApp
         DrawTooltip(open ? "Collapse component" : "Expand component");
         ImGui.PopStyleColor(3);
 
-        float x = rowMin.X + 22f;
+        float x = rowMin.X + 29f;
         if (component != null && TryGetComponentEnabled(component, out bool enabled))
         {
-            ImGui.SetCursorScreenPos(new Vector2(x, rowMin.Y + 2f));
+            ImGui.SetCursorScreenPos(new Vector2(x, rowMin.Y + 4f));
             if (SmallCheckbox("##ComponentEnabled", ref enabled))
                 SetComponentEnabled(component, enabled);
             DrawTooltip(enabled ? "Component enabled" : "Component disabled");
@@ -1329,23 +1350,23 @@ internal sealed partial class ImGuiEditorApp
 
         if (title.Contains("Rigidbody", StringComparison.OrdinalIgnoreCase) && TryGetRigidbodyIconTexture(out var rigidbodyTextureId))
         {
-            Vector2 iconMin = new Vector2(x, rowMin.Y + 4f);
+            Vector2 iconMin = new Vector2(x, rowMin.Y + 5f);
             drawList.AddImage(rigidbodyTextureId, iconMin, iconMin + new Vector2(14f, 14f));
         }
         else
         {
-            DrawAtlasIconOrFallback(drawList, icon, new Vector2(x, rowMin.Y + 4f), 14f, ImGui.GetColorU32(UiIcon));
+            DrawAtlasIconOrFallback(drawList, icon, new Vector2(x, rowMin.Y + 5f), 14f, ImGui.GetColorU32(UiIcon));
         }
         x += 20f;
 
         float rightReserve = (scriptComponent ? 52f : 0f) + (removable ? 28f : 0f) + 8f;
         float textW = Math.Max(36f, rowMax.X - x - rightReserve);
         string displayTitle = Ellipsize(title, Math.Max(4, (int)(textW / 7.2f)));
-        drawList.AddText(new Vector2(x, rowMin.Y + 3f), ImGui.GetColorU32(UiText), displayTitle);
+        drawList.AddText(new Vector2(x, rowMin.Y + 5f), ImGui.GetColorU32(UiText), displayTitle);
 
         if (scriptComponent)
         {
-            ImGui.SetCursorScreenPos(new Vector2(rowMax.X - rightReserve + 2f, rowMin.Y + 2f));
+            ImGui.SetCursorScreenPos(new Vector2(rowMax.X - rightReserve + 2f, rowMin.Y + 4f));
             if (ImGui.SmallButton("Open"))
                 openScriptRequested = true;
             DrawTooltip("Open script");
@@ -1353,13 +1374,12 @@ internal sealed partial class ImGuiEditorApp
 
         if (removable)
         {
-            ImGui.SetCursorScreenPos(new Vector2(rowMax.X - 25f, rowMin.Y + 2f));
+            ImGui.SetCursorScreenPos(new Vector2(rowMax.X - 25f, rowMin.Y + 4f));
             if (ImGui.SmallButton("..."))
                 menuRequested = true;
             DrawTooltip("Component options");
         }
 
-        bool headerHovered = ImGui.IsMouseHoveringRect(rowMin, rowMax);
         if (headerHovered && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
         {
             if (scriptComponent)
@@ -1630,20 +1650,37 @@ internal sealed partial class ImGuiEditorApp
     private static bool ColorField(string id, ref System.Numerics.Vector3 col)
     {
         bool changed = false;
-        float w = Math.Max(40f, ImGui.GetContentRegionAvail().X - 8f);   // margen derecho
+        float w = Math.Max(54f, ImGui.GetContentRegionAvail().X - 8f);
         var preview = new System.Numerics.Vector4(col.X, col.Y, col.Z, 1f);
-        if (ImGui.ColorButton(id, preview, ImGuiColorEditFlags.None, new Vector2(w, 20f)))
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5f);
+        if (ImGui.ColorButton(id, preview, ImGuiColorEditFlags.NoTooltip | ImGuiColorEditFlags.NoDragDrop, new Vector2(w, 22f)))
             ImGui.OpenPopup(id + "pick");
+        ImGui.PopStyleVar();
         if (ImGui.BeginPopup(id + "pick"))
         {
-            ImGui.TextDisabled("Color");
+            ImGui.SetNextItemWidth(260f);
+            ImGui.TextColored(new System.Numerics.Vector4(0.84f, 0.91f, 1f, 1f), "Color");
+            ImGui.SameLine();
+            ImGui.TextDisabled("LDR");
             ImGui.Separator();
             if (ImGui.ColorPicker3(id + "wheel", ref col,
-                    ImGuiColorEditFlags.PickerHueWheel | ImGuiColorEditFlags.NoSidePreview | ImGuiColorEditFlags.NoInputs))
+                    ImGuiColorEditFlags.PickerHueWheel | ImGuiColorEditFlags.NoSidePreview | ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.NoAlpha))
                 changed = true;
             ImGui.Dummy(new Vector2(0f, 2f));
             if (DrawRgb255Sliders(id, ref col)) changed = true;
             if (DrawHexField3(id, ref col)) changed = true;
+            ImGui.TextDisabled("Swatches");
+            for (int i = 0; i < HdrSwatches.Length; i++)
+            {
+                if (i % 5 != 0) ImGui.SameLine();
+                var s = HdrSwatches[i];
+                if (ImGui.ColorButton(id + "sw" + i, new System.Numerics.Vector4(s.X, s.Y, s.Z, 1f),
+                        ImGuiColorEditFlags.NoTooltip | ImGuiColorEditFlags.NoDragDrop, new Vector2(24f, 24f)))
+                {
+                    col = s;
+                    changed = true;
+                }
+            }
             ImGui.EndPopup();
         }
         return changed;
@@ -1652,15 +1689,19 @@ internal sealed partial class ImGuiEditorApp
     private static bool ColorField4(string id, ref System.Numerics.Vector4 col)
     {
         bool changed = false;
-        float w = Math.Max(40f, ImGui.GetContentRegionAvail().X - 8f);   // margen derecho
-        if (ImGui.ColorButton(id, col, ImGuiColorEditFlags.AlphaPreviewHalf, new Vector2(w, 20f)))
+        float w = Math.Max(54f, ImGui.GetContentRegionAvail().X - 8f);
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5f);
+        if (ImGui.ColorButton(id, col, ImGuiColorEditFlags.AlphaPreviewHalf | ImGuiColorEditFlags.NoTooltip | ImGuiColorEditFlags.NoDragDrop, new Vector2(w, 22f)))
             ImGui.OpenPopup(id + "pick");
+        ImGui.PopStyleVar();
         if (ImGui.BeginPopup(id + "pick"))
         {
-            ImGui.TextDisabled("Color");
+            ImGui.TextColored(new System.Numerics.Vector4(0.84f, 0.91f, 1f, 1f), "Color");
+            ImGui.SameLine();
+            ImGui.TextDisabled("RGBA");
             ImGui.Separator();
             if (ImGui.ColorPicker4(id + "wheel", ref col,
-                    ImGuiColorEditFlags.PickerHueWheel | ImGuiColorEditFlags.NoSidePreview | ImGuiColorEditFlags.NoInputs))
+                    ImGuiColorEditFlags.PickerHueWheel | ImGuiColorEditFlags.NoSidePreview | ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf))
                 changed = true;
 
             var rgb = new System.Numerics.Vector3(col.X, col.Y, col.Z);
@@ -1672,6 +1713,18 @@ internal sealed partial class ImGuiEditorApp
             if (ImGui.SliderInt(id + "##a255", ref a, 0, 255, "A %d")) { col.W = a / 255f; changed = true; }
 
             if (DrawHexField3(id, ref rgb)) { col.X = rgb.X; col.Y = rgb.Y; col.Z = rgb.Z; changed = true; }
+            ImGui.TextDisabled("Swatches");
+            for (int i = 0; i < HdrSwatches.Length; i++)
+            {
+                if (i % 5 != 0) ImGui.SameLine();
+                var s = HdrSwatches[i];
+                if (ImGui.ColorButton(id + "sw" + i, new System.Numerics.Vector4(s.X, s.Y, s.Z, col.W),
+                        ImGuiColorEditFlags.AlphaPreviewHalf | ImGuiColorEditFlags.NoTooltip | ImGuiColorEditFlags.NoDragDrop, new Vector2(24f, 24f)))
+                {
+                    col.X = s.X; col.Y = s.Y; col.Z = s.Z;
+                    changed = true;
+                }
+            }
             ImGui.EndPopup();
         }
         return changed;
@@ -1714,20 +1767,32 @@ internal sealed partial class ImGuiEditorApp
     private static bool HdrColorField(string id, ref System.Numerics.Vector3 col, ref float intensity)
     {
         bool changed = false;
-        float w = Math.Max(40f, ImGui.GetContentRegionAvail().X - 8f);
+        float w = Math.Max(54f, ImGui.GetContentRegionAvail().X - 8f);
 
         // Preview: color final (base * intensidad), recortado a [0,1] para mostrar.
         float mul = Math.Max(0f, intensity);
         var finalPreview = new System.Numerics.Vector4(
             Math.Min(col.X * mul, 1f), Math.Min(col.Y * mul, 1f), Math.Min(col.Z * mul, 1f), 1f);
 
-        if (ImGui.ColorButton(id, finalPreview, ImGuiColorEditFlags.None, new Vector2(w, 20f)))
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5f);
+        if (ImGui.ColorButton(id, finalPreview, ImGuiColorEditFlags.NoTooltip | ImGuiColorEditFlags.NoDragDrop, new Vector2(w, 22f)))
             ImGui.OpenPopup(id + "hdr");
+        ImGui.PopStyleVar();
 
         if (ImGui.BeginPopup(id + "hdr"))
         {
-            ImGui.TextDisabled("HDR Color");
+            ImGui.TextColored(new System.Numerics.Vector4(0.84f, 0.91f, 1f, 1f), "HDR Color");
+            ImGui.SameLine();
+            ImGui.TextDisabled("color + intensity");
             ImGui.Separator();
+
+            ImGui.ColorButton(id + "previewFinal", finalPreview, ImGuiColorEditFlags.NoTooltip | ImGuiColorEditFlags.NoDragDrop, new Vector2(72f, 32f));
+            ImGui.SameLine();
+            ImGui.BeginGroup();
+            ImGui.TextDisabled("Final preview");
+            ImGui.TextDisabled($"Intensity {Math.Max(0f, intensity):0.00}x");
+            ImGui.EndGroup();
+            ImGui.Dummy(new Vector2(0f, 4f));
 
             if (ImGui.ColorPicker3(id + "wheel", ref col,
                     ImGuiColorEditFlags.PickerHueWheel | ImGuiColorEditFlags.NoSidePreview | ImGuiColorEditFlags.NoInputs))
@@ -1848,6 +1913,8 @@ internal sealed partial class ImGuiEditorApp
         mat.ShaderGraphTextures = new Dictionary<string, string>(data.ShaderGraphTextures, StringComparer.OrdinalIgnoreCase);
         mat.Roughness = Clamp01(data.Roughness);
         mat.Metallic = Clamp01(data.Metallic);
+        mat.SpecularHighlights = data.SpecularHighlights;
+        mat.EnvironmentReflections = data.EnvironmentReflections;
         mat.EmissionR = Clamp01(data.EmissionR);
         mat.EmissionG = Clamp01(data.EmissionG);
         mat.EmissionB = Clamp01(data.EmissionB);
@@ -2017,6 +2084,8 @@ internal sealed partial class ImGuiEditorApp
         ShaderGraphTextures = new Dictionary<string, string>(mat.ShaderGraphTextures, StringComparer.OrdinalIgnoreCase),
         Roughness = mat.Roughness,
         Metallic = mat.Metallic,
+        SpecularHighlights = mat.SpecularHighlights,
+        EnvironmentReflections = mat.EnvironmentReflections,
         EmissionR = mat.EmissionR,
         EmissionG = mat.EmissionG,
         EmissionB = mat.EmissionB,
@@ -2039,6 +2108,8 @@ internal sealed partial class ImGuiEditorApp
         ShaderGraphTextures = new Dictionary<string, string>(data.ShaderGraphTextures, StringComparer.OrdinalIgnoreCase),
         Roughness = data.Roughness,
         Metallic = data.Metallic,
+        SpecularHighlights = data.SpecularHighlights,
+        EnvironmentReflections = data.EnvironmentReflections,
         EmissionR = data.EmissionR,
         EmissionG = data.EmissionG,
         EmissionB = data.EmissionB,
@@ -2141,6 +2212,22 @@ internal sealed partial class ImGuiEditorApp
 
             float roughness = data.Roughness;
             if (DrawUnitySliderFloat("Roughness", ref roughness, 0f, 1f)) { data.Roughness = roughness; changed = true; }
+
+            FieldRow("Specular Highlights");
+            bool specularHighlights = data.SpecularHighlights;
+            if (SmallCheckbox("##matasset_specular_highlights", ref specularHighlights))
+            {
+                data.SpecularHighlights = specularHighlights;
+                changed = true;
+            }
+
+            FieldRow("Environment Reflections");
+            bool environmentReflections = data.EnvironmentReflections;
+            if (SmallCheckbox("##matasset_environment_reflections", ref environmentReflections))
+            {
+                data.EnvironmentReflections = environmentReflections;
+                changed = true;
+            }
             ImGui.Dummy(new Vector2(0f, 3f));
         }
 

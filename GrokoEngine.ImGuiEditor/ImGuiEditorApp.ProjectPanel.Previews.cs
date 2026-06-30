@@ -1648,9 +1648,14 @@ private bool EnsureProjectAssetDiskPreview(string assetPath, out string previewP
                 if (File.GetLastWriteTimeUtc(previewPath) >= stamp)
                     return true;
             }
-            catch
+            catch (Exception ex)
             {
-                try { File.Delete(previewPath); } catch { }
+                GrokoEngine.Debug.LogWarning($"No se pudo validar preview cache '{previewPath}': {ex.Message}");
+                try { File.Delete(previewPath); }
+                catch (Exception deleteEx)
+                {
+                    GrokoEngine.Debug.LogWarning($"No se pudo borrar preview cache corrupto '{previewPath}': {deleteEx.Message}");
+                }
             }
         }
 
@@ -1669,7 +1674,10 @@ private bool EnsureProjectAssetDiskPreview(string assetPath, out string previewP
                 if (File.Exists(tempPath))
                     File.Delete(tempPath);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                GrokoEngine.Debug.LogWarning($"No se pudo borrar preview temporal '{tempPath}': {ex.Message}");
+            }
 
             previewBitmap.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
             File.SetLastWriteTimeUtc(tempPath, stamp);

@@ -54,7 +54,10 @@ internal sealed partial class ImGuiEditorApp
         Normals,
         Roughness,
         Metallic,
-        Shadows
+        Shadows,
+        ShadowCascades,
+        IblSpecular,
+        MaterialHealth
     }
 
     private enum SceneGridAxis
@@ -208,6 +211,8 @@ internal sealed partial class ImGuiEditorApp
         public string ShadowQuality { get; set; } = nameof(GrokoEngine.ImGuiEditor.ShadowQuality.High);
         public string ColorSpace { get; set; } = nameof(GrokoEngine.ImGuiEditor.ColorSpace.Linear);
         public bool ImageBasedLighting { get; set; } = true;
+        public float IblDiffuseStrength { get; set; } = 0.65f;
+        public float IblSpecularStrength { get; set; } = 0f;
         public string HdriPath { get; set; } = "";
         public bool ConsoleShowInfo { get; set; } = true;
         public bool ConsoleShowWarnings { get; set; } = true;

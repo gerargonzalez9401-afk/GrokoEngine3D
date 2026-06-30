@@ -50,7 +50,7 @@ internal sealed partial class SceneViewportRenderer
                 ? new Vector2(mesh.UVs[ui], mesh.UVs[ui + 1])
                 : new Vector2(0.5f, 0.5f);
 
-            verts[actual++] = new SolidVertex(pos, norm, Vector4.One, uv, new Vector4(0f, 0.5f, 0f, 0f), Vector4.Zero);
+            verts[actual++] = new SolidVertex(pos, norm, Vector4.One, uv, new Vector4(0f, 0.5f, 1f, 1f), Vector4.Zero);
         }
 
         if (actual <= 0)
@@ -114,7 +114,7 @@ internal sealed partial class SceneViewportRenderer
             var indices = new Vector4(mesh.BoneIndices[bi], mesh.BoneIndices[bi + 1], mesh.BoneIndices[bi + 2], mesh.BoneIndices[bi + 3]);
             var weights = new Vector4(mesh.BoneWeights[bi], mesh.BoneWeights[bi + 1], mesh.BoneWeights[bi + 2], mesh.BoneWeights[bi + 3]);
 
-            verts[actual++] = new SkinnedVertex(pos, norm, Vector4.One, uv, new Vector4(0f, 0.5f, 0f, 0f), Vector4.Zero, indices, weights);
+            verts[actual++] = new SkinnedVertex(pos, norm, Vector4.One, uv, new Vector4(0f, 0.5f, 1f, 1f), Vector4.Zero, indices, weights);
         }
 
         if (actual <= 0)

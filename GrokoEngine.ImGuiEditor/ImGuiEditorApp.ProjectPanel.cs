@@ -799,7 +799,10 @@ internal sealed partial class ImGuiEditorApp
                 return true;
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            GrokoEngine.Debug.LogWarning($"No se pudo leer mesh de prefab '{prefabPath}': {ex.Message}");
+        }
         return false;
     }
 

@@ -13,6 +13,9 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        EditorDiagnostics.InstallGlobalExceptionHandlers();
+        EditorDiagnostics.Log("Editor process starting.");
+
         // ── Game Mode ──
         // Si hay un game.json junto al ejecutable, este binario ES un juego exportado:
         // arranca a pantalla completa en Play Mode, sin UI de editor ni splash.
@@ -27,6 +30,7 @@ internal static class Program
             }
             catch (Exception ex)
             {
+                EditorDiagnostics.LogException(ex, "Game mode startup failed", true);
                 Console.Error.WriteLine("Error al iniciar el juego: " + ex);
             }
             return;
@@ -38,10 +42,12 @@ internal static class Program
 
         if (string.IsNullOrWhiteSpace(projectPath) || !Directory.Exists(projectPath))
         {
+            EditorDiagnostics.Log($"Invalid project path: '{projectPath}'", "Error");
             Console.Error.WriteLine("Uso: GrokoEngine.ImGuiEditor <ruta-del-proyecto>");
             return;
         }
 
+        EditorDiagnostics.Log($"Opening project: {Path.GetFullPath(projectPath)}");
         SaveLastProject(projectPath);
         ShowSplash(projectPath);
         try
@@ -49,9 +55,15 @@ internal static class Program
             using var editor = new ImGuiEditorApp(projectPath);
             editor.Run();
         }
+        catch (Exception ex)
+        {
+            EditorDiagnostics.LogException(ex, "Editor main loop failed", true);
+            Console.Error.WriteLine("Error al iniciar el editor: " + ex);
+        }
         finally
         {
             CloseSplash();
+            EditorDiagnostics.Log("Editor process finished.");
         }
     }
 
@@ -105,8 +117,9 @@ internal static class Program
         {
             File.WriteAllText(Path.Combine(AppContext.BaseDirectory, ".last_project"), Path.GetFullPath(projectPath));
         }
-        catch
+        catch (Exception ex)
         {
+            EditorDiagnostics.Log($"Could not save last project path: {ex.Message}", "Warning");
         }
     }
 
@@ -148,8 +161,9 @@ internal static class Program
                 else
                     Apply();
             }
-            catch
+            catch (Exception ex)
             {
+                EditorDiagnostics.Log($"Splash update failed: {ex.Message}", "Warning");
             }
         }
 
@@ -165,8 +179,9 @@ internal static class Program
                     else
                         target.Close();
                 }
-                catch
+                catch (Exception ex)
                 {
+                    EditorDiagnostics.Log($"Splash close failed: {ex.Message}", "Warning");
                 }
             }
 

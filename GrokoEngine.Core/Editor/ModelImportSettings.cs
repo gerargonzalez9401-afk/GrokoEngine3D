@@ -116,7 +116,10 @@ namespace GrokoEngine
                     return s;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[ModelImportSettings] No se pudieron cargar ajustes para '{modelPath}': {ex.Message}");
+            }
             return new ModelImportSettings();
         }
 
@@ -129,7 +132,10 @@ namespace GrokoEngine
                 File.WriteAllText(p, JsonSerializer.Serialize(settings, Options));
                 _cache[p] = (settings, File.GetLastWriteTimeUtc(p)); // mantén el caché coherente
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[ModelImportSettings] No se pudieron guardar ajustes para '{modelPath}': {ex.Message}");
+            }
         }
 
         // Escala efectiva aplicada al importar: ScaleFactor × (ConvertUnits ? escala-a-metros : 1).

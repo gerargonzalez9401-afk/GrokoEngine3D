@@ -163,7 +163,10 @@ namespace GrokoEngine
         {
             data.Normalize();
             try { File.WriteAllText(path, JsonSerializer.Serialize(data, Options)); }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AvatarAsset] No se pudo guardar '{path}': {ex.Message}");
+            }
         }
     }
 }
