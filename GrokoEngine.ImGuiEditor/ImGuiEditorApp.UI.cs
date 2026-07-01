@@ -402,7 +402,10 @@ internal sealed partial class ImGuiEditorApp
         string id = forEvents ? canvas.EventCameraId : canvas.RenderCameraId;
         string name = forEvents ? canvas.EventCameraName : canvas.RenderCameraName;
         var go = FindCameraObject(id, name);
-        return go != null ? ComputeGameCameraState(go) : null;
+        // Aspect por defecto: esta cámara se usa para posicionar el Canvas en mundo, no
+        // para construir la matriz final de la Game view (esa sí usa el aspect real del
+        // viewport en TryWorldToScreen). 16:9 es una aproximación razonable para PhysicalCamera/FOV axis aquí.
+        return go != null ? ComputeGameCameraState(go, 16f / 9f) : null;
     }
 
     private GameObject? FindCameraObject(string? id, string? name)

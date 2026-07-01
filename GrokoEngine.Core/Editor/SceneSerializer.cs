@@ -290,10 +290,11 @@ namespace GrokoEngine
                     data.Fields["NearClip"] = cam.NearClip.ToString(CultureInfo.InvariantCulture);
                     data.Fields["FarClip"] = cam.FarClip.ToString(CultureInfo.InvariantCulture);
                     data.Fields["ClearFlags"] = cam.ClearFlags.ToString();
-                    data.Fields["RenderType"] = ((int)cam.RenderType).ToString(CultureInfo.InvariantCulture);
                     data.Fields["Projection"] = ((int)cam.Projection).ToString(CultureInfo.InvariantCulture);
                     data.Fields["FieldOfViewAxis"] = ((int)cam.FieldOfViewAxis).ToString(CultureInfo.InvariantCulture);
                     data.Fields["PhysicalCamera"] = cam.PhysicalCamera.ToString();
+                    data.Fields["FocalLengthMm"] = cam.FocalLengthMm.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["SensorHeightMm"] = cam.SensorHeightMm.ToString(CultureInfo.InvariantCulture);
                     data.Fields["OrthographicSize"] = cam.OrthographicSize.ToString(CultureInfo.InvariantCulture);
                     data.Fields["BackgroundR"] = cam.BackgroundR.ToString(CultureInfo.InvariantCulture);
                     data.Fields["BackgroundG"] = cam.BackgroundG.ToString(CultureInfo.InvariantCulture);
@@ -312,12 +313,6 @@ namespace GrokoEngine
                     data.Fields["OpaqueTexture"] = ((int)cam.OpaqueTexture).ToString(CultureInfo.InvariantCulture);
                     data.Fields["DepthTexture"] = ((int)cam.DepthTexture).ToString(CultureInfo.InvariantCulture);
                     data.Fields["CullingMask"] = cam.CullingMask;
-                    data.Fields["VolumeUpdateMode"] = ((int)cam.VolumeUpdateMode).ToString(CultureInfo.InvariantCulture);
-                    data.Fields["VolumeMask"] = cam.VolumeMask;
-                    data.Fields["VolumeTrigger"] = cam.VolumeTrigger;
-                    data.Fields["OutputTarget"] = cam.OutputTarget;
-                    data.Fields["TargetDisplay"] = cam.TargetDisplay.ToString(CultureInfo.InvariantCulture);
-                    data.Fields["AllowHDR"] = cam.AllowHDR.ToString();
                     return data;
                 case DirectionalLight dl:
                     data.Fields["DirectionX"] = dl.Direction.X.ToString(CultureInfo.InvariantCulture);
@@ -811,10 +806,11 @@ namespace GrokoEngine
                 cam.FarClip = GetFloat(fields, "FarClip", cam.FarClip);
                 if (fields.TryGetValue("ClearFlags", out var clearFlags) && Enum.TryParse(clearFlags, out CameraClearFlags parsedClearFlags))
                     cam.ClearFlags = parsedClearFlags;
-                cam.RenderType = (CameraRenderType)GetInt(fields, "RenderType", (int)cam.RenderType);
                 cam.Projection = (CameraProjection)GetInt(fields, "Projection", (int)cam.Projection);
                 cam.FieldOfViewAxis = (CameraFieldOfViewAxis)GetInt(fields, "FieldOfViewAxis", (int)cam.FieldOfViewAxis);
                 cam.PhysicalCamera = GetBool(fields, "PhysicalCamera", cam.PhysicalCamera);
+                cam.FocalLengthMm = GetFloat(fields, "FocalLengthMm", cam.FocalLengthMm);
+                cam.SensorHeightMm = GetFloat(fields, "SensorHeightMm", cam.SensorHeightMm);
                 cam.OrthographicSize = GetFloat(fields, "OrthographicSize", cam.OrthographicSize);
                 cam.BackgroundR = GetFloat(fields, "BackgroundR", cam.BackgroundR);
                 cam.BackgroundG = GetFloat(fields, "BackgroundG", cam.BackgroundG);
@@ -833,12 +829,6 @@ namespace GrokoEngine
                 cam.OpaqueTexture = (CameraTextureMode)GetInt(fields, "OpaqueTexture", (int)cam.OpaqueTexture);
                 cam.DepthTexture = (CameraTextureMode)GetInt(fields, "DepthTexture", (int)cam.DepthTexture);
                 cam.CullingMask = fields.TryGetValue("CullingMask", out var cullingMask) && !string.IsNullOrWhiteSpace(cullingMask) ? cullingMask : cam.CullingMask;
-                cam.VolumeUpdateMode = (CameraVolumeUpdateMode)GetInt(fields, "VolumeUpdateMode", (int)cam.VolumeUpdateMode);
-                cam.VolumeMask = fields.TryGetValue("VolumeMask", out var volumeMask) && !string.IsNullOrWhiteSpace(volumeMask) ? volumeMask : cam.VolumeMask;
-                cam.VolumeTrigger = fields.TryGetValue("VolumeTrigger", out var volumeTrigger) ? volumeTrigger : cam.VolumeTrigger;
-                cam.OutputTarget = fields.TryGetValue("OutputTarget", out var outputTarget) && !string.IsNullOrWhiteSpace(outputTarget) ? outputTarget : cam.OutputTarget;
-                cam.TargetDisplay = GetInt(fields, "TargetDisplay", cam.TargetDisplay);
-                cam.AllowHDR = GetBool(fields, "AllowHDR", cam.AllowHDR);
             }
 
             if (comp is Animator animator)

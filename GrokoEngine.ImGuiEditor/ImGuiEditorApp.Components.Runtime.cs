@@ -61,6 +61,7 @@ private void EnterPlayMode()
         ResetScriptStartState(objects);
         BepuBackend.Reset(); // si el backend Bepu está activo, se reconstruye fresco para esta sesión de Play
         RuntimeScene.SetContext(objects, physicsEngine, scriptCompiler);
+        SceneManager.CurrentScenePath = scenePath;
         // Awake corre AHORA (en Play, con RuntimeScene listo), no al cargar la escena. Así los
         // Awake que usan Instantiate/Destroy/Physics.Raycast funcionan, y los singletons fijan su
         // Instance al entrar en Play (no al cargar en el editor).
@@ -140,6 +141,14 @@ private void StepRuntime(double deltaTime)
             long runtimeSceneStart = EditorProfiler.Timestamp();
             RuntimeScene.Tick(deltaTime);
             profiler.SampleRuntimeScene(EditorProfiler.ElapsedMs(runtimeSceneStart));
+
+            // SceneManager.LoadScene(...) desde un script solo marca la carga; se resuelve aquí,
+            // una vez por frame, tras el resto del loop de Play (igual que Unity difiere el swap).
+            if (SceneManager.RequestedLoadPath != null)
+            {
+                SceneManager.ProcessPendingLoad(objects, physicsEngine, scriptCompiler);
+                selection.Clear();
+            }
         }
         catch (Exception ex)
         {
@@ -186,6 +195,8 @@ private void RestorePlayModeSnapshot(string message)
         // Fuera de Play volvemos al modo normal del GC (no diferir, no acumular memoria).
         System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.Interactive;
         RuntimeScene.ClearContext();
+        SceneManager.CurrentScenePath = null;
+        SceneManager.CancelPendingLoad();
         if (!string.IsNullOrWhiteSpace(playModeSnapshot))
         {
             // Deserializa PRIMERO en una lista temporal. Si la reconstrucción falla (p.ej. un

@@ -2384,15 +2384,22 @@ internal sealed partial class ImGuiEditorApp
 
     private void DrawCameraInspector(Camera cam)
     {
-        DrawEnumCombo("Render Type", cam.RenderType, v => cam.RenderType = v);
-
         if (SectionHeader("Projection"))
         {
             DrawEnumCombo("Projection", cam.Projection, v => cam.Projection = v);
             if (cam.Projection == CameraProjection.Perspective)
             {
-                DrawEnumCombo("Field of View Axis", cam.FieldOfViewAxis, v => cam.FieldOfViewAxis = v);
-                DrawFloat("Field of View", cam.FOV, v => cam.FOV = v, 0.5f, 1f, 179f);
+                DrawCheckRow("Physical Camera", cam.PhysicalCamera, v => cam.PhysicalCamera = v);
+                if (cam.PhysicalCamera)
+                {
+                    DrawFloat("Focal Length (mm)", cam.FocalLengthMm, v => cam.FocalLengthMm = v, 0.5f, 1f, 1000f);
+                    DrawFloat("Sensor Height (mm)", cam.SensorHeightMm, v => cam.SensorHeightMm = v, 0.2f, 1f, 200f);
+                }
+                else
+                {
+                    DrawEnumCombo("Field of View Axis", cam.FieldOfViewAxis, v => cam.FieldOfViewAxis = v);
+                    DrawFloat("Field of View", cam.FOV, v => cam.FOV = v, 0.5f, 1f, 179f);
+                }
             }
             else
             {
@@ -2401,7 +2408,6 @@ internal sealed partial class ImGuiEditorApp
 
             DrawFloat("Near", cam.NearClip, v => cam.NearClip = v, 0.01f, 0.001f, 100f);
             DrawFloat("Far", cam.FarClip, v => cam.FarClip = v, 1f, 1f, 100000f);
-            DrawCheckRow("Physical Camera", cam.PhysicalCamera, v => cam.PhysicalCamera = v);
         }
 
         if (SectionHeader("Rendering"))
@@ -2441,11 +2447,6 @@ internal sealed partial class ImGuiEditorApp
             DrawCheckRow("Frustum Culling", cam.FrustumCulling, v => cam.FrustumCulling = v);
         }
 
-        if (SectionHeader("Stack"))
-        {
-            DrawReadOnlyComboRow("Stack", cam.RenderType == CameraRenderType.Base ? "No overlay cameras" : "Overlay camera");
-        }
-
         if (SectionHeader("Environment"))
         {
             DrawEnumCombo("Background Type", cam.ClearFlags, v => cam.ClearFlags = v);
@@ -2461,17 +2462,6 @@ internal sealed partial class ImGuiEditorApp
                     cam.BackgroundA = Math.Clamp(background.W, 0f, 1f);
                 }
             }
-
-            DrawEnumCombo("Update Mode", cam.VolumeUpdateMode, v => cam.VolumeUpdateMode = v);
-            DrawCameraVolumeMaskCombo(cam);
-            DrawString("Volume Trigger", cam.VolumeTrigger, v => cam.VolumeTrigger = v);
-        }
-
-        if (SectionHeader("Output"))
-        {
-            DrawString("Output Target", cam.OutputTarget, v => cam.OutputTarget = v);
-            DrawInt("Target Display", cam.TargetDisplay, v => cam.TargetDisplay = v, 1f, 0, 7);
-            DrawCheckRow("Allow HDR", cam.AllowHDR, v => cam.AllowHDR = v);
         }
     }
 
@@ -2497,17 +2487,6 @@ internal sealed partial class ImGuiEditorApp
         ImGui.SetNextItemWidth(-1f);
         if (ImGui.Combo("##CameraCullingMask", ref index, masks, masks.Length))
             cam.CullingMask = masks[index];
-    }
-
-    private static void DrawCameraVolumeMaskCombo(Camera cam)
-    {
-        string[] masks = { "Default", "Everything", "Nothing" };
-        int index = Array.IndexOf(masks, cam.VolumeMask);
-        if (index < 0) index = 0;
-        FieldRow("Volume Mask");
-        ImGui.SetNextItemWidth(-1f);
-        if (ImGui.Combo("##CameraVolumeMask", ref index, masks, masks.Length))
-            cam.VolumeMask = masks[index];
     }
 
     private static void DrawFloat(string label, float value, Action<float> set, float speed, float min, float max)

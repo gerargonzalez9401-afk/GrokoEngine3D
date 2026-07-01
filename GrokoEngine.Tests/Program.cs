@@ -50,6 +50,19 @@ internal static class Program
             ("Animator ignores attached mesh children as bones", AnimatorIgnoresAttachedMeshChildrenAsBones),
             ("BlendTree 2D weights favor matching direction", BlendTree2DWeightsFavorMatchingDirection),
             ("BlendTree 1D weights interpolate and clamp", BlendTree1DWeightsInterpolateAndClamp),
+            ("Animator any state transition fires from trigger", AnimatorAnyStateTransitionFiresFromTrigger),
+            ("Animator transition offset starts state mid clip", AnimatorTransitionOffsetStartsStateMidClip),
+            ("Animator interruption switches to higher priority transition mid fade", AnimatorInterruptionSwitchesStateMidFade),
+            ("PhysicsEngine fires trigger exit when other object destroyed", PhysicsEngineFiresTriggerExitWhenOtherObjectDestroyed),
+            ("PhysicsEngine fires trigger exit when collider disabled mid play", PhysicsEngineFiresTriggerExitWhenColliderDisabledMidPlay),
+            ("Terrain samples height bilinear", TerrainSamplesHeightBilinear),
+            ("Terrain resolution resize preserves splat and bumps version", TerrainResolutionResizePreservesSplatAndBumpsVersion),
+            ("TerrainCollider samples height and bounds", TerrainColliderSamplesHeightAndBounds),
+            ("TerrainBrush raise increases height with falloff", TerrainBrushRaiseIncreasesHeightWithFalloff),
+            ("TerrainBrush flatten converges toward captured height", TerrainBrushFlattenConvergesTowardCapturedHeight),
+            ("TerrainBrush paint increases active layer and reduces others", TerrainBrushPaintIncreasesActiveLayerAndReducesOthers),
+            ("SceneManager resolves scene path by name", SceneManagerResolveScenePathFindsSceneByName),
+            ("SceneManager LoadScene swaps roots and preserves survivors", SceneManagerLoadSceneSwapsRootsAndPreservesSurvivors),
             ("EditorSceneGraph attach moves existing object", EditorSceneGraphAttachMovesExistingObject),
             ("EditorSceneGraph rejects cyclic attach without detaching", EditorSceneGraphRejectsCyclicAttachWithoutDetaching),
             ("SceneSerializer loads child only once", SceneSerializerLoadsChildOnlyOnce),
@@ -975,6 +988,184 @@ internal static class Program
         AssertEqual(3, animator.GetRuntimeInfo().BlendChildCount, "runtime blend child count");
     }
 
+    private static string WriteTestClip(string dir, string fileName, float duration, bool loop)
+    {
+        string path = Path.Combine(dir, fileName);
+        AnimationClipAsset.Save(path, new AnimationClipData
+        {
+            Loop = loop,
+            Keyframes =
+            {
+                new AnimationKeyframe { Time = 0f, PosX = 0f },
+                new AnimationKeyframe { Time = duration, PosX = 1f }
+            }
+        });
+        return path;
+    }
+
+    private static void AnimatorAnyStateTransitionFiresFromTrigger()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string idlePath = WriteTestClip(dir, "Idle.anim", 1f, true);
+        string jumpPath = WriteTestClip(dir, "Jump.anim", 2f, false);
+
+        var controller = new AnimatorControllerData
+        {
+            Name = "Char",
+            DefaultState = "Idle",
+            States =
+            {
+                new AnimatorStateData { Name = "Idle", ClipPath = idlePath, Loop = true },
+                new AnimatorStateData { Name = "Jump", ClipPath = jumpPath, Loop = false }
+            },
+            Parameters = { new AnimatorParameter { Name = "DoJump", Type = AnimatorParameterType.Trigger } },
+            AnyStateTransitions =
+            {
+                new AnimatorTransition
+                {
+                    ToState = "Jump",
+                    HasExitTime = false,
+                    FixedDuration = true,
+                    TransitionDuration = 0f,
+                    Conditions = { new AnimatorCondition { Parameter = "DoJump", Mode = AnimatorConditionMode.If } }
+                }
+            }
+        };
+        string controllerPath = Path.Combine(dir, "Char.controller");
+        AnimatorControllerAsset.Save(controllerPath, controller);
+
+        var go = new GameObject { Name = "Char" };
+        var animator = go.AddComponent<Animator>();
+        animator.ControllerPath = controllerPath;
+        animator.Start();
+        animator.Update(0.016);
+        AssertTrue(animator.CurrentState != "Jump", "not jumping before trigger");
+
+        animator.SetTrigger("DoJump");
+        animator.Update(0.016);
+
+        AssertEqual("Jump", animator.CurrentState, "any state transition switches to Jump on trigger");
+    }
+
+    private static void AnimatorTransitionOffsetStartsStateMidClip()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string idlePath = WriteTestClip(dir, "Idle.anim", 1f, true);
+        string runPath = WriteTestClip(dir, "Run.anim", 4f, true);
+
+        var controller = new AnimatorControllerData
+        {
+            Name = "Char2",
+            DefaultState = "Idle",
+            States =
+            {
+                new AnimatorStateData
+                {
+                    Name = "Idle",
+                    ClipPath = idlePath,
+                    Loop = true,
+                    Transitions =
+                    {
+                        new AnimatorTransition
+                        {
+                            ToState = "Run",
+                            HasExitTime = false,
+                            FixedDuration = true,
+                            TransitionDuration = 0f,
+                            TransitionOffset = 0.5f,
+                            Conditions = { new AnimatorCondition { Parameter = "Go", Mode = AnimatorConditionMode.If } }
+                        }
+                    }
+                },
+                new AnimatorStateData { Name = "Run", ClipPath = runPath, Loop = true }
+            },
+            Parameters = { new AnimatorParameter { Name = "Go", Type = AnimatorParameterType.Bool } }
+        };
+        string controllerPath = Path.Combine(dir, "Char2.controller");
+        AnimatorControllerAsset.Save(controllerPath, controller);
+
+        var go = new GameObject { Name = "Char2" };
+        var animator = go.AddComponent<Animator>();
+        animator.ControllerPath = controllerPath;
+        animator.Start();
+
+        animator.SetBool("Go", true);
+        animator.Update(0.016);
+
+        AssertEqual("Run", animator.CurrentState, "transition offset test enters Run state");
+        AssertNear(2f, animator.Time, "transition offset starts Run at 50% of its 4s duration");
+    }
+
+    private static void AnimatorInterruptionSwitchesStateMidFade()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string aPath = WriteTestClip(dir, "A.anim", 1f, true);
+        string bPath = WriteTestClip(dir, "B.anim", 1f, true);
+        string cPath = WriteTestClip(dir, "C.anim", 1f, true);
+
+        var controller = new AnimatorControllerData
+        {
+            Name = "Char3",
+            DefaultState = "A",
+            States =
+            {
+                new AnimatorStateData
+                {
+                    Name = "A",
+                    ClipPath = aPath,
+                    Loop = true,
+                    Transitions =
+                    {
+                        new AnimatorTransition
+                        {
+                            ToState = "B",
+                            HasExitTime = false,
+                            FixedDuration = true,
+                            TransitionDuration = 1f, // fade largo a propósito: sigue "en curso" al siguiente Update
+                            Interruption = AnimatorInterruptionSource.CurrentState,
+                            Conditions = { new AnimatorCondition { Parameter = "ToB", Mode = AnimatorConditionMode.If } }
+                        },
+                        new AnimatorTransition
+                        {
+                            ToState = "C",
+                            HasExitTime = false,
+                            FixedDuration = true,
+                            TransitionDuration = 0f,
+                            Conditions = { new AnimatorCondition { Parameter = "ToC", Mode = AnimatorConditionMode.If } }
+                        }
+                    }
+                },
+                new AnimatorStateData { Name = "B", ClipPath = bPath, Loop = true },
+                new AnimatorStateData { Name = "C", ClipPath = cPath, Loop = true }
+            },
+            Parameters =
+            {
+                new AnimatorParameter { Name = "ToB", Type = AnimatorParameterType.Trigger },
+                new AnimatorParameter { Name = "ToC", Type = AnimatorParameterType.Trigger }
+            }
+        };
+        string controllerPath = Path.Combine(dir, "Char3.controller");
+        AnimatorControllerAsset.Save(controllerPath, controller);
+
+        var go = new GameObject { Name = "Char3" };
+        var animator = go.AddComponent<Animator>();
+        animator.ControllerPath = controllerPath;
+        animator.Start();
+
+        animator.SetTrigger("ToB");
+        animator.Update(0.016);
+        AssertEqual("B", animator.CurrentState, "first transition enters B");
+
+        // Mientras el fade A->B sigue en curso, una transición del estado ABANDONADO (A) con
+        // Interruption=CurrentState debe poder interrumpirlo y saltar directo a C.
+        animator.SetTrigger("ToC");
+        animator.Update(0.016);
+        AssertEqual("C", animator.CurrentState, "interruption from abandoned state jumps to C mid fade");
+    }
+
     private static void AnimatorIgnoresAttachedMeshChildrenAsBones()
     {
         var player = new GameObject { Name = "Player" };
@@ -1704,6 +1895,213 @@ internal static class Program
 
         AssertEqual(1, sensorEvents.TriggerExitCount, "trigger exit sensor");
         AssertEqual(1, playerEvents.TriggerExitCount, "trigger exit player");
+    }
+
+    private static void PhysicsEngineFiresTriggerExitWhenOtherObjectDestroyed()
+    {
+        var physics = new PhysicsEngine();
+        var sensor = new GameObject { Name = "Sensor" };
+        var sensorCollider = sensor.AddComponent<BoxCollider>();
+        sensorCollider.IsTrigger = true;
+        var sensorEvents = sensor.AddComponent<PhysicsEventRecorder>();
+
+        var player = new GameObject { Name = "Player" };
+        player.PosX = 0.5f;
+        player.AddComponent<BoxCollider>();
+
+        var roots = new List<GameObject> { sensor, player };
+        physics.Step(roots, 0.016);
+        AssertEqual(1, sensorEvents.TriggerEnterCount, "sanity: trigger enter before destroy");
+
+        // "Destruir" a player: ya no aparece en la lista de roots que recibe Step (igual que lo
+        // vería el motor tras RuntimeScene.Destroy, que quita el GameObject de la escena).
+        var rootsAfterDestroy = new List<GameObject> { sensor };
+        physics.Step(rootsAfterDestroy, 0.016);
+
+        AssertEqual(1, sensorEvents.TriggerExitCount, "trigger exit fires when the other object is destroyed mid-overlap");
+    }
+
+    private static void PhysicsEngineFiresTriggerExitWhenColliderDisabledMidPlay()
+    {
+        var physics = new PhysicsEngine();
+        var sensor = new GameObject { Name = "Sensor" };
+        var sensorCollider = sensor.AddComponent<BoxCollider>();
+        sensorCollider.IsTrigger = true;
+        var sensorEvents = sensor.AddComponent<PhysicsEventRecorder>();
+
+        var player = new GameObject { Name = "Player" };
+        player.PosX = 0.5f;
+        var playerCollider = player.AddComponent<BoxCollider>();
+        var playerEvents = player.AddComponent<PhysicsEventRecorder>();
+
+        var roots = new List<GameObject> { sensor, player };
+        physics.Step(roots, 0.016);
+        AssertEqual(1, sensorEvents.TriggerEnterCount, "sanity: trigger enter before disabling collider");
+
+        playerCollider.Enabled = false;
+        physics.Step(roots, 0.016);
+
+        AssertEqual(1, sensorEvents.TriggerExitCount, "sensor gets trigger exit when the other collider is disabled mid-play");
+        AssertEqual(1, playerEvents.TriggerExitCount, "disabled collider's own object also gets trigger exit");
+    }
+
+    private static void TerrainSamplesHeightBilinear()
+    {
+        var terrain = new Terrain { Resolution = 3, SizeX = 2f, SizeZ = 2f, HeightScale = 1f };
+        for (int i = 0; i < terrain.Heightmap.Length; i++) terrain.Heightmap[i] = 0f;
+        terrain.Heightmap[4] = 2f; // centro (x=1,z=1)
+
+        AssertNear(2f, terrain.GetHeight(1, 1), "exact grid height sample");
+        AssertNear(0f, terrain.GetHeightLocal(-1f, -1f), "corner height (local -1,-1)");
+        AssertNear(2f, terrain.GetHeightLocal(0f, 0f), "center height (local 0,0) matches sculpted peak");
+    }
+
+    private static void TerrainResolutionResizePreservesSplatAndBumpsVersion()
+    {
+        var terrain = new Terrain();
+        int v0 = terrain.Version, sv0 = terrain.SplatVersion;
+
+        terrain.Resolution = 65;
+
+        AssertEqual(65 * 65, terrain.Heightmap.Length, "heightmap resized to new resolution");
+        AssertEqual(65 * 65 * 4, terrain.SplatMap.Length, "splat map resized to new resolution");
+        AssertTrue(terrain.Version > v0, "resolution change bumps Version");
+        AssertTrue(terrain.SplatVersion > sv0, "resolution change bumps SplatVersion");
+        AssertEqual(255, terrain.SplatMap[0], "default splat still layer0=255 after resize");
+    }
+
+    private static void TerrainColliderSamplesHeightAndBounds()
+    {
+        var go = new GameObject { Name = "Ground" };
+        go.PosX = 10f; go.PosY = 5f; go.PosZ = -3f;
+        var terrain = go.AddComponent<Terrain>();
+        terrain.Resolution = 3;
+        terrain.SizeX = 4f; terrain.SizeZ = 4f; terrain.HeightScale = 2f;
+        for (int i = 0; i < terrain.Heightmap.Length; i++) terrain.Heightmap[i] = 0f;
+        terrain.Heightmap[4] = 1f; // centro (x=1,z=1) a maxima altura
+
+        var collider = go.AddComponent<TerrainCollider>();
+
+        float centerWorldHeight = collider.SampleHeight(go.PosX, go.PosZ);
+        AssertNear(go.PosY + 2f, centerWorldHeight, "terrain collider samples world height at the sculpted peak");
+
+        var bounds = collider.GetBounds();
+        AssertNear(go.PosX - 2f, bounds.Min.X, "terrain bounds min x from SizeX");
+        AssertNear(go.PosX + 2f, bounds.Max.X, "terrain bounds max x from SizeX");
+        AssertTrue(bounds.Max.Y >= go.PosY + 2f - 0.001f, "terrain bounds cover the sculpted peak height");
+    }
+
+    private static void TerrainBrushRaiseIncreasesHeightWithFalloff()
+    {
+        var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
+        float? flatten = null;
+        bool changed = TerrainBrush.ApplySculpt(terrain, TerrainBrushTool.Raise, 0f, 0f, 2f, 10f, 1f, 1, ref flatten);
+
+        AssertTrue(changed, "raise brush reports a change");
+        AssertTrue(terrain.Heightmap[4 * 9 + 4] > 0f, "center cell raised");
+        AssertNear(0f, terrain.Heightmap[0], "corner cell far outside brush radius stays unchanged");
+    }
+
+    private static void TerrainBrushFlattenConvergesTowardCapturedHeight()
+    {
+        var terrain = new Terrain { Resolution = 5, SizeX = 4f, SizeZ = 4f };
+        terrain.Heightmap[2 * 5 + 2] = 1f; // centro: sera el objetivo capturado por Flatten
+        int neighborIndex = 2 * 5 + 3;
+        terrain.Heightmap[neighborIndex] = -1f;
+
+        float? flatten = null;
+        for (int i = 0; i < 60; i++)
+            TerrainBrush.ApplySculpt(terrain, TerrainBrushTool.Flatten, 0f, 0f, 3f, 2f, 0.1f, 0, ref flatten);
+
+        AssertTrue(flatten.HasValue, "flatten captures a target height on first application");
+        AssertNear(1f, flatten!.Value, "captured flatten target is the original center height");
+        AssertNear(1f, terrain.Heightmap[neighborIndex], "neighbor cell converges toward the flatten target", 0.05f);
+    }
+
+    private static void TerrainBrushPaintIncreasesActiveLayerAndReducesOthers()
+    {
+        var terrain = new Terrain { Resolution = 5, SizeX = 4f, SizeZ = 4f };
+        int pixel = (2 * 5 + 2) * 4;
+        terrain.SplatMap[pixel + 0] = 255;
+        terrain.SplatMap[pixel + 1] = 0;
+
+        bool changed = TerrainBrush.ApplyPaint(terrain, activeLayer: 1, localX: 0f, localZ: 0f, radius: 3f, strength: 5f, deltaTime: 1f);
+
+        AssertTrue(changed, "paint brush reports a change");
+        AssertTrue(terrain.SplatMap[pixel + 1] > 0, "target layer channel increased");
+        AssertTrue(terrain.SplatMap[pixel + 0] < 255, "other layer channel reduced proportionally");
+        int sum = terrain.SplatMap[pixel + 0] + terrain.SplatMap[pixel + 1] + terrain.SplatMap[pixel + 2] + terrain.SplatMap[pixel + 3];
+        AssertTrue(sum >= 250 && sum <= 260, "layer weights stay close to the original ~255 sum");
+    }
+
+    private static void SceneManagerResolveScenePathFindsSceneByName()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"));
+        string scenesDir = Path.Combine(dir, "Assets", "Scenes");
+        Directory.CreateDirectory(scenesDir);
+        string mainPath = Path.Combine(scenesDir, "Main.gscene");
+        string levelPath = Path.Combine(scenesDir, "Level2.gscene");
+        File.WriteAllText(mainPath, "{}");
+        File.WriteAllText(levelPath, "{}");
+
+        string resolved = SceneManager.ResolveScenePath("Level2", mainPath);
+
+        AssertEqual(levelPath, resolved, "resolves a bare scene name by scanning Assets/**.gscene");
+    }
+
+    private static void SceneManagerLoadSceneSwapsRootsAndPreservesSurvivors()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"));
+        string assetsDir = Path.Combine(dir, "Assets");
+        Directory.CreateDirectory(Path.Combine(assetsDir, "Scenes"));
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(assetsDir);
+
+        var normal = new GameObject { Name = "Normal" };
+        var survivor = new GameObject { Name = "Survivor" };
+        survivor.DontDestroyOnLoad = true;
+        var recorder = survivor.AddComponent<AwakeRecorder>();
+        recorder.InternalAwake();
+        AssertEqual(1, recorder.AwakeCount, "sanity: survivor already awoke before the scene swap");
+
+        var currentRoots = new List<GameObject> { normal, survivor };
+
+        var sceneBObject = new GameObject { Name = "FromSceneB" };
+        string sceneBPath = Path.Combine(assetsDir, "Scenes", "SceneB.gscene");
+        SceneSerializer.Save(sceneBPath, new List<GameObject> { sceneBObject });
+
+        try
+        {
+            bool noOp = SceneManager.ProcessPendingLoad(currentRoots, physics, scripts);
+            AssertFalse(noOp, "ProcessPendingLoad is a no-op without a pending request");
+
+            SceneManager.LoadScene(sceneBPath);
+            AssertTrue(SceneManager.RequestedLoadPath == null, "LoadScene outside Play Mode is ignored");
+
+            RuntimeScene.SetContext(currentRoots, physics, scripts);
+            SceneManager.LoadScene(sceneBPath);
+            AssertEqual(sceneBPath, SceneManager.RequestedLoadPath, "LoadScene inside Play Mode queues the request");
+
+            bool swapped = SceneManager.ProcessPendingLoad(currentRoots, physics, scripts);
+
+            AssertTrue(swapped, "ProcessPendingLoad performs the swap");
+            AssertFalse(currentRoots.Contains(normal), "non-survivor root is removed after the scene swap");
+            AssertTrue(currentRoots.Contains(survivor), "DontDestroyOnLoad root survives the scene swap");
+            AssertEqual(1, recorder.AwakeCount, "survivor is not re-awoken after the scene swap");
+            AssertTrue(currentRoots.Any(o => o.Name == "FromSceneB"), "the new scene's objects are present after the swap");
+        }
+        finally
+        {
+            RuntimeScene.ClearContext();
+            SceneManager.CancelPendingLoad();
+            SceneManager.CurrentScenePath = null;
+        }
+    }
+
+    private sealed class AwakeRecorder : MonoBehaviour
+    {
+        public int AwakeCount;
+        public override void Awake() => AwakeCount++;
     }
 
     private static void CharacterControllerGroundsAndBlocksMovement()
@@ -2683,10 +3081,11 @@ internal static class Program
         var scripts = new ScriptCompiler(Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets"));
         var obj = new GameObject { Name = "Main Camera" };
         var cam = obj.AddComponent<Camera>();
-        cam.RenderType = CameraRenderType.Overlay;
         cam.Projection = CameraProjection.Orthographic;
         cam.FieldOfViewAxis = CameraFieldOfViewAxis.Horizontal;
         cam.PhysicalCamera = true;
+        cam.FocalLengthMm = 35f;
+        cam.SensorHeightMm = 18f;
         cam.OrthographicSize = 12.5f;
         cam.PostProcessing = false;
         cam.AntiAliasingMode = CameraAntiAliasingMode.SMAA;
@@ -2699,24 +3098,18 @@ internal static class Program
         cam.DepthTexture = CameraTextureMode.Off;
         cam.CullingMask = "Default";
         cam.OcclusionCulling = true;
-        cam.VolumeUpdateMode = CameraVolumeUpdateMode.EveryFrame;
-        cam.VolumeMask = "Everything";
-        cam.VolumeTrigger = "Player";
-        cam.OutputTarget = "Display 2";
-        cam.TargetDisplay = 1;
-        cam.AllowHDR = false;
 
         string json = SceneSerializer.Serialize(new[] { obj });
-        AssertContains(json, "RenderType", "camera render type serialized");
         AssertContains(json, "Projection", "camera projection serialized");
         AssertContains(json, "RenderShadows", "camera render shadows serialized");
 
         var loaded = SceneSerializer.Deserialize(json, physics, scripts);
         var loadedCam = loaded[0].GetComponent<Camera>()!;
-        AssertEqual(CameraRenderType.Overlay, loadedCam.RenderType, "camera render type restored");
         AssertEqual(CameraProjection.Orthographic, loadedCam.Projection, "camera projection restored");
         AssertEqual(CameraFieldOfViewAxis.Horizontal, loadedCam.FieldOfViewAxis, "camera fov axis restored");
         AssertTrue(loadedCam.PhysicalCamera, "camera physical flag restored");
+        AssertNear(35f, loadedCam.FocalLengthMm, "camera focal length restored");
+        AssertNear(18f, loadedCam.SensorHeightMm, "camera sensor height restored");
         AssertNear(12.5f, loadedCam.OrthographicSize, "camera ortho size restored");
         AssertFalse(loadedCam.PostProcessing, "camera post processing restored");
         AssertEqual(CameraAntiAliasingMode.SMAA, loadedCam.AntiAliasingMode, "camera aa mode restored");
@@ -2729,12 +3122,6 @@ internal static class Program
         AssertEqual(CameraTextureMode.Off, loadedCam.DepthTexture, "camera depth texture restored");
         AssertEqual("Default", loadedCam.CullingMask, "camera culling mask restored");
         AssertTrue(loadedCam.OcclusionCulling, "camera occlusion restored");
-        AssertEqual(CameraVolumeUpdateMode.EveryFrame, loadedCam.VolumeUpdateMode, "camera volume update restored");
-        AssertEqual("Everything", loadedCam.VolumeMask, "camera volume mask restored");
-        AssertEqual("Player", loadedCam.VolumeTrigger, "camera volume trigger restored");
-        AssertEqual("Display 2", loadedCam.OutputTarget, "camera output target restored");
-        AssertEqual(1, loadedCam.TargetDisplay, "camera target display restored");
-        AssertFalse(loadedCam.AllowHDR, "camera hdr flag restored");
     }
 
     private sealed class TestCommand : ISceneCommand

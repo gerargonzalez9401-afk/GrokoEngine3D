@@ -51,6 +51,7 @@ internal sealed partial class SceneRenderTarget : IDisposable
     private int uAoQualityLocation;
     private int uBloomTexLocation;
     private int uToneMappingModeLocation, uWbTempLocation, uWbTintLocation, uFilmGrainLocation, uFilmGrainIntensityLocation, uTimeLocation;
+    private int uStopNaNsLocation, uDitheringLocation;
     private int uLggLiftLocation, uLggGammaLocation, uLggGainLocation;
 
     // ── Pirámide de bloom dedicada (downsample/upsample, estilo Unity HDRP / Call of Duty) ──
@@ -76,6 +77,9 @@ internal sealed partial class SceneRenderTarget : IDisposable
     public bool OpaqueTextureEnabled { get; set; } = true;
     public bool HasOpaqueTexture { get; private set; }
     public bool FxaaEnabled { get; set; } = true;
+    // Ajustes de salida por-cámara (Camera.StopNaNs/Dithering): el app los copia antes de ApplyPostProcess.
+    public bool StopNaNsEnabled { get; set; } = false;
+    public bool DitheringEnabled { get; set; } = false;
     public int BloomQuality { get; set; } = 2;
     public int AmbientOcclusionQuality { get; set; } = 2;
 

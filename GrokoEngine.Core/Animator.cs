@@ -676,8 +676,18 @@ namespace GrokoEngine
                 bone.SetLocalTRS(p, r, s);
             }
             skelFadeTimer -= dt;
-            if (skelFadeTimer <= 0f) skelFadeFrom = null;
+            if (skelFadeTimer <= 0f)
+            {
+                skelFadeFrom = null;
+                _activeTransition = null;
+                _fadeFromStateName = "";
+            }
         }
+
+        // Transición actualmente en curso de fade (para soportar Interruption) y el nombre
+        // del estado que se está abandonando (para poder re-evaluar SUS transiciones mientras funde).
+        private AnimatorTransition? _activeTransition;
+        private string _fadeFromStateName = "";
 
         private static float QuatDotA(Quaternion a, Quaternion b) =>
             a.X * b.X + a.Y * b.Y + a.Z * b.Z + a.W * b.W;
@@ -688,6 +698,23 @@ namespace GrokoEngine
             if (st?.MotionType == AnimatorMotionType.BlendTree)
                 return CurrentBlendTreeDuration();
             return CurrentSkeletalClip()?.Duration ?? 0f;
+        }
+
+        // Duración del estado activo cubriendo los 3 tipos de motion (blend tree, clip skeletal
+        // de huesos FBX, o clip whole-pose de keyframes .anim). Usado por Transition Offset para
+        // que funcione también en el caso más simple (GameObject animado sin esqueleto).
+        private float EnteredStateDuration()
+        {
+            var st = GetActiveState();
+            if (st?.MotionType == AnimatorMotionType.BlendTree)
+                return CurrentBlendTreeDuration();
+            var skeletal = CurrentSkeletalClip();
+            if (skeletal != null)
+                return skeletal.Duration;
+            var keyframeClip = GetClip();
+            if (keyframeClip != null && keyframeClip.Keyframes.Count > 0)
+                return keyframeClip.Keyframes[^1].Time;
+            return 0f;
         }
 
         // Sube cada vez que se (re)muestrea la pose esqueletal. El renderer la usa como
@@ -828,13 +855,48 @@ namespace GrokoEngine
             if (ctrl == null || state == null)
                 return;
 
-            if (EvaluateTransitionList(ctrl.AnyStateTransitions, normalizedTime, fromAnyState: true))
+            if (EvaluateTransitionList(ctrl.AnyStateTransitions, normalizedTime, fromAnyState: true, state.Name))
                 return;
 
-            EvaluateTransitionList(state.Transitions, normalizedTime, fromAnyState: false);
+            // Interrupción: mientras hay un crossfade en curso, según Interruption también se
+            // pueden evaluar las transiciones del estado que se está ABANDONANDO (no solo las
+            // del estado activo/"next state"). Limitación deliberada: como no re-muestreamos en
+            // vivo el estado abandonado (ver ApplySkeletalCrossFade, usa una foto de la pose),
+            // no llevamos su tiempo normalizado real -> solo transiciones SIN Exit Time (basadas
+            // en condiciones/triggers) pueden interrumpir desde el estado abandonado.
+            if (skelFadeTimer > 0f && _activeTransition != null
+                && _activeTransition.Interruption != AnimatorInterruptionSource.None
+                && !string.IsNullOrEmpty(_fadeFromStateName))
+            {
+                var fromState = ctrl.FindState(_fadeFromStateName);
+                if (fromState != null)
+                {
+                    switch (_activeTransition.Interruption)
+                    {
+                        case AnimatorInterruptionSource.CurrentState:
+                            if (EvaluateTransitionList(fromState.Transitions, 0f, fromAnyState: false, fromState.Name))
+                                return;
+                            break;
+                        case AnimatorInterruptionSource.NextState:
+                            break; // el chequeo normal de abajo YA es el "next state" (estado activo)
+                        case AnimatorInterruptionSource.CurrentStateThenNextState:
+                            if (EvaluateTransitionList(fromState.Transitions, 0f, fromAnyState: false, fromState.Name))
+                                return;
+                            break;
+                        case AnimatorInterruptionSource.NextStateThenCurrentState:
+                            if (EvaluateTransitionList(state.Transitions, normalizedTime, fromAnyState: false, state.Name))
+                                return;
+                            if (EvaluateTransitionList(fromState.Transitions, 0f, fromAnyState: false, fromState.Name))
+                                return;
+                            return;
+                    }
+                }
+            }
+
+            EvaluateTransitionList(state.Transitions, normalizedTime, fromAnyState: false, state.Name);
         }
 
-        private bool EvaluateTransitionList(List<AnimatorTransition> transitions, float normalizedTime, bool fromAnyState)
+        private bool EvaluateTransitionList(List<AnimatorTransition> transitions, float normalizedTime, bool fromAnyState, string fromStateName)
         {
             if (transitions.Count == 0)
                 return false;
@@ -863,6 +925,8 @@ namespace GrokoEngine
                 float fadeSecs = t.FixedDuration ? t.TransitionDuration
                     : t.TransitionDuration * MathF.Max(0.0001f, CurrentSkeletalOrBlendDuration());
                 BeginSkeletalCrossFade(fadeSecs);
+                _activeTransition = t;
+                _fadeFromStateName = fromStateName;
                 CurrentState = t.ToState;
                 CurrentClipName = t.ToState;
                 clip = null;        // fuerza recargar el clip del nuevo estado
@@ -870,9 +934,16 @@ namespace GrokoEngine
                 skeletalClips = null;
                 skeletalClipKey = "\0";
                 ResetRootMotion();
-                Time = 0f;
+                // Transition Offset: el estado recién entrado empieza a muestrearse en ese punto
+                // normalizado (0..1) de SU propia duración, en vez de siempre en 0 (estilo Unity).
+                // A diferencia de CurrentSkeletalOrBlendDuration (solo skeletal/blend tree), esto
+                // también cubre clips whole-pose (.anim de keyframes), el caso más común de un
+                // GameObject simple sin esqueleto.
+                float newDuration = EnteredStateDuration();
+                float offset = Math.Clamp(t.TransitionOffset, 0f, 1f);
+                Time = offset * newDuration;
                 IsPlaying = true;
-                Sample(0f);
+                Sample(Time);
                 return true;
             }
 

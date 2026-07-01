@@ -130,6 +130,18 @@ namespace GrokoEngine
         public void Destroy(GameObject obj, float delay = 0f) =>
             RuntimeScene.Destroy(obj, delay);
 
+        // Estilo Unity: DontDestroyOnLoad(gameObject). Solo tiene efecto sobre objetos RAIZ
+        // (Parent == null); SceneManager.ProcessPendingLoad lo respeta al cambiar de escena.
+        public void DontDestroyOnLoad(GameObject obj)
+        {
+            if (obj.Parent != null)
+            {
+                Debug.LogWarning($"DontDestroyOnLoad ignorado: '{obj.Name}' no es un objeto raiz.");
+                return;
+            }
+            obj.DontDestroyOnLoad = true;
+        }
+
         public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, out PhysicsRaycastHit hit, bool includeTriggers = false) =>
             Physics.Raycast(origin, direction, maxDistance, out hit, includeTriggers);
 
@@ -204,12 +216,10 @@ namespace GrokoEngine
     // CAMERA
     // =====================================================
     public enum CameraClearFlags { Skybox, SolidColor }
-    public enum CameraRenderType { Base, Overlay }
     public enum CameraProjection { Perspective, Orthographic }
     public enum CameraFieldOfViewAxis { Vertical, Horizontal }
     public enum CameraAntiAliasingMode { None, FXAA, SMAA, TAA }
     public enum CameraTextureMode { Pipeline, On, Off }
-    public enum CameraVolumeUpdateMode { Pipeline, EveryFrame, ViaScripting }
 
     public class Camera : Component
     {
@@ -218,11 +228,50 @@ namespace GrokoEngine
         private float _farClip = 1000f;
         private float _orthographicSize = 5f;
         private int _antiAliasingSamples = 4;
+        private float _focalLengthMm = 50f;
+        private float _sensorHeightMm = 24f;
 
         public float FOV
         {
             get => _fov;
             set => _fov = Math.Clamp(value, 5f, 170f);
+        }
+
+        // Camara fisica estilo Unity: cuando PhysicalCamera esta activo, el FOV vertical
+        // efectivo se deriva de estos dos valores en vez de leerse directo de FOV.
+        public float FocalLengthMm
+        {
+            get => _focalLengthMm;
+            set => _focalLengthMm = Math.Clamp(value, 1f, 1000f);
+        }
+
+        public float SensorHeightMm
+        {
+            get => _sensorHeightMm;
+            set => _sensorHeightMm = Math.Clamp(value, 1f, 200f);
+        }
+
+        // FOV vertical efectivo en grados, ya resuelto por PhysicalCamera (focal/sensor)
+        // o por FieldOfViewAxis (convierte horizontal->vertical con el aspect dado).
+        public float GetEffectiveVerticalFov(float aspect)
+        {
+            if (PhysicalCamera)
+            {
+                float sensor = Math.Max(0.1f, SensorHeightMm);
+                float focal = Math.Max(0.1f, FocalLengthMm);
+                float fovRad = 2f * MathF.Atan(sensor / (2f * focal));
+                return Math.Clamp(fovRad * (180f / MathF.PI), 5f, 170f);
+            }
+
+            if (FieldOfViewAxis == CameraFieldOfViewAxis.Horizontal)
+            {
+                float safeAspect = Math.Max(0.0001f, aspect);
+                float horizRad = FOV * (MathF.PI / 180f);
+                float vertRad = 2f * MathF.Atan(MathF.Tan(horizRad / 2f) / safeAspect);
+                return Math.Clamp(vertRad * (180f / MathF.PI), 5f, 170f);
+            }
+
+            return FOV;
         }
 
         public float NearClip
@@ -248,7 +297,6 @@ namespace GrokoEngine
         }
 
         public CameraClearFlags ClearFlags = CameraClearFlags.Skybox;
-        public CameraRenderType RenderType { get; set; } = CameraRenderType.Base;
         public CameraProjection Projection { get; set; } = CameraProjection.Perspective;
         public CameraFieldOfViewAxis FieldOfViewAxis { get; set; } = CameraFieldOfViewAxis.Vertical;
         public bool PhysicalCamera { get; set; } = false;
@@ -285,12 +333,6 @@ namespace GrokoEngine
             get => ClearFlags;
             set => ClearFlags = value;
         }
-        public CameraVolumeUpdateMode VolumeUpdateMode { get; set; } = CameraVolumeUpdateMode.Pipeline;
-        public string VolumeMask { get; set; } = "Default";
-        public string VolumeTrigger { get; set; } = "";
-        public string OutputTarget { get; set; } = "Display 1";
-        public int TargetDisplay { get; set; } = 0;
-        public bool AllowHDR { get; set; } = true;
     }
 
     // =====================================================

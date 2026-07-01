@@ -806,7 +806,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         {
             var gameCamera = FindGameCamera(objects);
             gameCameraComponent = gameCamera?.GetComponent<Camera>();
-            activeCam = gameCamera != null ? ComputeGameCameraState(gameCamera) : camera;
+            activeCam = gameCamera != null ? ComputeGameCameraState(gameCamera, width / (float)Math.Max(1, height)) : camera;
             // Sin cámara activa (ninguna o todas desactivadas): Game view en negro, como Unity
             // ("No cameras rendering"). No caemos a la cámara del editor.
             noGameCamera = gameCamera == null;
@@ -906,7 +906,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         int height = Math.Max(1, (int)MathF.Round(gamePreviewPanelContentSize.Y * renderScale));
         var gameCamera = FindGameCamera(objects);
         var gameCameraComponent = gameCamera?.GetComponent<Camera>();
-        var activeCam = gameCamera != null ? ComputeGameCameraState(gameCamera) : camera;
+        var activeCam = gameCamera != null ? ComputeGameCameraState(gameCamera, width / (float)Math.Max(1, height)) : camera;
         bool noGameCamera = gameCamera == null;
 
         if (noGameCamera)
@@ -1102,10 +1102,10 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         return null;
     }
 
-    private EditorCameraState ComputeGameCameraState(GameObject cam)
+    private EditorCameraState ComputeGameCameraState(GameObject cam, float aspect)
     {
         Camera? cameraComponent = cam.GetComponent<Camera>();
-        float fov = cameraComponent?.FOV ?? 60f;
+        float fov = cameraComponent != null ? cameraComponent.GetEffectiveVerticalFov(aspect) : 60f;
 
         // Posición mundial: raíz usa PosX/Y/Z directamente.
         // Hijo usa GlobalPosition solo si fue actualizado (distinto de cero o la posición local no es cero).

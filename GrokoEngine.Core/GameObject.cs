@@ -38,6 +38,10 @@ namespace GrokoEngine
 
         public bool IsCamera { get; set; }
         public bool IsStatic { get; set; } = false;
+
+        // Marcador de runtime (NO se serializa en el .gscene, igual que en Unity): sobrevive a un
+        // cambio de escena vía SceneManager.LoadScene en vez de destruirse. Solo root (Parent==null).
+        public bool DontDestroyOnLoad { get; set; } = false;
         public int Layer { get; set; } = LayerMask.Default;
         public int Type { get; set; }
 

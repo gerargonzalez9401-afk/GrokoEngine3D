@@ -47,6 +47,10 @@ internal sealed partial class SceneRenderTarget
         int vignetteRounded = enabled && settings!.Vignette && settings.VignetteRounded ? 1 : 0;
         float chromaticAberration = enabled && settings!.ChromaticAberration ? settings.ChromaticAberrationIntensity : 0f;
         float aoStrength = enabled && settings!.AmbientOcclusion ? settings.AmbientOcclusionStrength : 0f;
+        // Stop NaNs / Dithering son ajustes de salida de la CÁMARA (Camera.StopNaNs/Dithering),
+        // independientes de si el PostProcessSettings global está activo o no.
+        int stopNaNs = StopNaNsEnabled ? 1 : 0;
+        int dithering = DitheringEnabled ? 1 : 0;
 
         // Pirámide de bloom dedicada: produce el glow en bloomMipTex[0] antes del pase de post.
         if (bloomStrength > 0f)
@@ -100,6 +104,8 @@ internal sealed partial class SceneRenderTarget
         SetUniform(uFxaaEnabledLocation, FxaaEnabled ? 1 : 0);
         SetUniform(uBloomQualityLocation, Math.Clamp(BloomQuality, 0, 3));
         SetUniform(uAoQualityLocation, DepthTextureEnabled ? Math.Clamp(AmbientOcclusionQuality, 0, 3) : 0);
+        SetUniform(uStopNaNsLocation, stopNaNs);
+        SetUniform(uDitheringLocation, dithering);
         if (uTexelLocation >= 0)
             GL.Uniform2(uTexelLocation, 1f / Math.Max(1, Width), 1f / Math.Max(1, Height));
 
@@ -163,6 +169,8 @@ internal sealed partial class SceneRenderTarget
         uGodRaysEnabledLocation = GL.GetUniformLocation(postShader, "uGodRaysEnabled");
         uGodRaySunLocation = GL.GetUniformLocation(postShader, "uGodRaySun");
         uGodRayStrengthLocation = GL.GetUniformLocation(postShader, "uGodRayStrength");
+        uStopNaNsLocation = GL.GetUniformLocation(postShader, "uStopNaNs");
+        uDitheringLocation = GL.GetUniformLocation(postShader, "uDithering");
     }
 
     private static void SetUniform(int location, int value)
@@ -263,7 +271,25 @@ internal sealed partial class SceneRenderTarget
             uniform int uGodRaysEnabled;
             uniform vec2 uGodRaySun;
             uniform float uGodRayStrength;
+            uniform int uStopNaNs;
+            uniform int uDithering;
             out vec4 outColor;
+
+            // Stop NaNs (Camera.StopNaNs): un solo texel con NaN/Inf (típico de una división
+            // por cero en un shader de material roto) puede propagarse y volver negro/blanco
+            // TODO el post-proceso (bloom/AO/tonemap lo esparcen). Lo cortamos apenas se lee la escena.
+            vec3 StopNaNsGuard(vec3 c)
+            {
+                bvec3 bad = bvec3(isnan(c.x) || isinf(c.x), isnan(c.y) || isinf(c.y), isnan(c.z) || isinf(c.z));
+                return any(bad) ? vec3(0.0) : c;
+            }
+
+            // Dithering (Camera.Dithering): ruido triangular de +-1 LSB antes de cuantizar a 8 bits,
+            // rompe el banding visible en degradados suaves (cielos, sombras largas).
+            float DitherNoise(vec2 screenXy)
+            {
+                return fract(sin(dot(screenXy, vec2(12.9898, 78.233))) * 43758.5453123);
+            }
 
             // Filmic ACES curve (Narkowicz 2015 fit): compresses HDR into [0,1]
             // with a cinematic response, just like Unity/Unreal's "ACES" tonemap.
@@ -522,6 +548,8 @@ internal sealed partial class SceneRenderTarget
                 // Doing bloom here (not in the object shader) is what lets us
                 // actually extract highlights above 1.0.
                 vec3 hdr = SampleSceneColor(vUv);
+                if (uStopNaNs == 1)
+                    hdr = StopNaNsGuard(hdr);
                 hdr = ApplyFxaa(vUv, hdr);
                 if (uBloomStrength > 0.0001)
                     hdr += SampleBloom(vUv) * uBloomStrength;
