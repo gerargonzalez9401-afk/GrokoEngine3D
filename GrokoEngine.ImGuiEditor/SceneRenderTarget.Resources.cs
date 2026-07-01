@@ -30,6 +30,23 @@ internal sealed partial class SceneRenderTarget
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, msaaFramebuffer);
     }
 
+    public void CaptureOpaqueTexture()
+    {
+        HasOpaqueTexture = false;
+        if (!OpaqueTextureEnabled || opaqueFramebuffer == 0 || opaqueTexture == 0)
+            return;
+
+        GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, framebuffer);
+        GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, opaqueFramebuffer);
+        GL.BlitFramebuffer(
+            0, 0, Width, Height,
+            0, 0, Width, Height,
+            ClearBufferMask.ColorBufferBit,
+            BlitFramebufferFilter.Linear);
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, framebuffer);
+        HasOpaqueTexture = true;
+    }
+
     public static void Unbind(int windowWidth, int windowHeight)
     {
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
@@ -63,6 +80,8 @@ internal sealed partial class SceneRenderTarget
         if (postVertexBuffer != 0) GL.DeleteBuffer(postVertexBuffer);
         if (postVertexArray != 0) GL.DeleteVertexArray(postVertexArray);
         if (postShader != 0) GL.DeleteProgram(postShader);
+        if (opaqueTexture != 0) GL.DeleteTexture(opaqueTexture);
+        if (opaqueFramebuffer != 0) GL.DeleteFramebuffer(opaqueFramebuffer);
         if (postTexture != 0) GL.DeleteTexture(postTexture);
         if (postFramebuffer != 0) GL.DeleteFramebuffer(postFramebuffer);
         GL.DeleteRenderbuffer(depthRenderbuffer);

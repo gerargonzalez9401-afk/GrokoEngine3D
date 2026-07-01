@@ -83,16 +83,16 @@ internal sealed class ImGuiController : IDisposable
         style.TabRounding       = 5f;
 
         // ── Paleta (acento azul Unity ≈ #4A90D9) ──
-        var blue       = new NumVector4(0.30f, 0.40f, 0.52f, 1f);
-        var blueSoft   = new NumVector4(0.40f, 0.50f, 0.62f, 1f);
-        var blueBright = new NumVector4(0.58f, 0.68f, 0.78f, 1f);
+        var blue       = new NumVector4(0.42f, 0.42f, 0.42f, 1f);
+        var blueSoft   = new NumVector4(0.50f, 0.50f, 0.50f, 1f);
+        var blueBright = new NumVector4(0.64f, 0.64f, 0.64f, 1f);
         var panel      = new NumVector4(0.180f, 0.180f, 0.180f, 1f);
         var panel2     = new NumVector4(0.215f, 0.215f, 0.215f, 1f);
         var frame      = new NumVector4(0.155f, 0.155f, 0.155f, 1f);
         var c = style.Colors;
         c[(int)ImGuiCol.Text]                 = new NumVector4(0.84f, 0.84f, 0.84f, 1f);
         c[(int)ImGuiCol.TextDisabled]         = new NumVector4(0.50f, 0.50f, 0.50f, 1f);
-        c[(int)ImGuiCol.WindowBg]             = new NumVector4(0.145f, 0.145f, 0.145f, 1f);
+        c[(int)ImGuiCol.WindowBg]             = new NumVector4(0.155f, 0.155f, 0.155f, 1f);
         c[(int)ImGuiCol.ChildBg]              = panel;
         c[(int)ImGuiCol.PopupBg]              = new NumVector4(0.155f, 0.155f, 0.155f, 0.98f);
         c[(int)ImGuiCol.Border]               = new NumVector4(0.255f, 0.255f, 0.255f, 1f);
@@ -131,11 +131,11 @@ internal sealed class ImGuiController : IDisposable
         c[(int)ImGuiCol.TabSelected]          = new NumVector4(0.215f, 0.215f, 0.215f, 1f);
         c[(int)ImGuiCol.TabDimmed]            = new NumVector4(0.130f, 0.130f, 0.130f, 1f);
         c[(int)ImGuiCol.TabDimmedSelected]    = new NumVector4(0.180f, 0.180f, 0.180f, 1f);
-        c[(int)ImGuiCol.DockingPreview]       = new NumVector4(0.62f, 0.70f, 0.78f, 0.46f);
+        c[(int)ImGuiCol.DockingPreview]       = new NumVector4(0.72f, 0.72f, 0.72f, 0.34f);
         c[(int)ImGuiCol.TableHeaderBg]        = new NumVector4(0.205f, 0.205f, 0.205f, 1f);
         c[(int)ImGuiCol.TableBorderStrong]    = new NumVector4(0.300f, 0.300f, 0.300f, 1f);
         c[(int)ImGuiCol.TableBorderLight]     = new NumVector4(0.245f, 0.245f, 0.245f, 1f);
-        c[(int)ImGuiCol.TextSelectedBg]       = new NumVector4(0.45f, 0.55f, 0.66f, 0.50f);
+        c[(int)ImGuiCol.TextSelectedBg]       = new NumVector4(0.55f, 0.55f, 0.55f, 0.42f);
         c[(int)ImGuiCol.DragDropTarget]       = new NumVector4(0.95f, 0.74f, 0.25f, 0.90f);
     }
 
@@ -302,6 +302,9 @@ internal sealed class ImGuiController : IDisposable
         GlfwKeys.Escape,
         GlfwKeys.A,
         GlfwKeys.C,
+        GlfwKeys.D,
+        GlfwKeys.F,
+        GlfwKeys.S,
         GlfwKeys.V,
         GlfwKeys.P,
         GlfwKeys.X,
@@ -349,6 +352,9 @@ internal sealed class ImGuiController : IDisposable
         GlfwKeys.Escape => ImGuiKey.Escape,
         GlfwKeys.A => ImGuiKey.A,
         GlfwKeys.C => ImGuiKey.C,
+        GlfwKeys.D => ImGuiKey.D,
+        GlfwKeys.F => ImGuiKey.F,
+        GlfwKeys.S => ImGuiKey.S,
         GlfwKeys.V => ImGuiKey.V,
         GlfwKeys.P => ImGuiKey.P,
         GlfwKeys.X => ImGuiKey.X,

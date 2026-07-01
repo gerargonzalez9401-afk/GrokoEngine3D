@@ -671,7 +671,7 @@ internal sealed partial class ImGuiEditorApp
 
 
     private static bool ShouldPrewarmPreviewAtLoad(string path) =>
-        MaterialAsset.IsTexturePath(path) || MaterialAsset.IsMaterialPath(path);
+        MaterialAsset.IsTexturePath(path);
 
     
 

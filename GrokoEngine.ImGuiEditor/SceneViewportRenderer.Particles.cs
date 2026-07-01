@@ -30,7 +30,9 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
 
         _particleVerts.Clear();
         _particleRanges.Clear();
+        _particleSortSlices.Clear();
         CollectParticleVerts(objects, camRight, camUp, cameraPosition);
+        SortParticleSlicesForTransparentPass();
 
         // ── Trails ────────────────────────────────────────────────
         _trailVerts.Clear();
@@ -39,10 +41,17 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
         if (_particleVerts.Count == 0 && _trailVerts.Count == 0) return;
 
         bool needsSoftParticles = _particleRanges.Any(r => r.Soft);
+        bool needsDistortion = _particleRanges.Any(r => r.Distortion);
+        if (needsDistortion)
+            ResolveAndCaptureOpaqueTexture?.Invoke();
         if (needsSoftParticles)
             CaptureDepthBuffer();
         int w = needsSoftParticles ? _depthFboWidth : 0;
         int h = needsSoftParticles ? _depthFboHeight : 0;
+        int[] viewport = new int[4];
+        GL.GetInteger(GetPName.Viewport, viewport);
+        int screenW = Math.Max(w, viewport[2]);
+        int screenH = Math.Max(h, viewport[3]);
 
         // Upload
         if (_particleVerts.Count > 0)
@@ -90,6 +99,7 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
             GL.Uniform1(_particleTexLoc, 0);
             GL.Uniform1(_particleHasTexLoc, 0);
             GL.Uniform1(_particleSoftLoc, 0); // trails no tienen soft
+            GL.Uniform1(_particleDistortionLoc, 0);
             GL.BindVertexArray(_trailVao);
             TrackParticleDraw(_trailVerts.Count);
             GL.DrawArrays(PrimitiveType.Triangles, 0, _trailVerts.Count);
@@ -105,7 +115,7 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
             GL.Uniform3(_particleRightLoc, camRight.X, camRight.Y, camRight.Z);
             GL.Uniform3(_particleUpLoc, camUp.X, camUp.Y, camUp.Z);
             GL.Uniform1(_particleTexLoc, 0);
-            GL.Uniform2(_particleScreenSizeLoc, (float)w, (float)h);
+            GL.Uniform2(_particleScreenSizeLoc, (float)screenW, (float)screenH);
             GL.Uniform1(_particleSoftRangeLoc, 0.15f);
 
             // Bind depth texture en unit 1
@@ -113,26 +123,22 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
             GL.BindTexture(TextureTarget.Texture2D, _depthTex);
             GL.Uniform1(_particleDepthTexLoc, 1);
             GL.Uniform1(_particleSoftLoc, w > 0 && h > 0 ? 1 : 0);
+            GL.ActiveTexture(TextureUnit.Texture2);
+            GL.BindTexture(TextureTarget.Texture2D, OpaqueTextureHandle);
+            GL.Uniform1(_particleOpaqueTexLoc, 2);
             GL.ActiveTexture(TextureUnit.Texture0);
 
             GL.BindVertexArray(_particleVao);
-
-            _particleRanges.Sort(static (a, b) =>
-            {
-                int cmp = a.Queue.CompareTo(b.Queue);
-                if (cmp != 0) return cmp;
-                cmp = a.SortingLayer.CompareTo(b.SortingLayer);
-                if (cmp != 0) return cmp;
-                cmp = a.OrderInLayer.CompareTo(b.OrderInLayer);
-                if (cmp != 0) return cmp;
-                return a.SortingFudge.CompareTo(b.SortingFudge);
-            });
 
             foreach (var range in _particleRanges)
             {
                 ApplyParticleBlendMode(range.Blend);
                 GL.Uniform1(_particleSoftRangeLoc, range.SoftRange);
                 GL.Uniform1(_particleSoftLoc, range.Soft && w > 0 && h > 0 ? 1 : 0);
+                bool distortionEnabled = range.Distortion && OpaqueTextureHandle != 0 && screenW > 0 && screenH > 0;
+                GL.Uniform1(_particleDistortionLoc, distortionEnabled ? 1 : 0);
+                GL.Uniform1(_particleDistortionStrengthLoc, distortionEnabled ? range.DistortionStrength : 0f);
+                GL.Uniform1(_particleRefractionStrengthLoc, distortionEnabled ? range.RefractionStrength : 0f);
                 string? texPath = range.TexturePath;
                 bool hasTex = !string.IsNullOrWhiteSpace(texPath) && System.IO.File.Exists(texPath);
                 int texId = hasTex ? GetTexture(texPath!) : 0;
@@ -142,6 +148,8 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
                 GL.DrawArrays(PrimitiveType.Triangles, range.Start, range.Count);
             }
 
+            GL.ActiveTexture(TextureUnit.Texture2);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
             GL.ActiveTexture(TextureUnit.Texture1);
             GL.BindTexture(TextureTarget.Texture2D, 0);
             GL.ActiveTexture(TextureUnit.Texture0);
@@ -180,6 +188,7 @@ private void CollectParticleVerts(IReadOnlyList<GameObject> objects, Vector3 rig
         foreach (var obj in objects)
         {
             if (!obj.IsActive) continue;   // GameObject (y su rama) inactivo: sin partículas, como Unity
+            if (!LayerMask.Contains(_activeCullingMask, obj.Layer)) { CollectParticleVerts(obj.Children, right, up, cameraPosition); continue; }
             var ps = obj.GetComponent<GrokoEngine.ParticleSystem>();
             if (ps == null || !ps.Enabled || ps.Particles.Count == 0) { CollectParticleVerts(obj.Children, right, up, cameraPosition); continue; }
             if (!ps.RendererModuleEnabled) { CollectParticleVerts(obj.Children, right, up, cameraPosition); continue; }
@@ -234,9 +243,13 @@ private void CollectParticleVerts(IReadOnlyList<GameObject> objects, Vector3 rig
             bool useGradient = ps.ColorKeyCount >= 2;
             var surface = GetParticleRenderSurface(ps);
             float hdrIntensity = Math.Max(0f, ps.HdrIntensity);
-            int start = _particleVerts.Count;
+            int queue = EffectiveParticleRenderQueue(ps);
+            bool distortion = ps.DistortionEnabled && (Math.Abs(ps.DistortionStrength) > 0.0001f || Math.Abs(ps.RefractionStrength) > 0.0001f);
+            float distortionStrength = Math.Clamp(ps.DistortionStrength, -2f, 2f);
+            float refractionStrength = Math.Clamp(ps.RefractionStrength, 0f, 2f);
+            int insertion = _particleSortSlices.Count;
 
-            foreach (var (p, _) in _sortBuf)
+            foreach (var (p, dist) in _sortBuf)
             {
                 var wp = GetWorldPos(p.Position, isLocal, objPos, objRot);
 
@@ -258,6 +271,7 @@ private void CollectParticleVerts(IReadOnlyList<GameObject> objects, Vector3 rig
                     ? GrokoEngine.ParticleSystem.EvaluateParticleCurve(ps.SizeOverLifetimeCurve, p.NormalizedAge, ps.SizeCurveMid, ps.SizeCurveMidValue)
                     : 1f;
 
+                int start = _particleVerts.Count;
                 if (ps.StretchedBillboard || ps.RenderMode == ParticleRenderMode.StretchedBillboard)
                     AddStretchedQuad(p, wp, renderRight, renderUp, color, ps.StretchSpeedScale, ps.StretchLengthScale,
                                      ps.SheetColumns, ps.SheetRows, ps.SheetFrameRate, sizeMultiplier,
@@ -265,24 +279,116 @@ private void CollectParticleVerts(IReadOnlyList<GameObject> objects, Vector3 rig
                 else
                     AddParticleQuad(p, wp, renderRight, renderUp, ps.SheetColumns, ps.SheetRows, ps.SheetFrameRate,
                                     color, sizeMultiplier, ps.AllowRoll, ps.FlipU, ps.FlipV, ps.PivotX, ps.PivotY);
+                int count = _particleVerts.Count - start;
+                if (count > 0)
+                {
+                    _particleSortSlices.Add(new ParticleSortSlice(
+                        surface.TexturePath,
+                        start,
+                        count,
+                        ps.BlendMode,
+                        ps.SoftParticles,
+                        Math.Max(0.001f, ps.SoftParticleRange),
+                        queue,
+                        ps.SortingLayer,
+                        ps.OrderInLayer,
+                        ps.SortingFudge,
+                        ps.SortParticles ? ps.SortMode : ParticleSortMode.None,
+                        dist,
+                        p.Age,
+                        insertion++,
+                        distortion,
+                        distortionStrength,
+                        refractionStrength));
+                }
             }
-
-            int cnt = _particleVerts.Count - start;
-            if (cnt > 0)
-                _particleRanges.Add(new ParticleRenderRange(
-                    surface.TexturePath,
-                    start,
-                    cnt,
-                    ps.BlendMode,
-                    ps.SoftParticles,
-                    Math.Max(0.001f, ps.SoftParticleRange),
-                    EffectiveParticleRenderQueue(ps),
-                    ps.SortingLayer,
-                    ps.OrderInLayer,
-                    ps.SortingFudge));
 
             CollectParticleVerts(obj.Children, right, up, cameraPosition);
         }
+    }
+
+private void SortParticleSlicesForTransparentPass()
+    {
+        if (_particleSortSlices.Count == 0)
+            return;
+
+        _particleSortSlices.Sort(CompareParticleSortSlices);
+        _particleSortedVerts.Clear();
+        _particleRanges.Clear();
+
+        ParticleRenderRange? current = null;
+        foreach (var slice in _particleSortSlices)
+        {
+            int start = _particleSortedVerts.Count;
+            for (int i = 0; i < slice.Count; i++)
+                _particleSortedVerts.Add(_particleVerts[slice.Start + i]);
+
+            if (current.HasValue && CanMergeParticleRange(current.Value, slice))
+            {
+                var c = current.Value;
+                current = c with { Count = c.Count + slice.Count };
+                _particleRanges[^1] = current.Value;
+            }
+            else
+            {
+                var range = new ParticleRenderRange(
+                    slice.TexturePath,
+                    start,
+                    slice.Count,
+                    slice.Blend,
+                    slice.Soft,
+                    slice.SoftRange,
+                    slice.Queue,
+                    slice.SortingLayer,
+                    slice.OrderInLayer,
+                    slice.SortingFudge,
+                    slice.Distortion,
+                    slice.DistortionStrength,
+                    slice.RefractionStrength);
+                _particleRanges.Add(range);
+                current = range;
+            }
+        }
+
+        _particleVerts.Clear();
+        _particleVerts.AddRange(_particleSortedVerts);
+    }
+
+private static int CompareParticleSortSlices(ParticleSortSlice a, ParticleSortSlice b)
+    {
+        int cmp = a.Queue.CompareTo(b.Queue);
+        if (cmp != 0) return cmp;
+        cmp = a.SortingLayer.CompareTo(b.SortingLayer);
+        if (cmp != 0) return cmp;
+        cmp = a.OrderInLayer.CompareTo(b.OrderInLayer);
+        if (cmp != 0) return cmp;
+        cmp = a.SortingFudge.CompareTo(b.SortingFudge);
+        if (cmp != 0) return cmp;
+        cmp = a.SortMode.CompareTo(b.SortMode);
+        if (cmp != 0) return cmp;
+
+        return a.SortMode switch
+        {
+            ParticleSortMode.OldestInFront => a.Age.CompareTo(b.Age),
+            ParticleSortMode.YoungestInFront => b.Age.CompareTo(a.Age),
+            ParticleSortMode.Distance => b.Distance.CompareTo(a.Distance),
+            _ => a.Insertion.CompareTo(b.Insertion)
+        };
+    }
+
+private static bool CanMergeParticleRange(ParticleRenderRange range, ParticleSortSlice slice)
+    {
+        return string.Equals(range.TexturePath, slice.TexturePath, StringComparison.OrdinalIgnoreCase) &&
+               range.Blend == slice.Blend &&
+               range.Soft == slice.Soft &&
+               Math.Abs(range.SoftRange - slice.SoftRange) < 0.0001f &&
+               range.Queue == slice.Queue &&
+               range.SortingLayer == slice.SortingLayer &&
+               range.OrderInLayer == slice.OrderInLayer &&
+               range.SortingFudge == slice.SortingFudge &&
+               range.Distortion == slice.Distortion &&
+               Math.Abs(range.DistortionStrength - slice.DistortionStrength) < 0.0001f &&
+               Math.Abs(range.RefractionStrength - slice.RefractionStrength) < 0.0001f;
     }
 
 private void CollectParticleMeshDraws(IReadOnlyList<GameObject> objects, Vector3 cameraPosition)
@@ -291,6 +397,11 @@ private void CollectParticleMeshDraws(IReadOnlyList<GameObject> objects, Vector3
         {
             if (!obj.IsActive)
                 continue;
+            if (!LayerMask.Contains(_activeCullingMask, obj.Layer))
+            {
+                CollectParticleMeshDraws(obj.Children, cameraPosition);
+                continue;
+            }
 
             var ps = obj.GetComponent<GrokoEngine.ParticleSystem>();
             if (ps is { Enabled: true, RendererModuleEnabled: true } &&
@@ -376,8 +487,8 @@ private void QueueParticleMeshDraws(GameObject obj, GrokoEngine.ParticleSystem p
                 null,
                 null,
                 null,
-                ps.ParticleCastShadows,
-                ps.ParticleReceiveShadows);
+                castShadows: ps.ParticleCastShadows,
+                receiveShadows: ps.ParticleReceiveShadows);
         }
     }
 
@@ -931,8 +1042,12 @@ private static int CreateParticleShader()
             uniform int       uHasTexture;
             uniform int       uSoftParticles;
             uniform sampler2D uDepthTex;
+            uniform sampler2D uOpaqueTexture;
             uniform vec2      uScreenSize;
             uniform float     uSoftRange;
+            uniform int       uDistortionEnabled;
+            uniform float     uDistortionStrength;
+            uniform float     uRefractionStrength;
 
             float LinearizeDepth(float depth)
             {
@@ -968,6 +1083,20 @@ private static int CreateParticleShader()
                     outColor.a      *= fade;
                 }
 
+                if (uDistortionEnabled != 0 && uScreenSize.x > 0.0 && outColor.a > 0.001)
+                {
+                    vec2 screenUv = gl_FragCoord.xy / uScreenSize;
+                    vec2 centered = vUv * 2.0 - 1.0;
+                    float radial = clamp(1.0 - length(centered), 0.0, 1.0);
+                    vec2 texNoise = texColor.rg * 2.0 - 1.0;
+                    vec2 swirl = vec2(-centered.y, centered.x) * radial;
+                    vec2 offset = (texNoise * 0.65 + swirl * 0.35) * uDistortionStrength * 0.025 * outColor.a;
+                    vec3 sceneColor = texture(uOpaqueTexture, clamp(screenUv + offset, vec2(0.001), vec2(0.999))).rgb;
+                    float refract = clamp(uRefractionStrength, 0.0, 2.0) * outColor.a;
+                    outColor.rgb = mix(outColor.rgb, sceneColor + outColor.rgb * 0.18, clamp(refract, 0.0, 1.0));
+                    outColor.a = max(outColor.a * 0.35, radial * clamp(abs(uDistortionStrength), 0.0, 1.0) * 0.08);
+                }
+
                 if (outColor.a < 0.01) discard;
             }
             """;
@@ -997,7 +1126,29 @@ private readonly record struct ParticleRenderRange(
     int Queue,
     int SortingLayer,
     int OrderInLayer,
-    int SortingFudge);
+    int SortingFudge,
+    bool Distortion,
+    float DistortionStrength,
+    float RefractionStrength);
+
+private readonly record struct ParticleSortSlice(
+    string? TexturePath,
+    int Start,
+    int Count,
+    ParticleBlendMode Blend,
+    bool Soft,
+    float SoftRange,
+    int Queue,
+    int SortingLayer,
+    int OrderInLayer,
+    int SortingFudge,
+    ParticleSortMode SortMode,
+    float Distance,
+    float Age,
+    int Insertion,
+    bool Distortion,
+    float DistortionStrength,
+    float RefractionStrength);
 
 private readonly record struct ParticleVisualMesh(
     string MeshPath,

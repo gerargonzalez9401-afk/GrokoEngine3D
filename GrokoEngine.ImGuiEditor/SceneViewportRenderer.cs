@@ -37,6 +37,8 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     /// <summary>Recalcula el static batch cuando detecta cambios en objetos estáticos o sus padres.</summary>
     public bool AutoInvalidateStaticBatch { get; set; } = true;
     public bool RenderRealtimeShadows { get; set; } = true;
+    public int OpaqueTextureHandle { get; set; }
+    public Action? ResolveAndCaptureOpaqueTexture { get; set; }
     public int ShadowUpdateIntervalFrames { get; set; } = 1;
     public SceneRenderStats LastStats { get; private set; } = SceneRenderStats.Empty;
 
@@ -48,7 +50,9 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly List<SolidVertex> solidVertices = new(4096);
     private readonly List<SolidRange> solidRanges = new(128);
     private readonly List<DynamicMeshDraw> dynamicMeshDraws = new(256);
+    private readonly List<DynamicMeshDraw> refractiveMeshDraws = new(64);
     private readonly List<SkinnedMeshDraw> skinnedMeshDraws = new(64);
+    private readonly List<SkinnedMeshDraw> refractiveSkinnedMeshDraws = new(32);
     private readonly List<ShaderGraphDynamicMeshDraw> shaderGraphDynamicMeshDraws = new(128);
     private readonly List<ShaderGraphSkinnedMeshDraw> shaderGraphSkinnedMeshDraws = new(32);
     // Buffers reutilizables para ApplySceneLighting(). Antes se creaban listas nuevas
@@ -127,6 +131,11 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int solidHasRoughnessMapLocation;
     private int solidMetallicMapLocation;
     private int solidHasMetallicMapLocation;
+    private int solidRefractivePassLocation;
+    private int solidOpaqueTextureLocation;
+    private int solidScreenTexelLocation;
+    private int solidRefractionStrengthLocation;
+    private int solidDistortionStrengthLocation;
     private int solidLightMvpLocation;
     private readonly int[] solidCascadeLightMvpLocations = new int[MaxDirectionalShadowCascades];
     private readonly int[] solidCascadeSplitLocations = new int[MaxDirectionalShadowCascades];
@@ -234,6 +243,8 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private bool _staticDirty = true;
     private bool _buildingStatic = false;
     private int _staticBatchSignature;
+    private int _nextStaticSignatureCheckFrame;
+    private const int StaticSignatureCheckIntervalFrames = 30;
 
     /// <summary>
     /// Llama esto cuando cualquier objeto IsStatic cambia, se añaden/quitan
@@ -243,6 +254,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     {
         _staticDirty = true;
         _staticBatchSignature = 0;
+        _nextStaticSignatureCheckFrame = 0;
     }
 
     // ── Particle Renderer ──────────────────────────────────────────
@@ -255,6 +267,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int _particleTexLoc, _particleHasTexLoc;
     private int _particleSoftLoc, _particleDepthTexLoc, _particleScreenSizeLoc;
     private int _particleSoftRangeLoc;
+    private int _particleOpaqueTexLoc, _particleDistortionLoc, _particleDistortionStrengthLoc, _particleRefractionStrengthLoc;
 
     // ── Depth FBO para soft particles ─────────────────────────────
     private int _depthFbo, _depthTex;
@@ -268,12 +281,16 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int _trailBufferCap;
     private readonly List<ParticleVertex> _trailVerts = new(2048);
     private readonly List<ParticleVertex> _particleVerts = new(4096);
+    private readonly List<ParticleVertex> _particleSortedVerts = new(4096);
+    private readonly List<ParticleSortSlice> _particleSortSlices = new(4096);
     private readonly Dictionary<string, (DateTime FileTime, MaterialAssetData Data)> _particleMaterialCache = new(StringComparer.OrdinalIgnoreCase);
 
     // ── Occlusion Culling ──────────────────────────────────────────
     /// <summary>Estado de culling de la cámara activa para el frame actual (ver Camera.FrustumCulling / OcclusionCulling).</summary>
     private bool _frustumCullingEnabled = true;
     private bool _occlusionCullingEnabled = false;
+    private int _activeCullingMask = LayerMask.Everything;
+    private int _staticBatchCullingMask = LayerMask.Everything;
     public int DebugView { get; set; }
     private readonly Dictionary<string, int> _occlusionQueries = new();
     private readonly Dictionary<string, bool> _occlusionVisible = new();
@@ -441,7 +458,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             _statsTriangles,
             _staticRanges.Count,
             solidRanges.Count,
-            dynamicMeshDraws.Count + skinnedMeshDraws.Count + shaderGraphDynamicMeshDraws.Count + shaderGraphSkinnedMeshDraws.Count,
+            dynamicMeshDraws.Count + refractiveMeshDraws.Count + skinnedMeshDraws.Count + refractiveSkinnedMeshDraws.Count + shaderGraphDynamicMeshDraws.Count + shaderGraphSkinnedMeshDraws.Count,
             _statsLineDrawCalls,
             _statsParticleDrawCalls,
             textureCache.Count,
@@ -512,9 +529,13 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         var frustum = new Frustum(mvp);
         _frustumCullingEnabled = camera.FrustumCulling;
         _occlusionCullingEnabled = camera.OcclusionCulling;
+        _activeCullingMask = camera.CullingMask;
+        if (_staticBatchCullingMask != _activeCullingMask)
+            _staticDirty = true;
 
-        if (AutoInvalidateStaticBatch)
+        if (AutoInvalidateStaticBatch && !_staticDirty && _frameCount >= _nextStaticSignatureCheckFrame)
         {
+            _nextStaticSignatureCheckFrame = _frameCount + StaticSignatureCheckIntervalFrames;
             int staticSignature = ComputeStaticBatchSignature(objects);
             if (staticSignature != _staticBatchSignature)
             {
@@ -543,6 +564,12 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             // Subir a GPU con StaticDraw (optimizado para lectura frecuente, escritura rara)
             UploadStaticBatch();
             _staticDirty = false;
+            _staticBatchCullingMask = _activeCullingMask;
+            if (AutoInvalidateStaticBatch)
+            {
+                _staticBatchSignature = ComputeStaticBatchSignature(objects);
+                _nextStaticSignatureCheckFrame = _frameCount + StaticSignatureCheckIntervalFrames;
+            }
         }
 
         // ── Construir vértices dinámicos (excluye objetos estáticos) ──
@@ -550,7 +577,9 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         solidVertices.Clear();
         solidRanges.Clear();
         dynamicMeshDraws.Clear();
+        refractiveMeshDraws.Clear();
         skinnedMeshDraws.Clear();
+        refractiveSkinnedMeshDraws.Clear();
         shaderGraphDynamicMeshDraws.Clear();
         shaderGraphSkinnedMeshDraws.Clear();
         _pendingOcclusionObjects.Clear();   // reset occlusion gather list each frame
@@ -561,7 +590,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
                 BuildObjectRecursive(obj, selected, frustum, Matrix4.Identity);
         CollectParticleMeshDraws(objects, ToTk(camera.Position));
 
-        if (vertices.Count == 0 && solidVertices.Count == 0 && dynamicMeshDraws.Count == 0 && skinnedMeshDraws.Count == 0 &&
+        if (vertices.Count == 0 && solidVertices.Count == 0 && dynamicMeshDraws.Count == 0 && refractiveMeshDraws.Count == 0 && skinnedMeshDraws.Count == 0 && refractiveSkinnedMeshDraws.Count == 0 &&
             shaderGraphDynamicMeshDraws.Count == 0 && shaderGraphSkinnedMeshDraws.Count == 0 && _staticVertexCount == 0)
         {
             GL.Enable(EnableCap.DepthTest);
@@ -621,6 +650,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             ApplyBakedSolidVertexMode();
             ApplyShadowUniforms(shadowInfo, spotShadowInfo, pointShadowInfo);
             GL.Uniform1(solidTextureLocation, 0);
+            SetIntUniform(solidRefractivePassLocation, 0);
             ApplySceneLighting(objects, ToTk(camera.Position));
             GL.BindVertexArray(_staticVertexArray);
             GL.ActiveTexture(TextureUnit.Texture0);
@@ -640,11 +670,28 @@ internal sealed partial class SceneViewportRenderer : IDisposable
 
         long dynamicPhaseStart = BeginRenderPass(SceneRenderPass.DynamicOpaque);
         // ── Dibujar objetos dinámicos ─────────────────────────────
-        if (dynamicMeshDraws.Count > 0)
-            DrawDynamicMeshDraws(ref mvp, shadowInfo, spotShadowInfo, pointShadowInfo, objects, ToTk(camera.Position));
+        if (dynamicMeshDraws.Count > 0 || skinnedMeshDraws.Count > 0)
+        {
+            Vector3 cameraPosTk = ToTk(camera.Position);
+            GL.UseProgram(solidShader);
+            GL.UniformMatrix4(solidMvpLocation, true, ref mvp);
+            GL.Uniform1(solidTextureLocation, 0);
+            ApplyShadowUniforms(shadowInfo, spotShadowInfo, pointShadowInfo);
+            SetIntUniform(solidRefractivePassLocation, 0);
+            ApplySceneLighting(objects, cameraPosTk);
+            GL.ActiveTexture(TextureUnit.Texture0);
 
-        if (skinnedMeshDraws.Count > 0)
-            DrawSkinnedMeshDraws(ref mvp, shadowInfo, spotShadowInfo, pointShadowInfo, objects, ToTk(camera.Position));
+            if (dynamicMeshDraws.Count > 0)
+                DrawDynamicMeshDraws(ref mvp, shadowInfo, spotShadowInfo, pointShadowInfo, objects, cameraPosTk, manageShaderState: false);
+
+            if (skinnedMeshDraws.Count > 0)
+                DrawSkinnedMeshDraws(ref mvp, shadowInfo, spotShadowInfo, pointShadowInfo, objects, cameraPosTk, manageShaderState: false);
+
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.BindVertexArray(0);
+            ApplyBakedSolidVertexMode();
+            GL.UseProgram(0);
+        }
 
         if (solidVertices.Count > 0)
         {
@@ -653,6 +700,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             ApplyBakedSolidVertexMode();
             ApplyShadowUniforms(shadowInfo, spotShadowInfo, pointShadowInfo);
             GL.Uniform1(solidTextureLocation, 0);
+            SetIntUniform(solidRefractivePassLocation, 0);
             ApplySceneLighting(objects, ToTk(camera.Position));
             GL.BindVertexArray(solidVertexArray);
             GL.ActiveTexture(TextureUnit.Texture0);
@@ -701,6 +749,12 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         if (solidVertices.Count > 0)
             RenderTerrainRanges(solidRanges, solidVertexArray, ref mvp, objects);
         EndRenderPass(SceneRenderPass.Terrain, terrainPhaseStart);
+
+        if (refractiveMeshDraws.Count > 0 || refractiveSkinnedMeshDraws.Count > 0)
+        {
+            ResolveAndCaptureOpaqueTexture?.Invoke();
+            DrawRefractiveMeshDraws(ref mvp, shadowInfo, spotShadowInfo, pointShadowInfo, objects, ToTk(camera.Position), width, height);
+        }
 
         GL.Disable(EnableCap.CullFace);
 

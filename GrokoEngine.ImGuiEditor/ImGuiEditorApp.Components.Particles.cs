@@ -515,6 +515,14 @@ private void DrawParticleSystemInspector(GrokoEngine.ParticleSystem ps)
             if (SmallCheckbox("Soft Particles##psrenderer", ref soft)) ps.SoftParticles = soft;
             if (ps.SoftParticles)
                 DrawFloat("Soft Range##psrenderer", ps.SoftParticleRange, v => ps.SoftParticleRange = Math.Max(0.001f, v), 0.01f, 0.001f, 10f);
+            bool distortion = ps.DistortionEnabled;
+            if (SmallCheckbox("Distortion / Refraction##psrenderer", ref distortion)) ps.DistortionEnabled = distortion;
+            if (ps.DistortionEnabled)
+            {
+                DrawFloat("Distortion Strength##psrenderer", ps.DistortionStrength, v => ps.DistortionStrength = Math.Clamp(v, -2f, 2f), 0.005f, -2f, 2f);
+                DrawFloat("Refraction Strength##psrenderer", ps.RefractionStrength, v => ps.RefractionStrength = Math.Clamp(v, 0f, 2f), 0.005f, 0f, 2f);
+                ImGui.TextDisabled("Uses the Opaque Texture pass for heat, energy, glass and magic distortion.");
+            }
             DrawFloat("Sorting Fudge##psrenderer", ps.SortingFudge, v => ps.SortingFudge = (int)v, 1f, -1000f, 1000f);
             DrawFloat("Bounds Padding##psrenderer", ps.RendererBoundsPadding, v => ps.RendererBoundsPadding = Math.Clamp(v, 0f, 1000f), 0.05f, 0f, 1000f);
             if (ps.RenderMode == ParticleRenderMode.StretchedBillboard || ps.StretchedBillboard)
@@ -1225,6 +1233,8 @@ private static string[] GetParticleModuleMembers(string moduleId) => moduleId sw
             nameof(GrokoEngine.ParticleSystem.StretchedBillboard), nameof(GrokoEngine.ParticleSystem.StretchSpeedScale),
             nameof(GrokoEngine.ParticleSystem.StretchLengthScale), nameof(GrokoEngine.ParticleSystem.SortMode),
             nameof(GrokoEngine.ParticleSystem.SoftParticles), nameof(GrokoEngine.ParticleSystem.SoftParticleRange),
+            nameof(GrokoEngine.ParticleSystem.DistortionEnabled), nameof(GrokoEngine.ParticleSystem.DistortionStrength),
+            nameof(GrokoEngine.ParticleSystem.RefractionStrength),
             nameof(GrokoEngine.ParticleSystem.HdrIntensity), nameof(GrokoEngine.ParticleSystem.ColorSaturation),
             nameof(GrokoEngine.ParticleSystem.ColorVibrance), nameof(GrokoEngine.ParticleSystem.AlphaPower),
             nameof(GrokoEngine.ParticleSystem.ColorVariation), nameof(GrokoEngine.ParticleSystem.SortParticles),

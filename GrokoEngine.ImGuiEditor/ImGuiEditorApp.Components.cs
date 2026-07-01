@@ -98,6 +98,7 @@ internal sealed partial class ImGuiEditorApp
         return CommitSceneMutation("Create Cube", () =>
         {
             var obj = CreateObject("Cube", 1);
+            ConfigureBuiltinPrimitiveMesh(obj, EditorPrimitiveMeshKind.Cube);
             obj.AddComponentWithEngine<BoxCollider>(physicsEngine);
             return obj;
         });
@@ -108,6 +109,7 @@ internal sealed partial class ImGuiEditorApp
         return CommitSceneMutation("Create Plane", () =>
         {
             var obj = CreateObject("Plane", 2);
+            ConfigureBuiltinPrimitiveMesh(obj, EditorPrimitiveMeshKind.Plane);
             obj.ScaleX = 4f;
             obj.ScaleZ = 4f;
             var collider = obj.AddComponentWithEngine<BoxCollider>(physicsEngine);
@@ -137,10 +139,37 @@ internal sealed partial class ImGuiEditorApp
         return CommitSceneMutation("Create " + name, () =>
         {
             var obj = CreateObject(name, type);
+            ConfigureBuiltinPrimitiveMesh(obj, GetPrimitiveMeshKind(type));
             AddDefaultPrimitiveCollider(obj);
             return obj;
         });
     }
+
+    private void ConfigureBuiltinPrimitiveMesh(GameObject obj, EditorPrimitiveMeshKind kind)
+    {
+        string meshPath = PrimitiveMeshFactory.EnsurePrimitiveMesh(rootAssetsPath, kind);
+        var mf = obj.GetComponent<MeshFilter>() ?? obj.AddComponent<MeshFilter>();
+        mf.MeshPath = meshPath;
+        mf.ImportScale = 1f;
+        mf.SubmeshIndex = -1;
+        mf.MaterialSlots.Clear();
+
+        if (obj.GetComponent<MeshRenderer>() == null)
+            obj.AddComponent<MeshRenderer>();
+        if (obj.GetComponent<Material>() == null)
+            obj.AddComponent<Material>();
+    }
+
+    private static EditorPrimitiveMeshKind GetPrimitiveMeshKind(int type) => type switch
+    {
+        1 => EditorPrimitiveMeshKind.Cube,
+        2 => EditorPrimitiveMeshKind.Plane,
+        3 => EditorPrimitiveMeshKind.Sphere,
+        4 => EditorPrimitiveMeshKind.Cylinder,
+        5 => EditorPrimitiveMeshKind.Quad,
+        6 => EditorPrimitiveMeshKind.Capsule,
+        _ => EditorPrimitiveMeshKind.Cube
+    };
 
     
 
@@ -150,6 +179,7 @@ internal sealed partial class ImGuiEditorApp
         return CommitSceneMutation("Create Cube With Gravity", () =>
         {
             var obj = CreateObject("Cube", 1);
+            ConfigureBuiltinPrimitiveMesh(obj, EditorPrimitiveMeshKind.Cube);
             obj.AddComponentWithEngine<BoxCollider>(physicsEngine);
             obj.PosY = 3f;
             obj.AddComponentWithEngine<Rigidbody>(physicsEngine);
@@ -195,8 +225,42 @@ internal sealed partial class ImGuiEditorApp
 
     private void DuplicateSelected()
     {
-        if (selected == null) return;
-        DuplicateObject(selected);
+        if (isPlaying)
+        {
+            statusMessage = "Cannot duplicate while playing";
+            return;
+        }
+
+        var targets = GetTopLevelSelectionTargets();
+        if (targets.Count == 0) return;
+        if (targets.Count == 1)
+        {
+            DuplicateObject(targets[0]);
+            return;
+        }
+
+        CommitSceneMutation("Duplicate " + targets.Count + " Objects", () =>
+        {
+            var clones = new List<GameObject>(targets.Count);
+            for (int i = 0; i < targets.Count; i++)
+            {
+                var source = targets[i];
+                var clone = SceneSerializer.DeserializeObject(SceneSerializer.SerializeObject(source), physicsEngine, scriptCompiler);
+                ResetIds(clone);
+                clone.Name = source.Parent != null
+                    ? GetUniqueChildObjectName(source.Parent, source.Name + "_Copy")
+                    : GetUniqueObjectName(source.Name + "_Copy");
+                clone.Parent = source.Parent;
+                OffsetDuplicatedObject(clone, i + 1);
+                if (source.Parent == null)
+                    objects.Add(clone);
+                clones.Add(clone);
+            }
+
+            selection.SelectMany(clones, SelectionService.SelectionMode.Replace);
+            statusMessage = $"Duplicated {clones.Count} objects";
+            return clones;
+        });
     }
 
     private void DuplicateObject(GameObject source)
@@ -215,6 +279,7 @@ internal sealed partial class ImGuiEditorApp
                 ? GetUniqueChildObjectName(source.Parent, source.Name + "_Copy")
                 : GetUniqueObjectName(source.Name + "_Copy");
             clone.Parent = source.Parent;
+            OffsetDuplicatedObject(clone, 1);
             if (source.Parent == null)
                 objects.Add(clone);
             selected = clone;
@@ -223,10 +288,45 @@ internal sealed partial class ImGuiEditorApp
         });
     }
 
+    private static void OffsetDuplicatedObject(GameObject clone, int duplicateIndex)
+    {
+        float offset = Math.Clamp(duplicateIndex, 1, 8) * 0.35f;
+        clone.PosX += offset;
+        clone.PosZ += offset;
+    }
+
     private void DeleteSelected()
     {
-        if (selected == null) return;
-        DeleteObject(selected);
+        if (isPlaying)
+        {
+            statusMessage = "Cannot delete while playing";
+            return;
+        }
+
+        var targets = GetTopLevelSelectionTargets();
+        if (targets.Count == 0) return;
+        if (targets.Count == 1)
+        {
+            DeleteObject(targets[0]);
+            return;
+        }
+
+        CommitSceneMutation("Delete " + targets.Count + " Objects", () =>
+        {
+            foreach (var target in targets)
+            {
+                UnregisterCollidersRecursive(target);
+                if (target.Parent != null)
+                    target.Parent.Children.Remove(target);
+                else
+                    objects.Remove(target);
+            }
+
+            selection.Clear();
+            selected = objects.FirstOrDefault();
+            statusMessage = $"Deleted {targets.Count} objects";
+            return true;
+        });
     }
 
     private void DeleteObject(GameObject target)
@@ -249,6 +349,19 @@ internal sealed partial class ImGuiEditorApp
             selected = objects.FirstOrDefault();
             return true;
         });
+    }
+
+    private List<GameObject> GetTopLevelSelectionTargets()
+    {
+        var targets = selection.GetTargets()
+            .Where(o => o != null && sceneGraph.FindById(o.EditorId) != null)
+            .Distinct()
+            .ToList();
+
+        return targets
+            .Where(candidate => !targets.Any(other =>
+                !ReferenceEquals(candidate, other) && sceneGraph.IsDescendantOf(candidate, other)))
+            .ToList();
     }
 
     private void ReparentObject(GameObject obj, GameObject? newParent, int newIndex)
@@ -531,6 +644,7 @@ internal sealed partial class ImGuiEditorApp
             new("Lighting", "Rectangle Light", "Rectangular light for panels and windows.", true, () => obj.AddComponent<RectangleLight>()),
             new("Effects", "Particle System", "Preview particle emitter.", obj.GetComponent<GrokoEngine.ParticleSystem>() == null, () => AddPreviewParticleSystem(obj)),
             new("Animation", "Animator", "Unity-style controller, avatar and animation playback.", obj.GetComponent<Animator>() == null, () => obj.AddComponent<Animator>()),
+            new("Animation", "Bone Attachment", "Attach this object to an Animator bone/socket without skinning it.", obj.GetComponent<BoneAttachment>() == null, () => obj.AddComponent<BoneAttachment>()),
             new("UI", "Canvas", "Root for in-game UI / HUD.", obj.GetComponent<Canvas>() == null, () => obj.AddComponent<Canvas>()),
             new("UI", "Panel", "Window/panel background for UI containers.", true, () => obj.AddComponent<UIPanel>()),
             new("UI", "Image", "Colored rectangle or sprite on screen.", true, () => obj.AddComponent<UIImage>()),
@@ -893,6 +1007,61 @@ internal sealed partial class ImGuiEditorApp
                             SaveMaterialComponentToAsset(mat);
                         }
                         EndMaterialEdit(obj, mat);
+                        FieldRow("Surface Type");
+                        string surfacePreview = mat.SurfaceType == MaterialSurfaceType.Transparent ? "Transparent" : "Opaque";
+                        if (ImGui.BeginCombo("##mat_surface_type", surfacePreview))
+                        {
+                            if (ImGui.Selectable("Opaque", mat.SurfaceType == MaterialSurfaceType.Opaque))
+                            {
+                                BeginMaterialEdit(obj);
+                                mat.SurfaceType = MaterialSurfaceType.Opaque;
+                                mat.Alpha = 1f;
+                                sceneRenderer.InvalidateStaticBatch();
+                                SaveMaterialComponentToAsset(mat);
+                                EndMaterialEdit(obj, mat);
+                            }
+                            if (ImGui.Selectable("Transparent", mat.SurfaceType == MaterialSurfaceType.Transparent))
+                            {
+                                BeginMaterialEdit(obj);
+                                mat.SurfaceType = MaterialSurfaceType.Transparent;
+                                mat.Alpha = Math.Min(mat.Alpha, 0.65f);
+                                mat.RefractionStrength = Math.Max(mat.RefractionStrength, 0.08f);
+                                sceneRenderer.InvalidateStaticBatch();
+                                SaveMaterialComponentToAsset(mat);
+                                EndMaterialEdit(obj, mat);
+                            }
+                            ImGui.EndCombo();
+                        }
+                        if (mat.SurfaceType == MaterialSurfaceType.Transparent)
+                        {
+                            float alpha = mat.Alpha;
+                            if (DrawUnitySliderFloat("Alpha##matalpha", ref alpha, 0f, 1f))
+                            {
+                                BeginMaterialEdit(obj);
+                                mat.Alpha = Math.Clamp(alpha, 0f, 1f);
+                                sceneRenderer.InvalidateStaticBatch();
+                                SaveMaterialComponentToAsset(mat);
+                            }
+                            EndMaterialEdit(obj, mat);
+                            float refraction = mat.RefractionStrength;
+                            if (DrawUnitySliderFloat("Refraction##matrefraction", ref refraction, 0f, 1f))
+                            {
+                                BeginMaterialEdit(obj);
+                                mat.RefractionStrength = Math.Clamp(refraction, 0f, 1f);
+                                sceneRenderer.InvalidateStaticBatch();
+                                SaveMaterialComponentToAsset(mat);
+                            }
+                            EndMaterialEdit(obj, mat);
+                            float distortion = mat.DistortionStrength;
+                            if (DrawUnitySliderFloat("Distortion##matdistortion", ref distortion, 0f, 1f))
+                            {
+                                BeginMaterialEdit(obj);
+                                mat.DistortionStrength = Math.Clamp(distortion, 0f, 1f);
+                                sceneRenderer.InvalidateStaticBatch();
+                                SaveMaterialComponentToAsset(mat);
+                            }
+                            EndMaterialEdit(obj, mat);
+                        }
                         DrawCheckRow("Specular Highlights", mat.SpecularHighlights, v =>
                         {
                             BeginMaterialEdit(obj);
@@ -930,41 +1099,7 @@ internal sealed partial class ImGuiEditorApp
                     }
                     break;
                 case Camera cam:
-                    DrawFloat("FOV", cam.FOV, v => cam.FOV = v, 0.5f, 1f, 179f);
-                    DrawFloat("Near Clip", cam.NearClip, v => cam.NearClip = v, 0.01f, 0.001f, 100f);
-                    DrawFloat("Far Clip", cam.FarClip, v => cam.FarClip = v, 1f, 1f, 100000f);
-                    DrawComboRow("Clear Flags", new[] { "Skybox", "Solid Color" }, (int)cam.ClearFlags, v => cam.ClearFlags = (CameraClearFlags)v);
-                    FieldRow("Background");
-                    {
-                        var background = new Vec4(cam.BackgroundR, cam.BackgroundG, cam.BackgroundB, cam.BackgroundA);
-                        if (ColorField4("##camera_background", ref background))
-                        {
-                            cam.BackgroundR = Math.Clamp(background.X, 0f, 1f);
-                            cam.BackgroundG = Math.Clamp(background.Y, 0f, 1f);
-                            cam.BackgroundB = Math.Clamp(background.Z, 0f, 1f);
-                            cam.BackgroundA = Math.Clamp(background.W, 0f, 1f);
-                        }
-                    }
-                    DrawCheckRow("Anti-aliasing", cam.AntiAliasing, v => cam.AntiAliasing = v);
-                    using (new DisabledScope(!cam.AntiAliasing))
-                    {
-                        int samples = cam.AntiAliasingSamples;
-                        FieldRow("Samples");
-                        ImGui.SetNextItemWidth(-1f);
-                        if (ImGui.BeginCombo("##cameraaa", $"{samples}x"))
-                        {
-                            foreach (int option in new[] { 2, 4, 8 })
-                            {
-                                bool selectedSample = samples == option;
-                                if (ImGui.Selectable($"{option}x", selectedSample))
-                                    cam.AntiAliasingSamples = option;
-                                if (selectedSample) ImGui.SetItemDefaultFocus();
-                            }
-                            ImGui.EndCombo();
-                        }
-                    }
-                    DrawCheckRow("Frustum Culling", cam.FrustumCulling, v => cam.FrustumCulling = v);
-                    DrawCheckRow("Occlusion Culling", cam.OcclusionCulling, v => cam.OcclusionCulling = v);
+                    DrawCameraInspector(cam);
                     break;
                 case Terrain terrain:
                     FieldRow("Resolution");
@@ -1536,6 +1671,9 @@ internal sealed partial class ImGuiEditorApp
                     }
                     break;
                 }
+                case BoneAttachment socket:
+                    DrawBoneAttachmentInspector(socket);
+                    break;
                 case GrokoEngine.ParticleSystem ps:
                     DrawParticleSystemInspector(ps);
                     break;
@@ -2212,23 +2350,164 @@ internal sealed partial class ImGuiEditorApp
         }
         if (ctrl && ImGui.IsKeyPressed(ImGuiKey.P))
             TogglePlayMode();
-        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Backslash) && selected != null)
+        if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Backslash) && selection.HasSelection)
         {
             var before = CaptureSceneState();
-            ApplyGridSnapToObject(selected);
-            NotifyObjectTransformChanged(selected);
-            PushSceneState("Align To Grid " + selected.Name, before, CaptureSceneState());
-            statusMessage = "Aligned selected object to grid";
+            var targets = selection.GetTargets();
+            if (targets.Count == 0)
+                return;
+            foreach (var target in targets)
+            {
+                ApplyGridSnapToObject(target);
+                NotifyObjectTransformChanged(target);
+            }
+            PushSceneState(targets.Count > 1 ? "Align Selected To Grid" : "Align To Grid " + targets[0].Name, before, CaptureSceneState());
+            statusMessage = targets.Count > 1 ? $"Aligned {targets.Count} objects to grid" : "Aligned selected object to grid";
         }
         if (ImGui.IsKeyPressed(ImGuiKey.F))
         {
-            if (selected != null) FrameObject(selected);
+            if (selection.Selected.Count > 1) FrameSelection();
+            else if (selected != null) FrameObject(selected);
             else FrameScene();
         }
         if (ImGui.IsKeyPressed(ImGuiKey.F2) && selected != null)
             BeginRenameObject(selected);
         if (ImGui.IsKeyPressed(ImGuiKey.Delete))
             DeleteSelected();
+        if (ImGui.IsKeyPressed(ImGuiKey.Escape))
+        {
+            selection.Clear();
+            selectedAssetPath = null;
+            statusMessage = "Selection cleared";
+        }
+    }
+
+    private void DrawCameraInspector(Camera cam)
+    {
+        DrawEnumCombo("Render Type", cam.RenderType, v => cam.RenderType = v);
+
+        if (SectionHeader("Projection"))
+        {
+            DrawEnumCombo("Projection", cam.Projection, v => cam.Projection = v);
+            if (cam.Projection == CameraProjection.Perspective)
+            {
+                DrawEnumCombo("Field of View Axis", cam.FieldOfViewAxis, v => cam.FieldOfViewAxis = v);
+                DrawFloat("Field of View", cam.FOV, v => cam.FOV = v, 0.5f, 1f, 179f);
+            }
+            else
+            {
+                DrawFloat("Size", cam.OrthographicSize, v => cam.OrthographicSize = v, 0.05f, 0.001f, 100000f);
+            }
+
+            DrawFloat("Near", cam.NearClip, v => cam.NearClip = v, 0.01f, 0.001f, 100f);
+            DrawFloat("Far", cam.FarClip, v => cam.FarClip = v, 1f, 1f, 100000f);
+            DrawCheckRow("Physical Camera", cam.PhysicalCamera, v => cam.PhysicalCamera = v);
+        }
+
+        if (SectionHeader("Rendering"))
+        {
+            DrawReadOnlyComboRow("Renderer", "Default Renderer (Groko Renderer)");
+            DrawCheckRow("Post Processing", cam.PostProcessing, v => cam.PostProcessing = v);
+            DrawEnumCombo("Anti-aliasing", cam.AntiAliasingMode, v =>
+            {
+                cam.AntiAliasingMode = v;
+                cam.AntiAliasing = v != CameraAntiAliasingMode.None;
+            });
+            using (new DisabledScope(cam.AntiAliasingMode == CameraAntiAliasingMode.None))
+            {
+                int samples = cam.AntiAliasingSamples;
+                FieldRow("Samples");
+                ImGui.SetNextItemWidth(-1f);
+                if (ImGui.BeginCombo("##cameraaa", $"{samples}x"))
+                {
+                    foreach (int option in new[] { 2, 4, 8 })
+                    {
+                        bool selectedSample = samples == option;
+                        if (ImGui.Selectable($"{option}x", selectedSample))
+                            cam.AntiAliasingSamples = option;
+                        if (selectedSample) ImGui.SetItemDefaultFocus();
+                    }
+                    ImGui.EndCombo();
+                }
+            }
+            DrawCheckRow("Stop NaNs", cam.StopNaNs, v => cam.StopNaNs = v);
+            DrawCheckRow("Dithering", cam.Dithering, v => cam.Dithering = v);
+            DrawCheckRow("Render Shadows", cam.RenderShadows, v => cam.RenderShadows = v);
+            DrawInt("Priority", cam.Priority, v => cam.Priority = v, 1f, -100, 100);
+            DrawEnumCombo("Opaque Texture", cam.OpaqueTexture, v => cam.OpaqueTexture = v);
+            DrawEnumCombo("Depth Texture", cam.DepthTexture, v => cam.DepthTexture = v);
+            DrawCameraMaskCombo(cam);
+            DrawCheckRow("Occlusion Culling", cam.OcclusionCulling, v => cam.OcclusionCulling = v);
+            DrawCheckRow("Frustum Culling", cam.FrustumCulling, v => cam.FrustumCulling = v);
+        }
+
+        if (SectionHeader("Stack"))
+        {
+            DrawReadOnlyComboRow("Stack", cam.RenderType == CameraRenderType.Base ? "No overlay cameras" : "Overlay camera");
+        }
+
+        if (SectionHeader("Environment"))
+        {
+            DrawEnumCombo("Background Type", cam.ClearFlags, v => cam.ClearFlags = v);
+            if (cam.ClearFlags == CameraClearFlags.SolidColor)
+            {
+                FieldRow("Background");
+                var background = new System.Numerics.Vector4(cam.BackgroundR, cam.BackgroundG, cam.BackgroundB, cam.BackgroundA);
+                if (ColorField4("##camera_background", ref background))
+                {
+                    cam.BackgroundR = Math.Clamp(background.X, 0f, 1f);
+                    cam.BackgroundG = Math.Clamp(background.Y, 0f, 1f);
+                    cam.BackgroundB = Math.Clamp(background.Z, 0f, 1f);
+                    cam.BackgroundA = Math.Clamp(background.W, 0f, 1f);
+                }
+            }
+
+            DrawEnumCombo("Update Mode", cam.VolumeUpdateMode, v => cam.VolumeUpdateMode = v);
+            DrawCameraVolumeMaskCombo(cam);
+            DrawString("Volume Trigger", cam.VolumeTrigger, v => cam.VolumeTrigger = v);
+        }
+
+        if (SectionHeader("Output"))
+        {
+            DrawString("Output Target", cam.OutputTarget, v => cam.OutputTarget = v);
+            DrawInt("Target Display", cam.TargetDisplay, v => cam.TargetDisplay = v, 1f, 0, 7);
+            DrawCheckRow("Allow HDR", cam.AllowHDR, v => cam.AllowHDR = v);
+        }
+    }
+
+    private static void DrawReadOnlyComboRow(string label, string value)
+    {
+        FieldRow(label);
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(4f, 2f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new System.Numerics.Vector4(0.12f, 0.12f, 0.13f, 1f));
+        ImGui.SetNextItemWidth(-1f);
+        ImGui.BeginDisabled();
+        ImGui.InputText("##" + label, ref value, 256, ImGuiInputTextFlags.ReadOnly);
+        ImGui.EndDisabled();
+        ImGui.PopStyleColor();
+        ImGui.PopStyleVar();
+    }
+
+    private static void DrawCameraMaskCombo(Camera cam)
+    {
+        string[] masks = LayerMask.CullingMaskOptions;
+        int index = Array.IndexOf(masks, cam.CullingMask);
+        if (index < 0) index = 0;
+        FieldRow("Culling Mask");
+        ImGui.SetNextItemWidth(-1f);
+        if (ImGui.Combo("##CameraCullingMask", ref index, masks, masks.Length))
+            cam.CullingMask = masks[index];
+    }
+
+    private static void DrawCameraVolumeMaskCombo(Camera cam)
+    {
+        string[] masks = { "Default", "Everything", "Nothing" };
+        int index = Array.IndexOf(masks, cam.VolumeMask);
+        if (index < 0) index = 0;
+        FieldRow("Volume Mask");
+        ImGui.SetNextItemWidth(-1f);
+        if (ImGui.Combo("##CameraVolumeMask", ref index, masks, masks.Length))
+            cam.VolumeMask = masks[index];
     }
 
     private static void DrawFloat(string label, float value, Action<float> set, float speed, float min, float max)
@@ -2240,6 +2519,20 @@ internal sealed partial class ImGuiEditorApp
         ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, new System.Numerics.Vector4(0.17f, 0.17f, 0.18f, 1f));
         ImGui.PushStyleColor(ImGuiCol.FrameBgActive, new System.Numerics.Vector4(0.18f, 0.18f, 0.19f, 1f));
         if (ImGui.DragFloat("##" + label, ref edit, speed, min, max))
+            set(Math.Clamp(edit, min, max));
+        ImGui.PopStyleColor(3);
+        ImGui.PopStyleVar();
+    }
+
+    private static void DrawInt(string label, int value, Action<int> set, float speed, int min, int max)
+    {
+        FieldRow(label);
+        int edit = value;
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(4f, 2f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new System.Numerics.Vector4(0.12f, 0.12f, 0.13f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, new System.Numerics.Vector4(0.17f, 0.17f, 0.18f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBgActive, new System.Numerics.Vector4(0.18f, 0.18f, 0.19f, 1f));
+        if (ImGui.DragInt("##" + label, ref edit, speed, min, max))
             set(Math.Clamp(edit, min, max));
         ImGui.PopStyleColor(3);
         ImGui.PopStyleVar();
@@ -2273,6 +2566,7 @@ internal sealed partial class ImGuiEditorApp
 
         value = Math.Clamp(value, min, max);
         ImGui.PopID();
+        ImGui.Dummy(new Vector2(0f, 3f));
         return changed;
     }
 

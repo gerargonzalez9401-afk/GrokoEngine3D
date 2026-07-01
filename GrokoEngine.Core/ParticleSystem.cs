@@ -404,6 +404,9 @@ namespace GrokoEngine
         public ParticleSortMode SortMode = ParticleSortMode.Distance;
         public bool SoftParticles = false;
         public float SoftParticleRange = 0.15f;
+        public bool DistortionEnabled = false;
+        public float DistortionStrength = 0f;
+        public float RefractionStrength = 0f;
         public float HdrIntensity = 1f;
         public float ColorSaturation = 1f;
         public float ColorVibrance = 0f;

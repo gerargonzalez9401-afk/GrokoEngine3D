@@ -82,7 +82,7 @@ private void DrawProjectAssetPreview(ImDrawListPtr drawList, string path, bool i
         {
             // DrawMaterialPreview dibuja la esfera cacheada si existe y, con
             // requestPreview, encola la generación del visible.
-            DrawMaterialPreview(drawList, path, min, size, requestPreview: true);
+            DrawMeshLikePreview(drawList, min, size, "MAT");
             return;
         }
 
@@ -514,7 +514,7 @@ private void QueuePreviewGeneration(string path)
 
 private static bool ShouldQueuePreviewAsset(string path)
     {
-        if (MaterialAsset.IsTexturePath(path) || MaterialAsset.IsMaterialPath(path))
+        if (MaterialAsset.IsTexturePath(path))
             return true;
 
         string kind = GetAssetKind(path);
@@ -915,9 +915,6 @@ private static System.Drawing.Bitmap CreatePreviewBitmap(System.Drawing.Bitmap o
 
 private bool TryGetMaterialSpherePreviewTexture(string path, bool requestPreview, out IntPtr textureId)
     {
-        if (TryGetShaderGraphMaterialPreviewSource(path, out var data, out var shaderGraphPath))
-            return TryGetShaderGraphMaterialPreviewTexture(path, data, shaderGraphPath, requestPreview, out textureId);
-
         if (TryGetCachedPreviewTexture(path, out textureId))
             return true;
 
@@ -967,38 +964,17 @@ private bool TryGetShaderGraphMaterialPreviewTexture(string path, MaterialAssetD
             }
         }
 
-        if (!requestPreview)
-        {
-            assetPreviewFrameMisses.Add(key);
-            return false;
-        }
+        if (TryGetCachedPreviewTexture(path, out textureId))
+            return true;
 
-        using System.Drawing.Bitmap? bitmap = GenerateShaderGraphMaterialPreviewBitmap(data, shaderGraphPath);
-        if (bitmap == null)
-        {
-            lock (previewJobLock)
-                previewGenerationFailures[key] = writeTime;
-            return false;
-        }
+        if (requestPreview)
+            QueuePreviewGeneration(path);
 
-        using var previewBitmap = CreatePreviewBitmap(bitmap, 128);
-        if (!CreatePreviewTextureFromBitmap(previewBitmap, out int texture))
-        {
-            lock (previewJobLock)
-                previewGenerationFailures[key] = writeTime;
-            return false;
-        }
+        // Mantener el Project Panel ligero: no cocinamos previews ShaderGraph dentro del draw del tile.
+        // El preview normal del material se carga por cola/cache y evita caídas de FPS al mostrar muchos assets.
+        assetPreviewFrameMisses.Add(key);
+        return false;
 
-        assetPreviewTextures[key] = texture;
-        assetPreviewWriteTimes[key] = writeTime;
-        assetPreviewNextValidationUtc[key] = now + PreviewValidationDelay();
-
-        lock (previewJobLock)
-            previewGenerationFailures.Remove(key);
-
-        textureId = (IntPtr)texture;
-        assetPreviewFrameCache[key] = textureId;
-        return true;
     }
 
 private bool TryGetShaderGraphMaterialPreviewSource(string path, out MaterialAssetData data, out string shaderGraphPath)

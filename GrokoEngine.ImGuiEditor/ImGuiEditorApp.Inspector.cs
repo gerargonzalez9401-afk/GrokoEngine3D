@@ -97,6 +97,13 @@ internal sealed partial class ImGuiEditorApp
             return;
         }
 
+        if (!inspectorLocked && inspectedAssetPath == null && selection.Selected.Count > 1)
+        {
+            DrawMultiObjectInspector(selection.Selected);
+            ImGui.EndChild();
+            return;
+        }
+
         DrawSelectedObjectHeader(inspected);
         HandleInspectorAssetDropTarget(inspected);
         DrawObjectEditorMeta(inspected);
@@ -159,8 +166,8 @@ internal sealed partial class ImGuiEditorApp
         float width = Math.Max(120f, ImGui.GetContentRegionAvail().X);
         var max = min + new Vector2(width, 48f);
         var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(min, max, ImGui.GetColorU32(new System.Numerics.Vector4(0.205f, 0.205f, 0.205f, 1f)), 7f);
-        drawList.AddRect(min, max, ImGui.GetColorU32(new System.Numerics.Vector4(0.285f, 0.285f, 0.285f, 1f)), 7f);
+        drawList.AddRectFilled(min, max, ImGui.GetColorU32(new System.Numerics.Vector4(0.215f, 0.215f, 0.215f, 1f)), 6f);
+        drawList.AddRect(min, max, ImGui.GetColorU32(new System.Numerics.Vector4(0.315f, 0.315f, 0.315f, 1f)), 6f);
         drawList.AddRectFilled(min, min + new Vector2(3f, 48f), ImGui.GetColorU32(UiAccent), 7f);
 
         ImGui.PushStyleColor(ImGuiCol.ChildBg, new System.Numerics.Vector4(0f, 0f, 0f, 0f));
@@ -205,6 +212,152 @@ internal sealed partial class ImGuiEditorApp
         ImGui.Spacing();
     }
 
+    private void DrawMultiObjectInspector(IReadOnlyList<GameObject> targets)
+    {
+        var validTargets = targets.Where(o => o != null).Distinct().ToList();
+        if (validTargets.Count == 0)
+        {
+            ImGui.TextDisabled("No selection");
+            return;
+        }
+
+        DrawMultiObjectHeader(validTargets);
+        ImGui.Spacing();
+
+        bool active = validTargets.All(o => o.IsActive);
+        bool mixedActive = validTargets.Any(o => o.IsActive != active);
+        DrawMultiCheckRow("Active", active, mixedActive, value =>
+            CommitSceneMutation(value ? "Activate Selected" : "Deactivate Selected", () =>
+            {
+                foreach (var obj in validTargets)
+                    obj.IsActive = value;
+                sceneRenderer.InvalidateCullingState();
+                statusMessage = value ? "Selected objects enabled" : "Selected objects disabled";
+                return true;
+            }));
+
+        bool staticFlag = validTargets.All(o => o.IsStatic);
+        bool mixedStatic = validTargets.Any(o => o.IsStatic != staticFlag);
+        DrawMultiCheckRow("Static", staticFlag, mixedStatic, value =>
+            CommitSceneMutation(value ? "Set Selected Static" : "Unset Selected Static", () =>
+            {
+                foreach (var obj in validTargets)
+                    obj.IsStatic = value;
+                sceneRenderer.InvalidateStaticBatch();
+                sceneRenderer.InvalidateCullingState();
+                statusMessage = value ? "Selected objects marked static" : "Selected objects marked dynamic";
+                return true;
+            }));
+
+        if (DrawComponentFrame("Transform", "Transform:MultiSelection", null, false, false, out _, out _))
+        {
+            DrawMultiTransformVector(validTargets, "Position",
+                o => new Vector3(o.PosX, o.PosY, o.PosZ),
+                (o, v) => { o.PosX = v.X; o.PosY = v.Y; o.PosZ = v.Z; },
+                0.05f, -100000f, 100000f);
+            DrawMultiTransformVector(validTargets, "Rotation",
+                o => new Vector3(o.RotX, o.RotY, o.RotZ),
+                (o, v) => { o.RotX = v.X; o.RotY = v.Y; o.RotZ = v.Z; },
+                0.5f, -36000f, 36000f);
+            DrawMultiTransformVector(validTargets, "Scale",
+                o => new Vector3(o.ScaleX, o.ScaleY, o.ScaleZ),
+                (o, v) => { o.ScaleX = v.X; o.ScaleY = v.Y; o.ScaleZ = v.Z; },
+                0.05f, 0.001f, 1000f);
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        if (ImGui.Button("Frame Selection", new Vector2(-1f, 26f)))
+            FrameSelection();
+        if (!isPlaying && ImGui.Button("Duplicate Selected", new Vector2(-1f, 26f)))
+            DuplicateSelected();
+        if (!isPlaying && ImGui.Button("Delete Selected", new Vector2(-1f, 26f)))
+            DeleteSelected();
+    }
+
+    private void DrawMultiObjectHeader(IReadOnlyList<GameObject> targets)
+    {
+        var min = ImGui.GetCursorScreenPos();
+        float width = Math.Max(120f, ImGui.GetContentRegionAvail().X);
+        var max = min + new Vector2(width, 58f);
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(min, max, ImGui.GetColorU32(new System.Numerics.Vector4(0.215f, 0.215f, 0.215f, 1f)), 6f);
+        drawList.AddRect(min, max, ImGui.GetColorU32(new System.Numerics.Vector4(0.335f, 0.335f, 0.335f, 0.95f)), 6f);
+        drawList.AddRectFilled(min, min + new Vector2(3f, 58f), ImGui.GetColorU32(UiAccent), 7f);
+
+        ImGui.BeginChild("InspectorMultiObjectHeader", new Vector2(0f, 58f), ImGuiChildFlags.None);
+        ImGui.SetCursorPos(new Vector2(10f, 10f));
+        DrawInlineIcon(EditorIcon.Transform, "Multiple objects", 24f);
+        ImGui.SameLine(0f, 9f);
+        ImGui.BeginGroup();
+        ImGui.TextUnformatted($"{targets.Count} objects selected");
+        string sample = string.Join(", ", targets.Take(3).Select(o => o.Name));
+        if (targets.Count > 3)
+            sample += ", ...";
+        ImGui.TextDisabled(sample);
+        ImGui.EndGroup();
+        ImGui.EndChild();
+    }
+
+    private void DrawMultiCheckRow(string label, bool value, bool mixed, Action<bool> apply)
+    {
+        FieldRow(label);
+        bool edited = value;
+        ImGui.PushID("multi_" + label);
+        if (mixed)
+        {
+            ImGui.TextDisabled("--");
+            ImGui.SameLine();
+        }
+        if (ImGui.Checkbox("##check", ref edited))
+            apply(edited);
+        ImGui.PopID();
+    }
+
+    private void DrawMultiTransformVector(
+        IReadOnlyList<GameObject> targets,
+        string label,
+        Func<GameObject, Vector3> get,
+        Action<GameObject, Vector3> set,
+        float speed,
+        float min,
+        float max)
+    {
+        Vector3 value = AverageVector(targets, get);
+        bool mixed = targets.Any(o => !NearlyEqual(get(o), value, 0.0001f));
+        if (mixed)
+            ImGui.TextDisabled(label + " mixed - editing applies one value to all selected objects.");
+
+        float x = value.X, y = value.Y, z = value.Z;
+        if (DrawAxisFloat3(label, ref x, ref y, ref z, speed, min, max))
+        {
+            var before = CaptureSceneState();
+            var applied = new Vector3(x, y, z);
+            foreach (var obj in targets)
+            {
+                set(obj, applied);
+                NotifyObjectTransformChanged(obj);
+            }
+            PushSceneState("Transform Selected " + label, before, CaptureSceneState());
+            sceneDirty = true;
+        }
+    }
+
+    private static Vector3 AverageVector(IReadOnlyList<GameObject> targets, Func<GameObject, Vector3> get)
+    {
+        if (targets.Count == 0) return new Vector3();
+        Vector3 sum = new();
+        foreach (var obj in targets)
+            sum += get(obj);
+        return sum * (1f / targets.Count);
+    }
+
+    private static bool NearlyEqual(Vector3 a, Vector3 b, float epsilon) =>
+        MathF.Abs(a.X - b.X) <= epsilon &&
+        MathF.Abs(a.Y - b.Y) <= epsilon &&
+        MathF.Abs(a.Z - b.Z) <= epsilon;
+
     private void DrawObjectEditorMeta(GameObject obj)
     {
 
@@ -241,7 +394,7 @@ internal sealed partial class ImGuiEditorApp
             ImGui.SetNextItemWidth(itemWidth);
             if (ImGui.BeginCombo("##ObjectLayer", layer))
             {
-                foreach (string option in new[] { "Default", "TransparentFX", "Ignore Raycast", "Water", "UI", "Player", "Enemy", "Ground", "Pickup", "Interactable" })
+                foreach (string option in LayerMask.BuiltinLayerNames)
                     if (ImGui.Selectable(option, string.Equals(layer, option, StringComparison.Ordinal)))
                         obj.Layer = LayerMask.NameToLayer(option);
                 ImGui.EndCombo();
@@ -1314,17 +1467,17 @@ internal sealed partial class ImGuiEditorApp
             open = true;
 
         ImGui.PushID(stateId);
-        float rowH = 25f;
+        float rowH = 24f;
         float avail = Math.Max(120f, ImGui.GetContentRegionAvail().X);
         Vector2 rowMin = ImGui.GetCursorScreenPos();
         Vector2 rowMax = rowMin + new Vector2(avail, rowH);
         var drawList = ImGui.GetWindowDrawList();
         bool headerHovered = ImGui.IsMouseHoveringRect(rowMin, rowMax);
         drawList.AddRectFilled(rowMin, rowMax, ImGui.GetColorU32(headerHovered
-            ? new System.Numerics.Vector4(0.255f, 0.255f, 0.255f, 1f)
-            : new System.Numerics.Vector4(0.215f, 0.215f, 0.215f, 1f)), 6f);
-        drawList.AddRect(rowMin, rowMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.305f, 0.305f, 0.305f, 0.90f)), 6f);
-        drawList.AddRectFilled(rowMin, rowMin + new Vector2(3f, rowH), ImGui.GetColorU32(UiAccent), 6f);
+            ? new System.Numerics.Vector4(0.275f, 0.275f, 0.275f, 1f)
+            : new System.Numerics.Vector4(0.225f, 0.225f, 0.225f, 1f)), 5f);
+        drawList.AddRect(rowMin, rowMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.335f, 0.335f, 0.335f, 0.90f)), 5f);
+        drawList.AddRectFilled(rowMin, rowMin + new Vector2(2f, rowH), ImGui.GetColorU32(UiAccent), 5f);
 
         ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0f, 0f, 0f, 0f));
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new System.Numerics.Vector4(0.26f, 0.26f, 0.27f, 0.85f));
@@ -1588,9 +1741,9 @@ internal sealed partial class ImGuiEditorApp
         bool hovered = ImGui.IsMouseHoveringRect(min, max);
 
         drawList.AddRectFilled(min, max, ImGui.GetColorU32(hovered
-            ? new System.Numerics.Vector4(0.205f, 0.205f, 0.210f, 1f)
-            : new System.Numerics.Vector4(0.155f, 0.155f, 0.160f, 1f)));
-        drawList.AddLine(max - new Vector2(width, 1f), max - new Vector2(0f, 1f), ImGui.GetColorU32(new System.Numerics.Vector4(0.220f, 0.220f, 0.225f, 0.75f)));
+            ? new System.Numerics.Vector4(0.255f, 0.255f, 0.255f, 1f)
+            : new System.Numerics.Vector4(0.205f, 0.205f, 0.205f, 1f)), 4f);
+        drawList.AddLine(max - new Vector2(width, 1f), max - new Vector2(0f, 1f), ImGui.GetColorU32(new System.Numerics.Vector4(0.315f, 0.315f, 0.315f, 0.75f)));
         drawList.AddText(min + new Vector2(6f, 3f), ImGui.GetColorU32(new System.Numerics.Vector4(0.82f, 0.82f, 0.82f, 1f)), open ? "v" : ">");
         drawList.AddText(min + new Vector2(24f, 3f), ImGui.GetColorU32(new System.Numerics.Vector4(0.72f, 0.72f, 0.72f, 1f)), title);
 
@@ -1913,6 +2066,10 @@ internal sealed partial class ImGuiEditorApp
         mat.ShaderGraphTextures = new Dictionary<string, string>(data.ShaderGraphTextures, StringComparer.OrdinalIgnoreCase);
         mat.Roughness = Clamp01(data.Roughness);
         mat.Metallic = Clamp01(data.Metallic);
+        mat.SurfaceType = data.SurfaceType;
+        mat.Alpha = Clamp01(data.Alpha);
+        mat.RefractionStrength = Clamp01(data.RefractionStrength);
+        mat.DistortionStrength = Clamp01(data.DistortionStrength);
         mat.SpecularHighlights = data.SpecularHighlights;
         mat.EnvironmentReflections = data.EnvironmentReflections;
         mat.EmissionR = Clamp01(data.EmissionR);
@@ -2084,6 +2241,10 @@ internal sealed partial class ImGuiEditorApp
         ShaderGraphTextures = new Dictionary<string, string>(mat.ShaderGraphTextures, StringComparer.OrdinalIgnoreCase),
         Roughness = mat.Roughness,
         Metallic = mat.Metallic,
+        SurfaceType = mat.SurfaceType,
+        Alpha = mat.Alpha,
+        RefractionStrength = mat.RefractionStrength,
+        DistortionStrength = mat.DistortionStrength,
         SpecularHighlights = mat.SpecularHighlights,
         EnvironmentReflections = mat.EnvironmentReflections,
         EmissionR = mat.EmissionR,
@@ -2108,6 +2269,10 @@ internal sealed partial class ImGuiEditorApp
         ShaderGraphTextures = new Dictionary<string, string>(data.ShaderGraphTextures, StringComparer.OrdinalIgnoreCase),
         Roughness = data.Roughness,
         Metallic = data.Metallic,
+        SurfaceType = data.SurfaceType,
+        Alpha = data.Alpha,
+        RefractionStrength = data.RefractionStrength,
+        DistortionStrength = data.DistortionStrength,
         SpecularHighlights = data.SpecularHighlights,
         EnvironmentReflections = data.EnvironmentReflections,
         EmissionR = data.EmissionR,
@@ -2187,6 +2352,7 @@ internal sealed partial class ImGuiEditorApp
 
         if (!hasShaderGraph && SectionHeader("Surface Inputs"))
         {
+            ImGui.Dummy(new Vector2(0f, 2f));
             var color = new System.Numerics.Vector3(data.R, data.G, data.B);
             FieldRow("Base Color");
             if (ColorField("##base", ref color))
@@ -2195,23 +2361,65 @@ internal sealed partial class ImGuiEditorApp
             }
 
             string albedo = data.AlbedoPath;
-            if (DrawMaterialAssetPath("Base Map", ref albedo)) { data.AlbedoPath = albedo; changed = true; }
+            if (DrawMaterialAssetPath("Base Map", ref albedo))
+            {
+                data.AlbedoPath = albedo;
+                data.TexturePath = albedo;
+                changed = true;
+            }
             string normal = data.NormalMapPath;
             if (DrawMaterialAssetPath("Normal Map", ref normal)) { data.NormalMapPath = normal; changed = true; }
             string roughnessMap = data.RoughnessMapPath;
             if (DrawMaterialAssetPath("Roughness Map", ref roughnessMap)) { data.RoughnessMapPath = roughnessMap; changed = true; }
             string metallicMap = data.MetallicMapPath;
             if (DrawMaterialAssetPath("Metallic Map", ref metallicMap)) { data.MetallicMapPath = metallicMap; changed = true; }
-            ImGui.Dummy(new Vector2(0f, 3f));
+            ImGui.Dummy(new Vector2(0f, 8f));
         }
 
         if (!hasShaderGraph && SectionHeader("Surface"))
         {
+            ImGui.Dummy(new Vector2(0f, 2f));
             float metallic = data.Metallic;
             if (DrawUnitySliderFloat("Metallic", ref metallic, 0f, 1f)) { data.Metallic = metallic; changed = true; }
 
             float roughness = data.Roughness;
             if (DrawUnitySliderFloat("Roughness", ref roughness, 0f, 1f)) { data.Roughness = roughness; changed = true; }
+
+            ImGui.Dummy(new Vector2(0f, 4f));
+
+            FieldRow("Surface Type");
+            string surfacePreview = data.SurfaceType == MaterialSurfaceType.Transparent ? "Transparent" : "Opaque";
+            if (ImGui.BeginCombo("##matasset_surface_type", surfacePreview))
+            {
+                if (ImGui.Selectable("Opaque", data.SurfaceType == MaterialSurfaceType.Opaque))
+                {
+                    data.SurfaceType = MaterialSurfaceType.Opaque;
+                    data.Alpha = 1f;
+                    changed = true;
+                }
+                if (ImGui.Selectable("Transparent", data.SurfaceType == MaterialSurfaceType.Transparent))
+                {
+                    data.SurfaceType = MaterialSurfaceType.Transparent;
+                    data.Alpha = Math.Min(data.Alpha, 0.65f);
+                    data.RefractionStrength = Math.Max(data.RefractionStrength, 0.08f);
+                    changed = true;
+                }
+                ImGui.EndCombo();
+            }
+
+            if (data.SurfaceType == MaterialSurfaceType.Transparent)
+            {
+                float alpha = data.Alpha;
+                if (DrawUnitySliderFloat("Alpha", ref alpha, 0f, 1f)) { data.Alpha = Math.Clamp(alpha, 0f, 1f); changed = true; }
+
+                float refraction = data.RefractionStrength;
+                if (DrawUnitySliderFloat("Refraction", ref refraction, 0f, 1f)) { data.RefractionStrength = Math.Clamp(refraction, 0f, 1f); changed = true; }
+
+                float distortion = data.DistortionStrength;
+                if (DrawUnitySliderFloat("Distortion", ref distortion, 0f, 1f)) { data.DistortionStrength = Math.Clamp(distortion, 0f, 1f); changed = true; }
+            }
+
+            ImGui.Dummy(new Vector2(0f, 4f));
 
             FieldRow("Specular Highlights");
             bool specularHighlights = data.SpecularHighlights;
@@ -2228,11 +2436,12 @@ internal sealed partial class ImGuiEditorApp
                 data.EnvironmentReflections = environmentReflections;
                 changed = true;
             }
-            ImGui.Dummy(new Vector2(0f, 3f));
+            ImGui.Dummy(new Vector2(0f, 8f));
         }
 
         if (!hasShaderGraph && SectionHeader("Emission"))
         {
+            ImGui.Dummy(new Vector2(0f, 2f));
             // HDR Color picker estilo Unity: color + intensidad en un solo control.
             var emission = new System.Numerics.Vector3(data.EmissionR, data.EmissionG, data.EmissionB);
             float emissionIntensity = data.EmissionIntensity;
@@ -2243,8 +2452,10 @@ internal sealed partial class ImGuiEditorApp
                 data.EmissionIntensity = Math.Max(0f, emissionIntensity);
                 changed = true;
             }
-            ImGui.Dummy(new Vector2(0f, 3f));
+            ImGui.Dummy(new Vector2(0f, 12f));
         }
+
+        ImGui.Dummy(new Vector2(0f, 80f));
 
         if (changed)
         {

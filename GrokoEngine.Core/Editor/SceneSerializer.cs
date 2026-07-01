@@ -194,6 +194,12 @@ namespace GrokoEngine
                         kv => SerializeAssetPath(kv.Value, baseAssetsPath)));
                     data.Fields["Roughness"] = mat.Roughness.ToString(CultureInfo.InvariantCulture);
                     data.Fields["Metallic"] = mat.Metallic.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["SurfaceType"] = mat.SurfaceType.ToString();
+                    data.Fields["Alpha"] = mat.Alpha.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["RefractionStrength"] = mat.RefractionStrength.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["DistortionStrength"] = mat.DistortionStrength.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["SpecularHighlights"] = mat.SpecularHighlights.ToString();
+                    data.Fields["EnvironmentReflections"] = mat.EnvironmentReflections.ToString();
                     data.Fields["EmissionR"] = mat.EmissionR.ToString(CultureInfo.InvariantCulture);
                     data.Fields["EmissionG"] = mat.EmissionG.ToString(CultureInfo.InvariantCulture);
                     data.Fields["EmissionB"] = mat.EmissionB.ToString(CultureInfo.InvariantCulture);
@@ -284,14 +290,34 @@ namespace GrokoEngine
                     data.Fields["NearClip"] = cam.NearClip.ToString(CultureInfo.InvariantCulture);
                     data.Fields["FarClip"] = cam.FarClip.ToString(CultureInfo.InvariantCulture);
                     data.Fields["ClearFlags"] = cam.ClearFlags.ToString();
+                    data.Fields["RenderType"] = ((int)cam.RenderType).ToString(CultureInfo.InvariantCulture);
+                    data.Fields["Projection"] = ((int)cam.Projection).ToString(CultureInfo.InvariantCulture);
+                    data.Fields["FieldOfViewAxis"] = ((int)cam.FieldOfViewAxis).ToString(CultureInfo.InvariantCulture);
+                    data.Fields["PhysicalCamera"] = cam.PhysicalCamera.ToString();
+                    data.Fields["OrthographicSize"] = cam.OrthographicSize.ToString(CultureInfo.InvariantCulture);
                     data.Fields["BackgroundR"] = cam.BackgroundR.ToString(CultureInfo.InvariantCulture);
                     data.Fields["BackgroundG"] = cam.BackgroundG.ToString(CultureInfo.InvariantCulture);
                     data.Fields["BackgroundB"] = cam.BackgroundB.ToString(CultureInfo.InvariantCulture);
                     data.Fields["BackgroundA"] = cam.BackgroundA.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["PostProcessing"] = cam.PostProcessing.ToString();
                     data.Fields["AntiAliasing"] = cam.AntiAliasing.ToString();
+                    data.Fields["AntiAliasingMode"] = ((int)cam.AntiAliasingMode).ToString(CultureInfo.InvariantCulture);
                     data.Fields["AntiAliasingSamples"] = cam.AntiAliasingSamples.ToString(CultureInfo.InvariantCulture);
                     data.Fields["FrustumCulling"] = cam.FrustumCulling.ToString();
                     data.Fields["OcclusionCulling"] = cam.OcclusionCulling.ToString();
+                    data.Fields["StopNaNs"] = cam.StopNaNs.ToString();
+                    data.Fields["Dithering"] = cam.Dithering.ToString();
+                    data.Fields["RenderShadows"] = cam.RenderShadows.ToString();
+                    data.Fields["Priority"] = cam.Priority.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["OpaqueTexture"] = ((int)cam.OpaqueTexture).ToString(CultureInfo.InvariantCulture);
+                    data.Fields["DepthTexture"] = ((int)cam.DepthTexture).ToString(CultureInfo.InvariantCulture);
+                    data.Fields["CullingMask"] = cam.CullingMask;
+                    data.Fields["VolumeUpdateMode"] = ((int)cam.VolumeUpdateMode).ToString(CultureInfo.InvariantCulture);
+                    data.Fields["VolumeMask"] = cam.VolumeMask;
+                    data.Fields["VolumeTrigger"] = cam.VolumeTrigger;
+                    data.Fields["OutputTarget"] = cam.OutputTarget;
+                    data.Fields["TargetDisplay"] = cam.TargetDisplay.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["AllowHDR"] = cam.AllowHDR.ToString();
                     return data;
                 case DirectionalLight dl:
                     data.Fields["DirectionX"] = dl.Direction.X.ToString(CultureInfo.InvariantCulture);
@@ -468,6 +494,7 @@ namespace GrokoEngine
                 case UILayoutGroup:
                 case UIContentSizeFitter:
                 case UIAspectRatioFitter:
+                case BoneAttachment:
                     // Serialización genérica por reflexión (campos públicos simples).
                     // Cubre ParticleSystem y todo el sistema UI propio de GrokoEngine.
                     foreach (var field in comp.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
@@ -611,6 +638,7 @@ namespace GrokoEngine
                 nameof(UIAspectRatioFitter) => obj.AddComponent<UIAspectRatioFitter>(),
                 nameof(UIBar) => obj.AddComponent<UIBar>(),
                 nameof(Animator) => obj.AddComponent<Animator>(),
+                nameof(BoneAttachment) => obj.AddComponent<BoneAttachment>(),
                 // Escenas antiguas: el SkeletalAnimator (legacy, ya eliminado) se carga como
                 // Animator; sus campos (ModelPath/AnimationSources/CurrentClipName/Speed/Loop/
                 // PlayOnAwake) coinciden y los aplica el bloque de Animator en ApplyFields.
@@ -749,6 +777,70 @@ namespace GrokoEngine
                 pp.PostProcessEnabled = GetBool(fields, "PostProcessEnabled", GetBool(fields, "Enabled", pp.PostProcessEnabled));
             }
 
+            if (comp is Material mat)
+            {
+                mat.R = GetFloat(fields, "R", mat.R);
+                mat.G = GetFloat(fields, "G", mat.G);
+                mat.B = GetFloat(fields, "B", mat.B);
+                mat.AssetPath = ResolveAssetPath(fields.TryGetValue("AssetPath", out var assetPath) ? assetPath : mat.AssetPath, baseAssetsPath) ?? "";
+                mat.TexturePath = ResolveAssetPath(fields.TryGetValue("TexturePath", out var texturePath) ? texturePath : mat.TexturePath, baseAssetsPath) ?? "";
+                mat.NormalMapPath = ResolveAssetPath(fields.TryGetValue("NormalMapPath", out var normalPath) ? normalPath : mat.NormalMapPath, baseAssetsPath) ?? "";
+                mat.RoughnessMapPath = ResolveAssetPath(fields.TryGetValue("RoughnessMapPath", out var roughnessPath) ? roughnessPath : mat.RoughnessMapPath, baseAssetsPath) ?? "";
+                mat.MetallicMapPath = ResolveAssetPath(fields.TryGetValue("MetallicMapPath", out var metallicPath) ? metallicPath : mat.MetallicMapPath, baseAssetsPath) ?? "";
+                mat.ShaderGraphPath = ResolveAssetPath(fields.TryGetValue("ShaderGraphPath", out var sgPath) ? sgPath : mat.ShaderGraphPath, baseAssetsPath) ?? "";
+                mat.Roughness = GetFloat(fields, "Roughness", mat.Roughness);
+                mat.Metallic = GetFloat(fields, "Metallic", mat.Metallic);
+                if (fields.TryGetValue("SurfaceType", out var surfaceType) && Enum.TryParse(surfaceType, out MaterialSurfaceType parsedSurfaceType))
+                    mat.SurfaceType = parsedSurfaceType;
+                mat.Alpha = Math.Clamp(GetFloat(fields, "Alpha", mat.Alpha), 0f, 1f);
+                mat.RefractionStrength = Math.Clamp(GetFloat(fields, "RefractionStrength", mat.RefractionStrength), 0f, 1f);
+                mat.DistortionStrength = Math.Clamp(GetFloat(fields, "DistortionStrength", mat.DistortionStrength), 0f, 1f);
+                mat.SpecularHighlights = GetBool(fields, "SpecularHighlights", mat.SpecularHighlights);
+                mat.EnvironmentReflections = GetBool(fields, "EnvironmentReflections", mat.EnvironmentReflections);
+                mat.EmissionR = GetFloat(fields, "EmissionR", mat.EmissionR);
+                mat.EmissionG = GetFloat(fields, "EmissionG", mat.EmissionG);
+                mat.EmissionB = GetFloat(fields, "EmissionB", mat.EmissionB);
+                mat.EmissionIntensity = GetFloat(fields, "EmissionIntensity", mat.EmissionIntensity);
+                mat.IsInstance = GetBool(fields, "IsInstance", mat.IsInstance);
+            }
+
+            if (comp is Camera cam)
+            {
+                cam.FOV = GetFloat(fields, "FOV", cam.FOV);
+                cam.NearClip = GetFloat(fields, "NearClip", cam.NearClip);
+                cam.FarClip = GetFloat(fields, "FarClip", cam.FarClip);
+                if (fields.TryGetValue("ClearFlags", out var clearFlags) && Enum.TryParse(clearFlags, out CameraClearFlags parsedClearFlags))
+                    cam.ClearFlags = parsedClearFlags;
+                cam.RenderType = (CameraRenderType)GetInt(fields, "RenderType", (int)cam.RenderType);
+                cam.Projection = (CameraProjection)GetInt(fields, "Projection", (int)cam.Projection);
+                cam.FieldOfViewAxis = (CameraFieldOfViewAxis)GetInt(fields, "FieldOfViewAxis", (int)cam.FieldOfViewAxis);
+                cam.PhysicalCamera = GetBool(fields, "PhysicalCamera", cam.PhysicalCamera);
+                cam.OrthographicSize = GetFloat(fields, "OrthographicSize", cam.OrthographicSize);
+                cam.BackgroundR = GetFloat(fields, "BackgroundR", cam.BackgroundR);
+                cam.BackgroundG = GetFloat(fields, "BackgroundG", cam.BackgroundG);
+                cam.BackgroundB = GetFloat(fields, "BackgroundB", cam.BackgroundB);
+                cam.BackgroundA = GetFloat(fields, "BackgroundA", cam.BackgroundA);
+                cam.PostProcessing = GetBool(fields, "PostProcessing", cam.PostProcessing);
+                cam.AntiAliasing = GetBool(fields, "AntiAliasing", cam.AntiAliasing);
+                cam.AntiAliasingMode = (CameraAntiAliasingMode)GetInt(fields, "AntiAliasingMode", (int)cam.AntiAliasingMode);
+                cam.AntiAliasingSamples = GetInt(fields, "AntiAliasingSamples", cam.AntiAliasingSamples);
+                cam.FrustumCulling = GetBool(fields, "FrustumCulling", cam.FrustumCulling);
+                cam.OcclusionCulling = GetBool(fields, "OcclusionCulling", cam.OcclusionCulling);
+                cam.StopNaNs = GetBool(fields, "StopNaNs", cam.StopNaNs);
+                cam.Dithering = GetBool(fields, "Dithering", cam.Dithering);
+                cam.RenderShadows = GetBool(fields, "RenderShadows", cam.RenderShadows);
+                cam.Priority = GetInt(fields, "Priority", cam.Priority);
+                cam.OpaqueTexture = (CameraTextureMode)GetInt(fields, "OpaqueTexture", (int)cam.OpaqueTexture);
+                cam.DepthTexture = (CameraTextureMode)GetInt(fields, "DepthTexture", (int)cam.DepthTexture);
+                cam.CullingMask = fields.TryGetValue("CullingMask", out var cullingMask) && !string.IsNullOrWhiteSpace(cullingMask) ? cullingMask : cam.CullingMask;
+                cam.VolumeUpdateMode = (CameraVolumeUpdateMode)GetInt(fields, "VolumeUpdateMode", (int)cam.VolumeUpdateMode);
+                cam.VolumeMask = fields.TryGetValue("VolumeMask", out var volumeMask) && !string.IsNullOrWhiteSpace(volumeMask) ? volumeMask : cam.VolumeMask;
+                cam.VolumeTrigger = fields.TryGetValue("VolumeTrigger", out var volumeTrigger) ? volumeTrigger : cam.VolumeTrigger;
+                cam.OutputTarget = fields.TryGetValue("OutputTarget", out var outputTarget) && !string.IsNullOrWhiteSpace(outputTarget) ? outputTarget : cam.OutputTarget;
+                cam.TargetDisplay = GetInt(fields, "TargetDisplay", cam.TargetDisplay);
+                cam.AllowHDR = GetBool(fields, "AllowHDR", cam.AllowHDR);
+            }
+
             if (comp is Animator animator)
             {
                 animator.ControllerPath = ResolveAssetPath(fields.TryGetValue("ControllerPath", out var ctrlPath) ? ctrlPath : "", baseAssetsPath) ?? "";
@@ -788,13 +880,13 @@ namespace GrokoEngine
                     GetFloat(fields, "DirectionZ", dl.Direction.Z));
             }
 
-            if (comp is Material mat && fields.TryGetValue("ShaderGraphProperties", out var sgPropsRaw))
+            if (comp is Material shaderGraphMaterial && fields.TryGetValue("ShaderGraphProperties", out var sgPropsRaw))
             {
                 try
                 {
                     var props = JsonSerializer.Deserialize<Dictionary<string, float[]>>(sgPropsRaw);
                     if (props != null)
-                        mat.ShaderGraphProperties = new Dictionary<string, float[]>(props, StringComparer.OrdinalIgnoreCase);
+                        shaderGraphMaterial.ShaderGraphProperties = new Dictionary<string, float[]>(props, StringComparer.OrdinalIgnoreCase);
                 }
                 catch (Exception ex)
                 {

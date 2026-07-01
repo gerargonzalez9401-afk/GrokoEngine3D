@@ -21,14 +21,24 @@ internal sealed partial class SceneViewportRenderer
         if (!_buildingStatic)
             obj.GlobalPosition = new MiMotor.Mathematics.Vector3(center.X, center.Y, center.Z);
 
-        // ── Enrutar según modo de construcción y flag IsStatic ────
+        var meshRenderer = obj.GetComponent<MeshRenderer>();
+        var terrainComponent = obj.GetComponent<Terrain>();
+        var meshFilter = obj.GetComponent<MeshFilter>();
+        var animatorComponent = obj.GetComponent<Animator>();
+        bool layerVisible = LayerMask.Contains(_activeCullingMask, obj.Layer);
+
+        // Route according to the static/dynamic build pass. Transparent meshes stay out
+        // of the static batch because they need the resolved opaque texture.
         bool shouldBuildGeometry = _buildingStatic == obj.IsStatic;
+        bool transparentMeshNeedsDynamicPass = obj.IsStatic && meshFilter != null && ObjectUsesTransparentMaterial(obj, meshFilter);
+        if (transparentMeshNeedsDynamicPass)
+            shouldBuildGeometry = !_buildingStatic;
 
         // Mesh Renderer desactivado (como Unity): se oculta la malla, PERO el collider/física sigue
         // funcionando (la física es independiente del render). Terrain no tiene MeshRenderer → no le afecta.
-        bool meshRendererHidden = obj.GetComponent<MeshRenderer>() is { Enabled: false };
+        bool meshRendererHidden = meshRenderer is { Enabled: false };
 
-        if (shouldBuildGeometry && !meshRendererHidden)
+        if (layerVisible && shouldBuildGeometry && !meshRendererHidden)
         {
             // IMPORTANTE:
             // En el pase de static batch (_buildingStatic == true) NO hacemos frustum culling.
@@ -36,7 +46,33 @@ internal sealed partial class SceneViewportRenderer
             // el batch nunca entra al VBO estático y parece que "desaparece" al mover la cámara.
             bool skipFrustumCullingForStaticBatch = _buildingStatic || !_frustumCullingEnabled;
 
-            if (obj.Type == 1)
+            if (meshFilter is { } mf && !string.IsNullOrWhiteSpace(mf.MeshPath))
+            {
+                var mesh = GetParsedMesh(mf.MeshPath);
+                bool frustumVisible = skipFrustumCullingForStaticBatch || mesh == null || FrustumContainsMesh(frustum, obj, mf, mesh, world);
+                // Alimenta el Culling Mode del Animator con la visibilidad real (frustum de la cámara).
+                if (!_buildingStatic && animatorComponent is { } cullAnim)
+                    cullAnim.IsVisible = frustumVisible;
+                if (frustumVisible)
+                {
+                    // Occlusion culling: skip mesh if last query returned invisible.
+                    // The actual query is issued in a GPU pass after opaque geometry is drawn.
+                    bool occVisible = true;
+                    if (!_buildingStatic && _occlusionCullingEnabled && mesh != null)
+                    {
+                        // Conservative: visible on first frame or when no result yet
+                        occVisible = !_occlusionVisible.TryGetValue(obj.EditorId, out bool lastResult) || lastResult;
+                    }
+
+                    if (occVisible && mesh != null)
+                        BuildMeshBounds(obj, mf, mesh, sel, world);
+
+                    // Collect objects that need an occlusion query this frame (done after draw)
+                    if (!_buildingStatic && _occlusionCullingEnabled && mesh != null && frustumVisible)
+                        _pendingOcclusionObjects.Add((obj.EditorId, world, mf, mesh));
+                }
+            }
+            else if (obj.Type == 1)
             {
                 float r = MathF.Max(0.05f, MathF.Sqrt(obj.ScaleX * obj.ScaleX + obj.ScaleY * obj.ScaleY + obj.ScaleZ * obj.ScaleZ) * 0.5f);
                 if (skipFrustumCullingForStaticBatch || frustum.ContainsSphere(center, r))
@@ -54,7 +90,7 @@ internal sealed partial class SceneViewportRenderer
                 if (skipFrustumCullingForStaticBatch || frustum.ContainsSphere(center, r))
                     BuildPrimitive(obj, sel, world);
             }
-            else if (obj.GetComponent<Terrain>() is { } terrain)
+            else if (terrainComponent is { } terrain)
             {
                 var (mesh, meshPath) = GetTerrainMesh(obj, terrain);
                 var terrainFilter = new MeshFilter { MeshPath = meshPath, ImportScale = 1f };
@@ -62,47 +98,26 @@ internal sealed partial class SceneViewportRenderer
                 if (frustumVisible)
                     BuildTerrainGeometry(obj, terrain, mesh, meshPath, sel, world);
             }
-            else if (obj.GetComponent<MeshFilter>() is { } mf && !string.IsNullOrWhiteSpace(mf.MeshPath))
-            {
-                var mesh = GetParsedMesh(mf.MeshPath);
-                bool frustumVisible = skipFrustumCullingForStaticBatch || mesh == null || FrustumContainsMesh(frustum, obj, mf, mesh, world);
-                // Alimenta el Culling Mode del Animator con la visibilidad real (frustum de la cámara).
-                if (!_buildingStatic && obj.GetComponent<Animator>() is { } cullAnim)
-                    cullAnim.IsVisible = frustumVisible;
-                if (frustumVisible)
-                {
-                    // ── Occlusion culling: skip mesh if last query returned invisible ──
-                    // The actual query is issued in a GPU pass after opaque geometry is drawn.
-                    bool occVisible = true;
-                    if (!_buildingStatic && _occlusionCullingEnabled && mesh != null)
-                    {
-                        // Conservative: visible on first frame or when no result yet
-                        occVisible = !_occlusionVisible.TryGetValue(obj.EditorId, out bool lastResult) || lastResult;
-                    }
-
-                    if (occVisible && mesh != null)
-                        BuildMeshBounds(obj, mf, mesh, sel, world);
-
-                    // Collect objects that need an occlusion query this frame (done after draw)
-                    if (!_buildingStatic && _occlusionCullingEnabled && mesh != null && frustumVisible)
-                        _pendingOcclusionObjects.Add((obj.EditorId, world, mf, mesh));
-                }
-            }
         }
 
         // Iconos solo en pase dinámico (se dibujan siempre, no en batch estático)
-        if (!_buildingStatic && sel)
+        if (!_buildingStatic && layerVisible && sel)
         {
-            if (obj.IsCamera || obj.GetComponent<Camera>() != null)
-                BuildCameraIcon(obj, sel, world);
-            if (obj.GetComponent<DirectionalLight>() != null ||
+            var cameraComponent = obj.GetComponent<Camera>();
+            bool hasLightComponent =
+                obj.GetComponent<DirectionalLight>() != null ||
                 obj.GetComponent<PointLight>() != null ||
                 obj.GetComponent<SpotLight>() != null ||
                 obj.GetComponent<AmbientLight>() != null ||
                 obj.GetComponent<AreaLight>() != null ||
-                obj.GetComponent<RectangleLight>() != null)
+                obj.GetComponent<RectangleLight>() != null;
+            var particleSystem = obj.GetComponent<GrokoEngine.ParticleSystem>();
+
+            if (obj.IsCamera || cameraComponent != null)
+                BuildCameraIcon(obj, sel, world);
+            if (hasLightComponent)
                 BuildLightIcon(obj, sel, world);
-            if (obj.GetComponent<GrokoEngine.ParticleSystem>() is { } ps)
+            if (particleSystem is { } ps)
                 BuildParticleShapeGizmo(ps, world);
         }
 
@@ -129,6 +144,7 @@ internal sealed partial class SceneViewportRenderer
             hash.Add(obj.Type);
             hash.Add(obj.IsActive);
             hash.Add(obj.IsStatic);
+            hash.Add(obj.Layer);
 
             if (obj.GetComponent<MeshFilter>() is { } mf)
             {
@@ -150,6 +166,10 @@ internal sealed partial class SceneViewportRenderer
                 hash.Add(material.RoughnessMapPath ?? string.Empty);
                 hash.Add(material.MetallicMapPath ?? string.Empty);
                 hash.Add(material.R); hash.Add(material.G); hash.Add(material.B);
+                hash.Add(material.SurfaceType);
+                hash.Add(material.Alpha);
+                hash.Add(material.RefractionStrength);
+                hash.Add(material.DistortionStrength);
                 hash.Add(material.Roughness); hash.Add(material.Metallic);
                 hash.Add(material.EmissionR); hash.Add(material.EmissionG); hash.Add(material.EmissionB); hash.Add(material.EmissionIntensity);
                 hash.Add(material.ShaderGraphPath ?? string.Empty);

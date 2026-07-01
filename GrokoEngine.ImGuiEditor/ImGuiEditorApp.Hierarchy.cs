@@ -41,8 +41,8 @@ internal sealed partial class ImGuiEditorApp
         ImGui.InputTextWithHint("##HierarchySearch", "Search hierarchy", ref hierarchyFilter, 128);
         ImGui.Separator();
 
-        ImGui.PushStyleColor(ImGuiCol.DragDropTarget, new System.Numerics.Vector4(0.92f, 0.94f, 0.97f, 0.55f));
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(12f, 10f)); // margen interior estilo Unity
+        ImGui.PushStyleColor(ImGuiCol.DragDropTarget, new System.Numerics.Vector4(0.72f, 0.72f, 0.70f, 0.55f));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(10f, 8f));
         ImGui.BeginChild("HierarchyTree", new Vector2(0f, -34f), ImGuiChildFlags.None);
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 2f));
         ImGui.PushStyleVar(ImGuiStyleVar.IndentSpacing, 16f);
@@ -68,7 +68,7 @@ internal sealed partial class ImGuiEditorApp
         ImGui.PopStyleVar(); // WindowPadding
 
         ImGui.Separator();
-        ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.13f, 0.13f, 0.14f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.22f, 0.22f, 0.22f, 1f));
         ImGui.Button("Drop here to move to root", new Vector2(-1f, 24f));
         ImGui.PopStyleColor();
         DrawHierarchyRootDropTarget();
@@ -96,7 +96,7 @@ internal sealed partial class ImGuiEditorApp
             var min = ImGui.GetItemRectMin();
             var max = ImGui.GetItemRectMax();
             var drawList = ImGui.GetWindowDrawList();
-            uint color = ImGui.GetColorU32(new System.Numerics.Vector4(0.35f, 0.62f, 1f, 0.85f));
+            uint color = ImGui.GetColorU32(new System.Numerics.Vector4(0.70f, 0.70f, 0.66f, 0.85f));
             drawList.AddRect(min + new Vector2(3f, 3f), max - new Vector2(3f, 3f), color, 3f, ImDrawFlags.None, 1.5f);
         }
 
@@ -129,7 +129,7 @@ internal sealed partial class ImGuiEditorApp
         {
             var max = ImGui.GetItemRectMax();
             var drawList = ImGui.GetWindowDrawList();
-            uint color = ImGui.GetColorU32(new System.Numerics.Vector4(0.35f, 0.62f, 1f, 1f));
+            uint color = ImGui.GetColorU32(new System.Numerics.Vector4(0.76f, 0.72f, 0.56f, 1f));
             float y = min.Y + 3f;
             drawList.AddLine(new Vector2(min.X + 4f, y), new Vector2(max.X - 4f, y), color, 2f);
         }
@@ -182,11 +182,17 @@ internal sealed partial class ImGuiEditorApp
         const float rowHeight = 24f;
         var rowRectMin = new Vector2(rowMin.X - 6f, rowMin.Y - 2f);
         var rowRectMax = new Vector2(rowMin.X + rowWidth - 2f, rowMin.Y + rowHeight - 2f);
+        bool rowHovered = ImGui.IsMouseHoveringRect(rowRectMin, rowRectMax);
+        if (rowHovered && !isSelected)
+        {
+            var dl = ImGui.GetWindowDrawList();
+            dl.AddRectFilled(rowRectMin, rowRectMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.245f, 0.245f, 0.245f, 0.72f)), 5f);
+        }
         if (isSelected)
         {
             var dl = ImGui.GetWindowDrawList();
-            dl.AddRectFilled(rowRectMin, rowRectMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.330f, 0.330f, 0.330f, 0.96f)), 6f);
-            dl.AddRect(rowRectMin, rowRectMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.560f, 0.600f, 0.640f, 0.75f)), 6f, ImDrawFlags.None, 1f);
+            dl.AddRectFilled(rowRectMin, rowRectMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.325f, 0.325f, 0.325f, 0.96f)), 5f);
+            dl.AddRect(rowRectMin, rowRectMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.525f, 0.525f, 0.505f, 0.75f)), 5f, ImDrawFlags.None, 1f);
         }
         // Nuestra selección es redondeada → ocultamos el resaltado cuadrado del TreeNode.
         ImGui.PushStyleColor(ImGuiCol.Header, new System.Numerics.Vector4(0f, 0f, 0f, 0f));
@@ -244,10 +250,20 @@ internal sealed partial class ImGuiEditorApp
             }
             lastObjectClickId = obj.EditorId;
             lastObjectClickTime = now;
-            selection.SelectFromViewport(obj, ImGui.IsKeyDown(ImGuiKey.ModCtrl) || ImGui.IsKeyDown(ImGuiKey.ModShift));
+            bool ctrl = ImGui.IsKeyDown(ImGuiKey.ModCtrl);
+            bool shift = ImGui.IsKeyDown(ImGuiKey.ModShift);
+            var mode = ctrl
+                ? SelectionService.SelectionMode.Toggle
+                : shift
+                    ? SelectionService.SelectionMode.Add
+                    : SelectionService.SelectionMode.Replace;
+            selection.Select(obj, mode);
         }
         if (!renaming && ImGui.IsItemClicked(ImGuiMouseButton.Right))
-            selection.SelectSingle(obj);
+        {
+            if (!selection.Selected.Contains(obj))
+                selection.SelectSingle(obj);
+        }
 
         if (!renaming)
         {

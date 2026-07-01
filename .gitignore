@@ -23,3 +23,8 @@ GrokoEngine/Assets/obj/
 !ThirdParty/**/*.dll
 
 .claude/
+
+.groko-editor-settings.json
+.groko-imgui-layout.ini
+.groko-imgui-layout.ini.ver
+imgui.zip

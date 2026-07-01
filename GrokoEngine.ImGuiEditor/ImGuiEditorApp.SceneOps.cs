@@ -69,6 +69,7 @@ internal sealed partial class ImGuiEditorApp
             return;
 
         sceneHistory.Push(new SnapshotSceneCommand(this, label, before, after), execute: false);
+        sceneDirty = true;
     }
 
     private void RestoreSceneState(SceneStateSnapshot state)
@@ -97,7 +98,9 @@ internal sealed partial class ImGuiEditorApp
             return;
         }
 
-        statusMessage = sceneHistory.Undo() ? "Undo" : "Nothing to undo";
+        bool changed = sceneHistory.Undo();
+        if (changed) sceneDirty = true;
+        statusMessage = changed ? "Undo" : "Nothing to undo";
     }
 
     private void RedoScene()
@@ -108,7 +111,9 @@ internal sealed partial class ImGuiEditorApp
             return;
         }
 
-        statusMessage = sceneHistory.Redo() ? "Redo" : "Nothing to redo";
+        bool changed = sceneHistory.Redo();
+        if (changed) sceneDirty = true;
+        statusMessage = changed ? "Redo" : "Nothing to redo";
     }
 
     private GameObject CreateEmpty() =>
@@ -196,6 +201,7 @@ internal sealed partial class ImGuiEditorApp
         return CommitSceneMutation("Create Child Cube", () =>
         {
             var obj = new GameObject { Name = GetUniqueChildObjectName(parent, "Cube"), Type = 1, Parent = parent };
+            ConfigureBuiltinPrimitiveMesh(obj, EditorPrimitiveMeshKind.Cube);
             obj.AddComponentWithEngine<BoxCollider>(physicsEngine);
             selected = obj;
             statusMessage = $"Created child {obj.Name}";
@@ -208,6 +214,7 @@ internal sealed partial class ImGuiEditorApp
         return CommitSceneMutation("Create Child Plane", () =>
         {
             var obj = new GameObject { Name = GetUniqueChildObjectName(parent, "Plane"), Type = 2, Parent = parent, ScaleX = 4f, ScaleZ = 4f };
+            ConfigureBuiltinPrimitiveMesh(obj, EditorPrimitiveMeshKind.Plane);
             var collider = obj.AddComponentWithEngine<BoxCollider>(physicsEngine);
             collider.Size = new Vector3(1f, 0.05f, 1f);
             selected = obj;
@@ -221,6 +228,7 @@ internal sealed partial class ImGuiEditorApp
         return CommitSceneMutation("Create Child " + name, () =>
         {
             var obj = new GameObject { Name = GetUniqueChildObjectName(parent, name), Type = type, Parent = parent };
+            ConfigureBuiltinPrimitiveMesh(obj, GetPrimitiveMeshKind(type));
             AddDefaultPrimitiveCollider(obj);
             selected = obj;
             statusMessage = $"Created child {obj.Name}";
@@ -270,6 +278,7 @@ internal sealed partial class ImGuiEditorApp
         return CommitSceneMutation("Create Child Cube With Gravity", () =>
         {
             var obj = new GameObject { Name = GetUniqueChildObjectName(parent, "Cube"), Type = 1, Parent = parent, PosY = 3f };
+            ConfigureBuiltinPrimitiveMesh(obj, EditorPrimitiveMeshKind.Cube);
             obj.AddComponentWithEngine<BoxCollider>(physicsEngine);
             obj.AddComponentWithEngine<Rigidbody>(physicsEngine);
             selected = obj;
@@ -526,7 +535,7 @@ internal sealed partial class ImGuiEditorApp
             Vector2 rowMax = rowMin + new Vector2(popupW - 8f, rowH);
             var drawList = ImGui.GetWindowDrawList();
             drawList.AddRectFilled(rowMin, rowMax, ImGui.GetColorU32(isSelected
-                ? new System.Numerics.Vector4(0.20f, 0.36f, 0.55f, 0.95f)
+                ? new System.Numerics.Vector4(0.34f, 0.34f, 0.32f, 0.95f)
                 : hovered
                     ? new System.Numerics.Vector4(0.22f, 0.22f, 0.23f, 0.92f)
                     : new System.Numerics.Vector4(0.145f, 0.145f, 0.150f, 0.72f)), 2f);
@@ -634,6 +643,8 @@ internal sealed partial class ImGuiEditorApp
             var obj = CreateObject(Path.GetFileNameWithoutExtension(meshPath), 0);
             if (assetService.AssignMesh(obj, meshPath, out var mesh) && mesh != null)
             {
+                ApplyImportedMeshStaticDefault(obj, mesh);
+
                 if (ShouldSplitIntoHierarchy(meshPath, mesh))
                 {
                     obj.RemoveComponent<MeshFilter>(physicsEngine); // la raíz será un contenedor
@@ -795,6 +806,8 @@ internal sealed partial class ImGuiEditorApp
             SetObjectPosition(obj, position);
             if (assetService.AssignMesh(obj, meshPath, out var mesh) && mesh != null)
             {
+                ApplyImportedMeshStaticDefault(obj, mesh);
+
                 if (ShouldSplitIntoHierarchy(meshPath, mesh))
                 {
                     obj.RemoveComponent<MeshFilter>(physicsEngine); // la raíz será un contenedor
@@ -824,6 +837,14 @@ internal sealed partial class ImGuiEditorApp
     // — así un GameObject que metas dentro de la raíz para organizar no hereda el 0.01 ni se rompe
     // el gizmo. El skinning queda igual (el factor solo baja un nivel en la cadena de huesos).
     // Para modelos estáticos (sin huesos): escala la raíz como antes.
+    private static void ApplyImportedMeshStaticDefault(GameObject obj, ParsedMesh mesh)
+    {
+        // Props imported without skinning are scene geometry and should enter the
+        // static render cache by default. Animated/skinned characters stay dynamic.
+        if (!mesh.HasSkin)
+            obj.IsStatic = true;
+    }
+
     private void ApplyImportScale(GameObject obj, ParsedMesh mesh, string meshPath)
     {
         var settings = ModelImportSettingsAsset.Load(meshPath);
@@ -973,6 +994,10 @@ internal sealed partial class ImGuiEditorApp
             mf.MeshPath = meshPath;
             mf.ImportScale = importScale;
             mf.SubmeshIndex = i;
+            if (!mesh.HasSkin)
+                child.IsStatic = true;
+            if (mesh.Submeshes.Count > 0)
+                EnsureMaterialSlots(mf, mesh);
             EnsureMeshRenderer(child);
             TryPrewarmMeshAsset(mf.MeshPath, mf.ImportScale, mf.MaterialSlots);
             created++;

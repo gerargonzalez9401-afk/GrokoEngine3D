@@ -30,10 +30,12 @@ internal static class Program
             ("SceneSerializer loads legacy prefab payload", SceneSerializerLoadsLegacyPrefabPayload),
             ("SceneSerializer normalizes null collections", SceneSerializerNormalizesNullCollections),
             ("MaterialAsset stores texture paths relative to Assets", MaterialAssetStoresTexturePathsRelativeToAssets),
+            ("MaterialAsset clearing base map clears legacy texture path", MaterialAssetClearingBaseMapClearsLegacyTexturePath),
             ("MaterialAsset loads legacy null shader graph dictionaries", MaterialAssetLoadsLegacyNullShaderGraphDictionaries),
             ("MaterialAsset reuses imported materials", MaterialAssetReusesImportedMaterials),
             ("MaterialAsset applies shared material", MaterialAssetAppliesSharedMaterial),
             ("SceneSerializer preserves material instance flag", SceneSerializerPreservesMaterialInstanceFlag),
+            ("SceneSerializer preserves bone attachment", SceneSerializerPreservesBoneAttachment),
             ("SceneCommandHistory executes undo and redo", SceneCommandHistoryExecutesUndoRedo),
             ("SelectionService selects toggles and restores by id", SelectionServiceSelectsTogglesAndRestoresById),
             ("AssetService imports unique files and applies material", AssetServiceImportsUniqueFilesAndAppliesMaterial),
@@ -45,6 +47,7 @@ internal static class Program
             ("GameObject local matrix uses Unity Euler order", GameObjectLocalMatrixUsesUnityEulerOrder),
             ("Animator runtime info reports standalone state", AnimatorRuntimeInfoReportsStandaloneState),
             ("Animator reports blend tree weights", AnimatorReportsBlendTreeWeights),
+            ("Animator ignores attached mesh children as bones", AnimatorIgnoresAttachedMeshChildrenAsBones),
             ("BlendTree 2D weights favor matching direction", BlendTree2DWeightsFavorMatchingDirection),
             ("BlendTree 1D weights interpolate and clamp", BlendTree1DWeightsInterpolateAndClamp),
             ("EditorSceneGraph attach moves existing object", EditorSceneGraphAttachMovesExistingObject),
@@ -59,6 +62,7 @@ internal static class Program
             ("PhysicsEngine raycast returns closest collider", PhysicsEngineRaycastReturnsClosestCollider),
             ("PhysicsEngine raycast uses broadphase candidates", PhysicsEngineRaycastUsesBroadphaseCandidates),
             ("PhysicsEngine raycast filters by layer mask", PhysicsEngineRaycastFiltersByLayerMask),
+            ("LayerMask parses camera culling masks", LayerMaskParsesCameraCullingMasks),
             ("PhysicsEngine ensure simulation keeps raycast usable", PhysicsEngineEnsureSimulationKeepsRaycastUsable),
             ("PhysicsEngine rebuilds static collider pose", PhysicsEngineRebuildsStaticColliderPose),
             ("PhysicsEngine rebuilds static quaternion rotation", PhysicsEngineRebuildsStaticQuaternionRotation),
@@ -78,6 +82,7 @@ internal static class Program
             ("SceneSerializer preserves character controller", SceneSerializerPreservesCharacterController),
             ("SceneSerializer preserves post process enabled flag", SceneSerializerPreservesPostProcessEnabledFlag),
             ("SceneSerializer preserves camera clear flags", SceneSerializerPreservesCameraClearFlags),
+            ("SceneSerializer preserves camera render settings", SceneSerializerPreservesCameraRenderSettings),
             ("SceneSerializer does not duplicate character capsule", SceneSerializerDoesNotDuplicateCharacterCapsule),
             ("CharacterController ignores same object colliders", CharacterControllerIgnoresSameObjectColliders),
             ("CharacterController auto centers capsule", CharacterControllerAutoCentersCapsule),
@@ -85,6 +90,7 @@ internal static class Program
             ("CharacterController forces same-object Rigidbody safe", CharacterControllerForcesSameObjectRigidbodySafe),
             ("SceneSerializer preserves particle mesh renderer", SceneSerializerPreservesParticleMeshRenderer),
             ("SceneSerializer preserves particle prefab renderer", SceneSerializerPreservesParticlePrefabRenderer),
+            ("SceneSerializer preserves particle distortion renderer", SceneSerializerPreservesParticleDistortionRenderer),
             ("SceneSerializer preserves particle curves", SceneSerializerPreservesParticleCurves),
             ("SceneSerializer preserves additional colliders", SceneSerializerPreservesAdditionalColliders),
             ("ParticleSystem rate over distance starts at current position", ParticleSystemRateOverDistanceStartsAtCurrentPosition),
@@ -461,6 +467,33 @@ internal static class Program
         AssertEqual(Path.GetFullPath(texturePath), Path.GetFullPath(loaded.AlbedoPath), "resolved material texture");
     }
 
+    private static void MaterialAssetClearingBaseMapClearsLegacyTexturePath()
+    {
+        string root = CreateTempProject();
+        string assets = Path.Combine(root, "Assets");
+        string materialPath = Path.Combine(assets, "Materials", "Paint.mat");
+        string texturePath = Path.Combine(assets, "Textures", "paint.png");
+        Directory.CreateDirectory(Path.GetDirectoryName(materialPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(texturePath)!);
+        File.WriteAllText(texturePath, "texture");
+
+        MaterialAsset.Save(materialPath, new MaterialAssetData
+        {
+            Name = "Paint",
+            AlbedoPath = texturePath,
+            TexturePath = texturePath
+        });
+
+        var data = MaterialAsset.Load(materialPath);
+        data.AlbedoPath = "";
+        data.TexturePath = texturePath; // Simula un campo legacy viejo todavía presente en memoria.
+        MaterialAsset.Save(materialPath, data);
+
+        var reloaded = MaterialAsset.Load(materialPath);
+        AssertTrue(string.IsNullOrWhiteSpace(reloaded.AlbedoPath), "cleared albedo stays cleared");
+        AssertTrue(string.IsNullOrWhiteSpace(reloaded.TexturePath), "legacy texture path is cleared too");
+    }
+
     private static void MaterialAssetReusesImportedMaterials()
     {
         string root = CreateTempProject();
@@ -543,6 +576,43 @@ internal static class Program
         AssertTrue(loadedMat.IsInstance, "loaded material instance");
         AssertEqual(Path.GetFullPath(materialPath), Path.GetFullPath(loadedMat.AssetPath), "instance source asset path");
         AssertNear(0.9f, loadedMat.R, "instance color");
+    }
+
+    private static void SceneSerializerPreservesBoneAttachment()
+    {
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(CreateTempProject());
+        var weapon = new GameObject { Name = "Sword" };
+        var socket = weapon.AddComponent<BoneAttachment>();
+        socket.TargetObjectId = "player-id";
+        socket.TargetObjectName = "Player";
+        socket.BoneName = "RightHand";
+        socket.PositionOffsetX = 0.12f;
+        socket.PositionOffsetY = -0.04f;
+        socket.PositionOffsetZ = 0.33f;
+        socket.RotationOffsetX = 10f;
+        socket.RotationOffsetY = 20f;
+        socket.RotationOffsetZ = -30f;
+        socket.ScaleOffsetX = 1.1f;
+        socket.ScaleOffsetY = 0.9f;
+        socket.ScaleOffsetZ = 1.2f;
+        socket.FollowPosition = true;
+        socket.FollowRotation = false;
+        socket.FollowScale = true;
+
+        string json = SceneSerializer.Serialize(new[] { weapon });
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts)[0];
+        var loadedSocket = loaded.GetComponent<BoneAttachment>();
+
+        AssertTrue(loadedSocket != null, "bone attachment loads");
+        AssertEqual("player-id", loadedSocket!.TargetObjectId, "target id");
+        AssertEqual("Player", loadedSocket.TargetObjectName, "target name");
+        AssertEqual("RightHand", loadedSocket.BoneName, "bone name");
+        AssertNear(0.12f, loadedSocket.PositionOffsetX, "position offset x");
+        AssertNear(-30f, loadedSocket.RotationOffsetZ, "rotation offset z");
+        AssertNear(1.2f, loadedSocket.ScaleOffsetZ, "scale offset z");
+        AssertTrue(!loadedSocket.FollowRotation, "follow rotation flag");
+        AssertTrue(loadedSocket.FollowScale, "follow scale flag");
     }
 
     private static void SceneCommandHistoryExecutesUndoRedo()
@@ -905,6 +975,25 @@ internal static class Program
         AssertEqual(3, animator.GetRuntimeInfo().BlendChildCount, "runtime blend child count");
     }
 
+    private static void AnimatorIgnoresAttachedMeshChildrenAsBones()
+    {
+        var player = new GameObject { Name = "Player" };
+        var animator = player.AddComponent<Animator>();
+
+        var rightHand = new GameObject { Name = "RightHand" };
+        rightHand.SetParent(player, worldPositionStays: false);
+
+        var weapon = new GameObject { Name = "Sword" };
+        weapon.SetParent(rightHand, worldPositionStays: false);
+        weapon.AddComponent<MeshFilter>();
+        weapon.AddComponent<MeshRenderer>();
+
+        var bones = animator.GetBoneNames();
+
+        AssertTrue(bones.Contains("RightHand"), "hand transform should be a bone");
+        AssertFalse(bones.Contains("Sword"), "attached mesh prop should not become a bone");
+    }
+
     private static void BlendTree2DWeightsFavorMatchingDirection()
     {
         var animator = new Animator();
@@ -1205,6 +1294,16 @@ internal static class Program
         bool hitGround = physics.Raycast(new Vector3(0f, 0f, 0f), new Vector3(1f, 0f, 0f), 10f, out _, groundMask);
 
         AssertFalse(hitGround, "layer raycast misses absent layer");
+    }
+
+    private static void LayerMaskParsesCameraCullingMasks()
+    {
+        AssertEqual(LayerMask.Everything, LayerMask.ParseMask("Everything"), "everything mask");
+        AssertEqual(LayerMask.Nothing, LayerMask.ParseMask("Nothing"), "nothing mask");
+        AssertEqual(LayerMask.GetMask("Player"), LayerMask.ParseMask("Player"), "single layer mask");
+        AssertEqual(LayerMask.GetMask("Player", "Enemy"), LayerMask.ParseMask("Player, Enemy"), "multi layer comma mask");
+        AssertTrue(LayerMask.Contains(LayerMask.ParseMask("UI|Ground"), LayerMask.UI), "pipe mask contains ui");
+        AssertTrue(LayerMask.Contains(LayerMask.ParseMask("UI|Ground"), LayerMask.NameToLayer("Ground")), "pipe mask contains ground");
     }
 
     private static void PhysicsEngineEnsureSimulationKeepsRaycastUsable()
@@ -1896,6 +1995,40 @@ internal static class Program
         AssertNear(1.25f, loadedPs.RendererBoundsPadding, "particle prefab bounds padding");
     }
 
+    private static void SceneSerializerPreservesParticleDistortionRenderer()
+    {
+        string root = CreateTempProject();
+        string assets = Path.Combine(root, "Assets");
+        string scenePath = Path.Combine(assets, "Scenes", "ParticleDistortion.gscene");
+        Directory.CreateDirectory(Path.GetDirectoryName(scenePath)!);
+
+        var obj = new GameObject { Name = "Heat Particles" };
+        var ps = obj.AddComponent<ParticleSystem>();
+        ps.RenderMode = ParticleRenderMode.Billboard;
+        ps.RenderQueue = ParticleRenderQueue.Transparent;
+        ps.SortParticles = true;
+        ps.SortMode = ParticleSortMode.Distance;
+        ps.SoftParticles = true;
+        ps.SoftParticleRange = 0.42f;
+        ps.DistortionEnabled = true;
+        ps.DistortionStrength = 0.37f;
+        ps.RefractionStrength = 0.64f;
+
+        SceneSerializer.Save(scenePath, new[] { obj });
+        var loaded = SceneSerializer.Load(scenePath, new PhysicsEngine(), new ScriptCompiler(assets));
+        var loadedPs = loaded[0].GetComponent<ParticleSystem>()!;
+
+        AssertEqual(ParticleRenderMode.Billboard, loadedPs.RenderMode, "particle distortion render mode");
+        AssertEqual(ParticleRenderQueue.Transparent, loadedPs.RenderQueue, "particle distortion render queue");
+        AssertTrue(loadedPs.SortParticles, "particle distortion sort enabled");
+        AssertEqual(ParticleSortMode.Distance, loadedPs.SortMode, "particle distortion sort mode");
+        AssertTrue(loadedPs.SoftParticles, "particle distortion soft enabled");
+        AssertNear(0.42f, loadedPs.SoftParticleRange, "particle distortion soft range");
+        AssertTrue(loadedPs.DistortionEnabled, "particle distortion enabled");
+        AssertNear(0.37f, loadedPs.DistortionStrength, "particle distortion strength");
+        AssertNear(0.64f, loadedPs.RefractionStrength, "particle refraction strength");
+    }
+
     private static void SceneSerializerPreservesParticleCurves()
     {
         string root = CreateTempProject();
@@ -2542,6 +2675,66 @@ internal static class Program
         AssertNear(0.42f, loadedCam.BackgroundG, "camera background g restored");
         AssertNear(0.68f, loadedCam.BackgroundB, "camera background b restored");
         AssertNear(1f, loadedCam.BackgroundA, "camera background a restored");
+    }
+
+    private static void SceneSerializerPreservesCameraRenderSettings()
+    {
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets"));
+        var obj = new GameObject { Name = "Main Camera" };
+        var cam = obj.AddComponent<Camera>();
+        cam.RenderType = CameraRenderType.Overlay;
+        cam.Projection = CameraProjection.Orthographic;
+        cam.FieldOfViewAxis = CameraFieldOfViewAxis.Horizontal;
+        cam.PhysicalCamera = true;
+        cam.OrthographicSize = 12.5f;
+        cam.PostProcessing = false;
+        cam.AntiAliasingMode = CameraAntiAliasingMode.SMAA;
+        cam.AntiAliasingSamples = 8;
+        cam.StopNaNs = true;
+        cam.Dithering = true;
+        cam.RenderShadows = false;
+        cam.Priority = 7;
+        cam.OpaqueTexture = CameraTextureMode.On;
+        cam.DepthTexture = CameraTextureMode.Off;
+        cam.CullingMask = "Default";
+        cam.OcclusionCulling = true;
+        cam.VolumeUpdateMode = CameraVolumeUpdateMode.EveryFrame;
+        cam.VolumeMask = "Everything";
+        cam.VolumeTrigger = "Player";
+        cam.OutputTarget = "Display 2";
+        cam.TargetDisplay = 1;
+        cam.AllowHDR = false;
+
+        string json = SceneSerializer.Serialize(new[] { obj });
+        AssertContains(json, "RenderType", "camera render type serialized");
+        AssertContains(json, "Projection", "camera projection serialized");
+        AssertContains(json, "RenderShadows", "camera render shadows serialized");
+
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts);
+        var loadedCam = loaded[0].GetComponent<Camera>()!;
+        AssertEqual(CameraRenderType.Overlay, loadedCam.RenderType, "camera render type restored");
+        AssertEqual(CameraProjection.Orthographic, loadedCam.Projection, "camera projection restored");
+        AssertEqual(CameraFieldOfViewAxis.Horizontal, loadedCam.FieldOfViewAxis, "camera fov axis restored");
+        AssertTrue(loadedCam.PhysicalCamera, "camera physical flag restored");
+        AssertNear(12.5f, loadedCam.OrthographicSize, "camera ortho size restored");
+        AssertFalse(loadedCam.PostProcessing, "camera post processing restored");
+        AssertEqual(CameraAntiAliasingMode.SMAA, loadedCam.AntiAliasingMode, "camera aa mode restored");
+        AssertEqual(8, loadedCam.AntiAliasingSamples, "camera aa samples restored");
+        AssertTrue(loadedCam.StopNaNs, "camera stop nans restored");
+        AssertTrue(loadedCam.Dithering, "camera dithering restored");
+        AssertFalse(loadedCam.RenderShadows, "camera render shadows restored");
+        AssertEqual(7, loadedCam.Priority, "camera priority restored");
+        AssertEqual(CameraTextureMode.On, loadedCam.OpaqueTexture, "camera opaque texture restored");
+        AssertEqual(CameraTextureMode.Off, loadedCam.DepthTexture, "camera depth texture restored");
+        AssertEqual("Default", loadedCam.CullingMask, "camera culling mask restored");
+        AssertTrue(loadedCam.OcclusionCulling, "camera occlusion restored");
+        AssertEqual(CameraVolumeUpdateMode.EveryFrame, loadedCam.VolumeUpdateMode, "camera volume update restored");
+        AssertEqual("Everything", loadedCam.VolumeMask, "camera volume mask restored");
+        AssertEqual("Player", loadedCam.VolumeTrigger, "camera volume trigger restored");
+        AssertEqual("Display 2", loadedCam.OutputTarget, "camera output target restored");
+        AssertEqual(1, loadedCam.TargetDisplay, "camera target display restored");
+        AssertFalse(loadedCam.AllowHDR, "camera hdr flag restored");
     }
 
     private sealed class TestCommand : ISceneCommand

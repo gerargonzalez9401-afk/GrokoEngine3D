@@ -227,7 +227,7 @@ private void DrawProjectAssetGrid(string directory)
         // NO usamos SetCursorPosY para extender el scroll porque ImGui hace assert.
         // Creamos espacio real con Dummy() antes y después de los items visibles.
         float scrollY = ImGui.GetScrollY();
-        float visibleH = Math.Max(1f, ImGui.GetWindowHeight());
+        float visibleH = Math.Max(1f, ImGui.GetContentRegionAvail().Y);
         int totalRows = Math.Max(1, (int)Math.Ceiling(count / (float)columns));
 
         int firstRow = Math.Max(0, (int)Math.Floor(scrollY / tileHeight) - 2);
@@ -345,12 +345,12 @@ private void DrawProjectAssetListRowVirtual(ProjectAssetEntry entry, IReadOnlyLi
         if (selectedItem || hovered)
         {
             uint bg = selectedItem
-                ? ImGui.GetColorU32(new System.Numerics.Vector4(0.34f, 0.34f, 0.34f, 0.88f))
-                : ImGui.GetColorU32(new System.Numerics.Vector4(0.30f, 0.30f, 0.30f, 0.38f));
+                ? ImGui.GetColorU32(new System.Numerics.Vector4(0.345f, 0.345f, 0.335f, 0.90f))
+                : ImGui.GetColorU32(new System.Numerics.Vector4(0.285f, 0.285f, 0.285f, 0.42f));
             drawList.AddRectFilled(rowMin + new Vector2(1f, 1f), rowMax - new Vector2(1f, 1f), bg, 5f);
             if (selectedItem)
                 drawList.AddRect(rowMin + new Vector2(1f, 1f), rowMax - new Vector2(1f, 1f),
-                    ImGui.GetColorU32(new System.Numerics.Vector4(0.52f, 0.58f, 0.64f, 0.85f)), 5f);
+                    ImGui.GetColorU32(new System.Numerics.Vector4(0.56f, 0.56f, 0.52f, 0.85f)), 5f);
         }
 
         float indent = entry.IsVirtualSubAsset ? 18f : 0f;
@@ -426,12 +426,12 @@ private void DrawProjectAssetListRow(ProjectAssetEntry entry, IReadOnlyList<Proj
         if (selectedItem || hovered)
         {
             uint bg = selectedItem
-                ? ImGui.GetColorU32(new System.Numerics.Vector4(0.34f, 0.34f, 0.34f, 0.88f))
-                : ImGui.GetColorU32(new System.Numerics.Vector4(0.30f, 0.30f, 0.30f, 0.38f));
+                ? ImGui.GetColorU32(new System.Numerics.Vector4(0.345f, 0.345f, 0.335f, 0.90f))
+                : ImGui.GetColorU32(new System.Numerics.Vector4(0.285f, 0.285f, 0.285f, 0.42f));
             drawList.AddRectFilled(rowMin + new Vector2(1f, 1f), rowMax - new Vector2(1f, 1f), bg, 5f);
             if (selectedItem)
                 drawList.AddRect(rowMin + new Vector2(1f, 1f), rowMax - new Vector2(1f, 1f),
-                    ImGui.GetColorU32(new System.Numerics.Vector4(0.52f, 0.58f, 0.64f, 0.85f)), 5f);
+                    ImGui.GetColorU32(new System.Numerics.Vector4(0.56f, 0.56f, 0.52f, 0.85f)), 5f);
         }
         var icon = isDirectory ? EditorIcon.Folder : IconForAssetKind(entry.Kind);
         var iconColor = isDirectory
@@ -587,18 +587,18 @@ private void DrawProjectAssetTile(ProjectAssetEntry entry, IReadOnlyList<Project
         if (selectedItem || hovered)
         {
             uint bg = selectedItem
-                ? ImGui.GetColorU32(new System.Numerics.Vector4(0.20f, 0.36f, 0.55f, 0.80f))
-                : ImGui.GetColorU32(new System.Numerics.Vector4(0.24f, 0.25f, 0.27f, 0.34f));
-            drawList.AddRectFilled(rectMin, rectMax, bg, 3f);
+                ? ImGui.GetColorU32(new System.Numerics.Vector4(0.330f, 0.330f, 0.315f, 0.86f))
+                : ImGui.GetColorU32(new System.Numerics.Vector4(0.255f, 0.255f, 0.255f, 0.42f));
+            drawList.AddRectFilled(rectMin, rectMax, bg, 5f);
         }
 
         if (selectedItem)
         {
-            drawList.AddRect(rectMin, rectMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.36f, 0.62f, 0.92f, 1f)), 3f, ImDrawFlags.None, 1.6f);
+            drawList.AddRect(rectMin, rectMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.58f, 0.58f, 0.54f, 0.95f)), 5f, ImDrawFlags.None, 1.4f);
 
             float flash = (float)Math.Clamp(1.0 - (GLFW.GetTime() - lastAssetSelectionFlashTime) / 0.55, 0.0, 1.0);
             if (flash > 0f)
-                drawList.AddRect(rectMin - new Vector2(2f, 2f), rectMax + new Vector2(2f, 2f), ImGui.GetColorU32(new System.Numerics.Vector4(0.72f, 0.88f, 1f, flash)), 5f, ImDrawFlags.None, 2f);
+                drawList.AddRect(rectMin - new Vector2(2f, 2f), rectMax + new Vector2(2f, 2f), ImGui.GetColorU32(new System.Numerics.Vector4(0.82f, 0.82f, 0.72f, flash)), 6f, ImDrawFlags.None, 1.8f);
         }
 
         float iconSize = 42f * projectTileScale;

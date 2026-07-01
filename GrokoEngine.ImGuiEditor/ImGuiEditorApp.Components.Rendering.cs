@@ -302,13 +302,15 @@ private void DrawMeshRendererInspector(GameObject obj, MeshRenderer mr)
             var mf = obj.GetComponent<MeshFilter>();
             if (mf != null && !string.IsNullOrWhiteSpace(mf.MeshPath) && GetInspectorParsedMesh(mf.MeshPath) is { } mesh && mesh.Submeshes.Count > 0)
             {
+                DrawMaterialHealthWarnings(obj, mesh);
+                DrawRendererMaterialsHeader(mf, mesh);
+
                 if (mf.SubmeshIndex >= 0 && mf.SubmeshIndex < mesh.Submeshes.Count)
                 {
                     if (NeedsMaterialSlotSync(mf, mesh))
                         EnsureMaterialSlots(mf, mesh);
                     int idx = mf.SubmeshIndex;
-                    DrawAssetSlot("Element 0", mf.MaterialSlots[idx], "Default-Material",
-                        p => mf.MaterialSlots[idx] = p, MaterialAsset.IsMaterialPath);
+                    DrawUnityMaterialSlot(obj, mf, mesh, idx, "Element 0", mesh.Submeshes[idx].Name);
                 }
                 else
                 {
@@ -316,9 +318,7 @@ private void DrawMeshRendererInspector(GameObject obj, MeshRenderer mr)
                         EnsureMaterialSlots(mf, mesh);
                     for (int i = 0; i < mesh.Submeshes.Count; i++)
                     {
-                        int slot = i;
-                        DrawAssetSlot($"Element {i}", mf.MaterialSlots[slot], "Default-Material",
-                            p => mf.MaterialSlots[slot] = p, MaterialAsset.IsMaterialPath);
+                        DrawUnityMaterialSlot(obj, mf, mesh, i, $"Element {i}", mesh.Submeshes[i].Name);
                     }
                 }
             }
@@ -326,8 +326,7 @@ private void DrawMeshRendererInspector(GameObject obj, MeshRenderer mr)
             {
                 // Objeto de un solo material (primitiva o malla sin submallas): componente Material.
                 string current = obj.GetComponent<Material>()?.AssetPath ?? "";
-                DrawAssetSlot("Element 0", current, "Default-Material",
-                    p => { if (!string.IsNullOrWhiteSpace(p)) ApplyMaterialToSelected(p); }, MaterialAsset.IsMaterialPath);
+                DrawSingleMaterialSlot(obj, current);
             }
         }
 
@@ -369,6 +368,186 @@ private void DrawMeshRendererInspector(GameObject obj, MeshRenderer mr)
             ImGui.Dummy(new Vector2(0f, 2f));
             ImGui.TextDisabled("Lighting/Ray Tracing: ajustes visuales (las sombras del motor son globales).");
         }
+    }
+
+private void DrawMaterialHealthWarnings(GameObject obj, ParsedMesh mesh)
+    {
+        bool suspiciousLooseMaterial = mesh.Submeshes.Count > 0 &&
+                                       obj.GetComponent<Material>() != null &&
+                                       obj.GetComponent<Animator>() != null;
+
+        if (!suspiciousLooseMaterial)
+            return;
+
+        ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(1.00f, 0.78f, 0.34f, 1f));
+        ImGui.TextWrapped("Material Health: este personaje tiene un Material suelto en el root, pero la malla usa Materials/Element. Puede provocar materiales incorrectos o bajones de FPS.");
+        ImGui.PopStyleColor();
+
+        ImGui.PushID("MaterialHealthRootMaterial");
+        if (ImGui.SmallButton("Remove root Material"))
+        {
+            obj.RemoveComponent<Material>(physicsEngine);
+            statusMessage = "Removed suspicious root Material from " + obj.Name;
+        }
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Keep"))
+            statusMessage = "Root Material kept intentionally.";
+        ImGui.PopID();
+        ImGui.Separator();
+    }
+
+private void DrawRendererMaterialsHeader(MeshFilter mf, ParsedMesh mesh)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(0.70f, 0.74f, 0.78f, 1f));
+        ImGui.Text($"{mesh.Submeshes.Count} material slot{(mesh.Submeshes.Count == 1 ? "" : "s")}");
+        ImGui.PopStyleColor();
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Reset"))
+        {
+            mf.MaterialSlots.Clear();
+            EnsureMaterialSlots(mf, mesh);
+            statusMessage = "Renderer material slots reset from imported mesh.";
+        }
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Clear All"))
+        {
+            for (int i = 0; i < mf.MaterialSlots.Count; i++)
+                mf.MaterialSlots[i] = "";
+            statusMessage = "Renderer material slots cleared.";
+        }
+
+        if (mf.MaterialSlots.Count > mesh.Submeshes.Count)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(1.00f, 0.62f, 0.28f, 1f));
+            ImGui.TextWrapped("Warning: hay mas materiales que submeshes. Slots extra pueden costar rendimiento y confundir el inspector.");
+            ImGui.PopStyleColor();
+        }
+    }
+
+private void DrawUnityMaterialSlot(GameObject obj, MeshFilter mf, ParsedMesh mesh, int slot, string label, string? submeshName)
+    {
+        if (slot < 0 || slot >= mf.MaterialSlots.Count)
+            return;
+
+        ImGui.PushID($"RendererMaterialSlot_{slot}");
+        float rowH = Math.Max(34f, currentDrawingApp?.guiAssetSlotHeight + 12f ?? 34f);
+        Vector2 rowMin = ImGui.GetCursorScreenPos();
+        float fullW = Math.Max(220f, ImGui.GetContentRegionAvail().X - 8f);
+        Vector2 rowMax = rowMin + new Vector2(fullW, rowH);
+        var drawList = ImGui.GetWindowDrawList();
+        bool hasMaterial = !string.IsNullOrWhiteSpace(mf.MaterialSlots[slot]);
+
+        drawList.AddRectFilled(rowMin, rowMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.128f, 0.128f, 0.132f, 0.92f)), 4f);
+        drawList.AddRect(rowMin, rowMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.24f, 0.24f, 0.25f, 1f)), 4f);
+
+        Vector2 previewMin = rowMin + new Vector2(6f, 5f);
+        DrawTextureMapPreviewBox(mf.MaterialSlots[slot], previewMin, 24f);
+
+        uint labelColor = ImGui.GetColorU32(new System.Numerics.Vector4(0.86f, 0.86f, 0.86f, 1f));
+        uint subColor = ImGui.GetColorU32(new System.Numerics.Vector4(0.52f, 0.55f, 0.58f, 1f));
+        string materialName = hasMaterial ? Path.GetFileName(mf.MaterialSlots[slot]) : "Default-Material";
+        string sub = string.IsNullOrWhiteSpace(submeshName) ? "Submesh" : submeshName!;
+        drawList.AddText(rowMin + new Vector2(38f, 5f), labelColor, $"{label}  {Ellipsize(materialName, 30)}");
+        drawList.AddText(rowMin + new Vector2(38f, 20f), subColor, Ellipsize(sub, 42));
+
+        ImGui.SetCursorScreenPos(rowMin);
+        if (ImGui.InvisibleButton("##MaterialSlotRow", new Vector2(fullW - 92f, rowH)))
+        {
+            assetSlotSearch = string.Empty;
+            ImGui.OpenPopup("AssetSlotPicker");
+        }
+        if (ImGui.IsItemHovered() && hasMaterial)
+            DrawTooltip(mf.MaterialSlots[slot]);
+
+        if (ImGui.BeginDragDropTarget())
+        {
+            bool delivered = AcceptDragDropOnRelease("GROKO_ASSET");
+            if (delivered && draggingAssetPath != null && File.Exists(draggingAssetPath) && MaterialAsset.IsMaterialPath(draggingAssetPath))
+            {
+                mf.MaterialSlots[slot] = draggingAssetPath;
+                statusMessage = $"Assigned {Path.GetFileName(draggingAssetPath)} to {obj.Name}/{label}";
+                draggingAssetPath = null;
+            }
+            ImGui.EndDragDropTarget();
+        }
+
+        ImGui.SetCursorScreenPos(rowMin + new Vector2(fullW - 88f, 6f));
+        if (ImGui.SmallButton("Select"))
+        {
+            selectedAssetPath = mf.MaterialSlots[slot];
+            statusMessage = hasMaterial ? "Selected " + Path.GetFileName(mf.MaterialSlots[slot]) : "No material assigned.";
+        }
+        ImGui.SameLine(0f, 4f);
+        if (ImGui.SmallButton("+"))
+        {
+            string created = CreateMaterialForSlot(mf, mesh, slot, obj.Name);
+            mf.MaterialSlots[slot] = created;
+            selectedAssetPath = created;
+            statusMessage = "Created " + Path.GetFileName(created);
+        }
+        ImGui.SameLine(0f, 4f);
+        if (ImGui.SmallButton("x"))
+        {
+            mf.MaterialSlots[slot] = "";
+            statusMessage = $"Cleared {obj.Name}/{label}.";
+        }
+
+        DrawAssetSlotPickerPopup(mf.MaterialSlots[slot], path =>
+        {
+            mf.MaterialSlots[slot] = path;
+            statusMessage = string.IsNullOrWhiteSpace(path)
+                ? $"Cleared {obj.Name}/{label}."
+                : $"Assigned {Path.GetFileName(path)} to {obj.Name}/{label}.";
+        }, MaterialAsset.IsMaterialPath);
+
+        ImGui.SetCursorScreenPos(new Vector2(rowMin.X, rowMax.Y + 4f));
+        ImGui.PopID();
+    }
+
+private void DrawSingleMaterialSlot(GameObject obj, string current)
+    {
+        DrawAssetSlot("Element 0", current, "Default-Material", p =>
+        {
+            if (string.IsNullOrWhiteSpace(p))
+            {
+                obj.RemoveComponent<Material>(physicsEngine);
+                statusMessage = "Cleared material on " + obj.Name;
+                return;
+            }
+
+            MaterialAsset.ApplyTo(obj, p);
+            statusMessage = "Assigned " + Path.GetFileName(p) + " to " + obj.Name;
+        }, MaterialAsset.IsMaterialPath);
+
+        if (ImGui.SmallButton("+ Create Material"))
+        {
+            string directory = currentProjectDirectory ?? "";
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                directory = rootAssetsPath;
+            string created = MaterialAsset.Create(directory, obj.Name + "_Material");
+            MaterialAsset.ApplyTo(obj, created);
+            selectedAssetPath = created;
+            statusMessage = "Created " + Path.GetFileName(created);
+        }
+    }
+
+private string CreateMaterialForSlot(MeshFilter mf, ParsedMesh mesh, int slot, string ownerName)
+    {
+        string directory = rootAssetsPath;
+        string? meshFullPath = SceneViewportRenderer.NormalizeExistingAssetPath(mf.MeshPath);
+        if (!string.IsNullOrWhiteSpace(meshFullPath) && File.Exists(meshFullPath))
+            directory = Path.GetDirectoryName(meshFullPath) ?? rootAssetsPath;
+        else if (!string.IsNullOrWhiteSpace(currentProjectDirectory) && Directory.Exists(currentProjectDirectory))
+            directory = currentProjectDirectory;
+
+        string subName = slot >= 0 && slot < mesh.Submeshes.Count && !string.IsNullOrWhiteSpace(mesh.Submeshes[slot].Name)
+            ? SanitizeAssetName(mesh.Submeshes[slot].Name)
+            : $"Element_{slot}";
+
+        string baseName = SanitizeAssetName(ownerName) + "_" + subName;
+        return MaterialAsset.Create(directory, baseName);
     }
 
 private static bool NeedsMaterialSlotSync(MeshFilter mf, ParsedMesh mesh)

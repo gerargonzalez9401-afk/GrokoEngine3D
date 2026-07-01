@@ -95,6 +95,7 @@ internal sealed partial class ImGuiEditorApp
                 text,
                 "Scene is empty");
 
+        DrawSelectedObjectBounds(drawList);
         DrawSelectionBoxOverlay(drawList);
         DrawViewportStatusToast(drawList);
         DrawAnimatorDebugOverlay(drawList);
@@ -316,6 +317,7 @@ internal sealed partial class ImGuiEditorApp
             if (selected != null)
                 drawList.AddText(viewportContentMin + new Vector2(56f, 38f), accent, selected.Name);
             HandleViewportAssetDrop();
+            DrawSelectedObjectBounds(drawList);
             DrawSelectionBoxOverlay(drawList);
             DrawViewportStatusToast(drawList);
             DrawAnimatorDebugOverlay(drawList);
@@ -1360,9 +1362,9 @@ internal sealed partial class ImGuiEditorApp
         float height = 30f;
         var headerMin = min - new Vector2(2f, 3f);
         var headerMax = min + new Vector2(width + 2f, height);
-        uint bg = ImGui.GetColorU32(new System.Numerics.Vector4(0.070f, 0.088f, 0.112f, 0.98f));
-        uint border = ImGui.GetColorU32(new System.Numerics.Vector4(0.145f, 0.190f, 0.250f, 0.95f));
-        uint accent = ImGui.GetColorU32(new System.Numerics.Vector4(0.22f, 0.58f, 0.95f, 0.95f));
+        uint bg = ImGui.GetColorU32(new System.Numerics.Vector4(0.155f, 0.155f, 0.155f, 0.98f));
+        uint border = ImGui.GetColorU32(new System.Numerics.Vector4(0.295f, 0.295f, 0.295f, 0.95f));
+        uint accent = ImGui.GetColorU32(UiAccent);
         drawList.AddRectFilled(headerMin, headerMax, bg, 7f);
         drawList.AddRect(headerMin, headerMax, border, 7f, ImDrawFlags.None, 1f);
         drawList.AddRectFilled(headerMin, headerMin + new Vector2(3f, height + 3f), accent, 7f);
@@ -2226,6 +2228,9 @@ internal sealed partial class ImGuiEditorApp
                     ? axisDistance
                     : 0f;
                 gizmoDragStartTransform = TransformSnapshot.Capture(selected!);
+                gizmoDragStartTransforms.Clear();
+                foreach (var target in selection.GetTargets())
+                    gizmoDragStartTransforms[target.EditorId] = TransformSnapshot.Capture(target);
                 gizmoUndoStart = CaptureSceneState();
             }
         }
@@ -2268,6 +2273,10 @@ internal sealed partial class ImGuiEditorApp
     {
         if (selected == null || gizmoAxis < 0) return;
 
+        var targets = selection.GetTargets();
+        if (targets.Count == 0)
+            targets.Add(selected);
+
         var axisScreen = axisEnd - originScreen;
         if (axisScreen.LengthSquared() < 0.0001f)
             axisScreen = gizmoAxis == 1 ? new Vector2(0, -1) : new Vector2(1, 0);
@@ -2275,7 +2284,6 @@ internal sealed partial class ImGuiEditorApp
         float screenDelta = Vector2.Dot(mouse - gizmoDragStartMouse, axisScreen);
         float worldDelta = screenDelta * Math.Max(0.004f, Distance(camera.Position, GetObjectCenter(selected)) * 0.0015f);
 
-        var t = gizmoDragStartTransform;
         switch (currentTool)
         {
             case TransformTool.Move:
@@ -2284,27 +2292,46 @@ internal sealed partial class ImGuiEditorApp
                     worldDelta = axisDistance - gizmoDragStartAxisDistance;
 
                 var worldOffset = axis * worldDelta;
-                var localOffset = WorldOffsetToLocalParentOffset(selected, worldOffset);
-                selected.PosX = t.Position.X + localOffset.X;
-                selected.PosY = t.Position.Y + localOffset.Y;
-                selected.PosZ = t.Position.Z + localOffset.Z;
-                ApplyGridSnapToObject(selected);
+                foreach (var target in targets)
+                {
+                    var t = gizmoDragStartTransforms.TryGetValue(target.EditorId, out var snapshot)
+                        ? snapshot
+                        : TransformSnapshot.Capture(target);
+                    var localOffset = WorldOffsetToLocalParentOffset(target, worldOffset);
+                    target.PosX = t.Position.X + localOffset.X;
+                    target.PosY = t.Position.Y + localOffset.Y;
+                    target.PosZ = t.Position.Z + localOffset.Z;
+                    ApplyGridSnapToObject(target);
+                    NotifyObjectTransformChanged(target);
+                }
                 break;
             case TransformTool.Rotate:
                 float degrees = screenDelta * 0.5f;
-                if (gizmoAxis == 0) selected.RotX = t.Rotation.X + degrees;
-                if (gizmoAxis == 1) selected.RotY = t.Rotation.Y + degrees;
-                if (gizmoAxis == 2) selected.RotZ = t.Rotation.Z + degrees;
+                foreach (var target in targets)
+                {
+                    var t = gizmoDragStartTransforms.TryGetValue(target.EditorId, out var snapshot)
+                        ? snapshot
+                        : TransformSnapshot.Capture(target);
+                    if (gizmoAxis == 0) target.RotX = t.Rotation.X + degrees;
+                    if (gizmoAxis == 1) target.RotY = t.Rotation.Y + degrees;
+                    if (gizmoAxis == 2) target.RotZ = t.Rotation.Z + degrees;
+                    NotifyObjectTransformChanged(target);
+                }
                 break;
             case TransformTool.Scale:
                 float scaleDelta = Math.Max(-0.95f, screenDelta * 0.01f);
-                if (gizmoAxis == 0) selected.ScaleX = Math.Clamp(t.Scale.X + scaleDelta, 0.001f, 1000f);
-                if (gizmoAxis == 1) selected.ScaleY = Math.Clamp(t.Scale.Y + scaleDelta, 0.001f, 1000f);
-                if (gizmoAxis == 2) selected.ScaleZ = Math.Clamp(t.Scale.Z + scaleDelta, 0.001f, 1000f);
+                foreach (var target in targets)
+                {
+                    var t = gizmoDragStartTransforms.TryGetValue(target.EditorId, out var snapshot)
+                        ? snapshot
+                        : TransformSnapshot.Capture(target);
+                    if (gizmoAxis == 0) target.ScaleX = Math.Clamp(t.Scale.X + scaleDelta, 0.001f, 1000f);
+                    if (gizmoAxis == 1) target.ScaleY = Math.Clamp(t.Scale.Y + scaleDelta, 0.001f, 1000f);
+                    if (gizmoAxis == 2) target.ScaleZ = Math.Clamp(t.Scale.Z + scaleDelta, 0.001f, 1000f);
+                    NotifyObjectTransformChanged(target);
+                }
                 break;
         }
-
-        NotifyObjectTransformChanged(selected);
     }
 
     private void ApplyGridSnapToObject(GameObject obj)

@@ -177,6 +177,24 @@ internal sealed partial class ImGuiEditorApp
         public string ViewportResolutionPreset { get; set; } = "free";
         public float RenderScale { get; set; } = 1f;
         public bool FxaaEnabled { get; set; } = true;
+        public string RenderPipelineAssetName { get; set; } = "Groko Render Pipeline Asset";
+        public string RendererDataName { get; set; } = "PC_Renderer";
+        public string RenderingPath { get; set; } = "Forward+";
+        public bool DepthTextureEnabled { get; set; } = true;
+        public bool OpaqueTextureEnabled { get; set; } = true;
+        public string OpaqueDownsampling { get; set; } = "2x Bilinear";
+        public bool HdrEnabled { get; set; } = true;
+        public int MsaaSamples { get; set; } = 4;
+        public bool TransparentReceiveShadows { get; set; } = true;
+        public string PrepassLayerMask { get; set; } = "Everything";
+        public string OpaqueLayerMask { get; set; } = "Everything";
+        public string TransparentLayerMask { get; set; } = "Everything";
+        public bool SsaoEnabled { get; set; } = true;
+        public string SsaoMethod { get; set; } = "Blue Noise";
+        public float SsaoIntensity { get; set; } = 0.4f;
+        public float SsaoRadius { get; set; } = 0.3f;
+        public float SsaoFalloffDistance { get; set; } = 100f;
+        public float SsaoDirectLightingStrength { get; set; } = 0.25f;
         public int BloomQuality { get; set; } = 2;
         public int AmbientOcclusionQuality { get; set; } = 2;
         public float ShadowBias { get; set; } = 1f;
@@ -291,6 +309,7 @@ internal sealed partial class ImGuiEditorApp
         public int AntiAliasingSamples = 4;
         public bool FrustumCulling = false;
         public bool OcclusionCulling = false;
+        public int CullingMask = LayerMask.Everything;
 
         public void UpdateFront()
         {

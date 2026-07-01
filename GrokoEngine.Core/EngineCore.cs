@@ -166,6 +166,12 @@ namespace GrokoEngine
     // =====================================================
     // MATERIAL
     // =====================================================
+    public enum MaterialSurfaceType
+    {
+        Opaque,
+        Transparent
+    }
+
     public class Material : Component
     {
         public float R { get; set; } = 1f;
@@ -181,6 +187,10 @@ namespace GrokoEngine
         public Dictionary<string, string> ShaderGraphTextures { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public float Roughness { get; set; } = 0.5f;
         public float Metallic { get; set; } = 0f;
+        public MaterialSurfaceType SurfaceType { get; set; } = MaterialSurfaceType.Opaque;
+        public float Alpha { get; set; } = 1f;
+        public float RefractionStrength { get; set; } = 0f;
+        public float DistortionStrength { get; set; } = 0f;
         public bool SpecularHighlights { get; set; } = true;
         public bool EnvironmentReflections { get; set; } = true;
         public float EmissionR { get; set; } = 0f;
@@ -194,12 +204,19 @@ namespace GrokoEngine
     // CAMERA
     // =====================================================
     public enum CameraClearFlags { Skybox, SolidColor }
+    public enum CameraRenderType { Base, Overlay }
+    public enum CameraProjection { Perspective, Orthographic }
+    public enum CameraFieldOfViewAxis { Vertical, Horizontal }
+    public enum CameraAntiAliasingMode { None, FXAA, SMAA, TAA }
+    public enum CameraTextureMode { Pipeline, On, Off }
+    public enum CameraVolumeUpdateMode { Pipeline, EveryFrame, ViaScripting }
 
     public class Camera : Component
     {
         private float _fov = 60f;
         private float _nearClip = 0.1f;
         private float _farClip = 1000f;
+        private float _orthographicSize = 5f;
         private int _antiAliasingSamples = 4;
 
         public float FOV
@@ -231,11 +248,22 @@ namespace GrokoEngine
         }
 
         public CameraClearFlags ClearFlags = CameraClearFlags.Skybox;
+        public CameraRenderType RenderType { get; set; } = CameraRenderType.Base;
+        public CameraProjection Projection { get; set; } = CameraProjection.Perspective;
+        public CameraFieldOfViewAxis FieldOfViewAxis { get; set; } = CameraFieldOfViewAxis.Vertical;
+        public bool PhysicalCamera { get; set; } = false;
+        public float OrthographicSize
+        {
+            get => _orthographicSize;
+            set => _orthographicSize = Math.Clamp(value, 0.001f, 100000f);
+        }
         public float BackgroundR = 0.075f;
         public float BackgroundG = 0.095f;
         public float BackgroundB = 0.120f;
         public float BackgroundA = 1f;
+        public bool PostProcessing { get; set; } = true;
         public bool AntiAliasing { get; set; } = true;
+        public CameraAntiAliasingMode AntiAliasingMode { get; set; } = CameraAntiAliasingMode.FXAA;
 
         public int AntiAliasingSamples
         {
@@ -245,6 +273,24 @@ namespace GrokoEngine
 
         public bool FrustumCulling { get; set; } = true;
         public bool OcclusionCulling { get; set; } = false;
+        public bool StopNaNs { get; set; } = false;
+        public bool Dithering { get; set; } = false;
+        public bool RenderShadows { get; set; } = true;
+        public int Priority { get; set; } = -1;
+        public CameraTextureMode OpaqueTexture { get; set; } = CameraTextureMode.Pipeline;
+        public CameraTextureMode DepthTexture { get; set; } = CameraTextureMode.Pipeline;
+        public string CullingMask { get; set; } = "Everything";
+        public CameraClearFlags BackgroundType
+        {
+            get => ClearFlags;
+            set => ClearFlags = value;
+        }
+        public CameraVolumeUpdateMode VolumeUpdateMode { get; set; } = CameraVolumeUpdateMode.Pipeline;
+        public string VolumeMask { get; set; } = "Default";
+        public string VolumeTrigger { get; set; } = "";
+        public string OutputTarget { get; set; } = "Display 1";
+        public int TargetDisplay { get; set; } = 0;
+        public bool AllowHDR { get; set; } = true;
     }
 
     // =====================================================
@@ -291,6 +337,35 @@ namespace GrokoEngine
         public bool DynamicOcclusion = true;
         public string RenderingLayerMask = "Default";
         public int Priority = 0;
+    }
+
+    // =====================================================
+    // BONE ATTACHMENT / SOCKET
+    // =====================================================
+    // Hace que un objeto rígido siga un hueso de un Animator sin tener que parentarlo
+    // dentro del esqueleto. Ideal para armas, props, cascos o accesorios: se renderizan
+    // como meshes normales y evitan ensuciar el mapa de huesos/skinning del personaje.
+    public class BoneAttachment : Component
+    {
+        public string TargetObjectId = "";
+        public string TargetObjectName = "";
+        public string BoneName = "";
+
+        public float PositionOffsetX = 0f;
+        public float PositionOffsetY = 0f;
+        public float PositionOffsetZ = 0f;
+
+        public float RotationOffsetX = 0f;
+        public float RotationOffsetY = 0f;
+        public float RotationOffsetZ = 0f;
+
+        public float ScaleOffsetX = 1f;
+        public float ScaleOffsetY = 1f;
+        public float ScaleOffsetZ = 1f;
+
+        public bool FollowPosition = true;
+        public bool FollowRotation = true;
+        public bool FollowScale = false;
     }
 
     // =====================================================
@@ -369,7 +444,38 @@ namespace GrokoEngine
         public const int IgnoreRaycast = 2;
         public const int Water = 4;
         public const int UI = 5;
+        public const int Nothing = 0;
         public const int Everything = ~0;
+
+        public static readonly string[] BuiltinLayerNames =
+        {
+            "Default",
+            "TransparentFX",
+            "Ignore Raycast",
+            "Water",
+            "UI",
+            "Player",
+            "Enemy",
+            "Ground",
+            "Pickup",
+            "Interactable"
+        };
+
+        public static readonly string[] CullingMaskOptions =
+        {
+            "Everything",
+            "Nothing",
+            "Default",
+            "TransparentFX",
+            "Ignore Raycast",
+            "Water",
+            "UI",
+            "Player",
+            "Enemy",
+            "Ground",
+            "Pickup",
+            "Interactable"
+        };
 
         private static readonly Dictionary<string, int> builtinLayers = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -427,5 +533,24 @@ namespace GrokoEngine
 
         public static int ToMask(int layer) => 1 << Math.Clamp(layer, 0, 31);
         public static bool Contains(int layerMask, int layer) => (layerMask & ToMask(layer)) != 0;
+
+        public static int ParseMask(string? mask)
+        {
+            if (string.IsNullOrWhiteSpace(mask))
+                return Everything;
+
+            string trimmed = mask.Trim();
+            if (string.Equals(trimmed, "Everything", StringComparison.OrdinalIgnoreCase))
+                return Everything;
+            if (string.Equals(trimmed, "Nothing", StringComparison.OrdinalIgnoreCase))
+                return Nothing;
+
+            char[] separators = { ',', '|', ';' };
+            string[] parts = trimmed.Split(separators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length > 1)
+                return GetMask(parts);
+
+            return GetMask(trimmed);
+        }
     }
 }

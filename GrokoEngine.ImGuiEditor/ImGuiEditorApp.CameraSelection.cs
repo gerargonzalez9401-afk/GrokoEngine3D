@@ -220,6 +220,34 @@ internal sealed partial class ImGuiEditorApp
         statusMessage = "Camera framed " + obj.Name;
     }
 
+    private void FrameSelection()
+    {
+        var targets = selection.GetTargets();
+        if (targets.Count == 0)
+        {
+            FrameScene();
+            return;
+        }
+
+        var first = GetSelectionBounds(targets[0]);
+        var min = first.Min;
+        var max = first.Max;
+        for (int i = 1; i < targets.Count; i++)
+        {
+            var b = GetSelectionBounds(targets[i]);
+            min = new Vector3(Math.Min(min.X, b.Min.X), Math.Min(min.Y, b.Min.Y), Math.Min(min.Z, b.Min.Z));
+            max = new Vector3(Math.Max(max.X, b.Max.X), Math.Max(max.Y, b.Max.Y), Math.Max(max.Z, b.Max.Z));
+        }
+
+        var center = (min + max) * 0.5f;
+        var size = max - min;
+        float radius = Math.Max(1f, Math.Max(Math.Max(Math.Abs(size.X), Math.Abs(size.Y)), Math.Abs(size.Z)) * 0.5f);
+        float distance = Math.Max(3f, radius * 2.8f);
+        camera.Position = center + new Vector3(0, distance * 0.35f, distance);
+        camera.SetLookDirection((center - camera.Position).Normalized());
+        statusMessage = $"Camera framed {targets.Count} selected objects";
+    }
+
     private int SanitizeExtremeTransforms()
     {
         int fixedCount = 0;
@@ -381,6 +409,70 @@ internal sealed partial class ImGuiEditorApp
         drawList.AddRect(min, max, outline, 0f, ImDrawFlags.None, 1.4f);
     }
 
+    private void DrawSelectedObjectBounds(ImDrawListPtr drawList)
+    {
+        if (gameViewActive || isPlaying || viewportContentSize.X <= 1f || viewportContentSize.Y <= 1f)
+            return;
+
+        var targets = selection.GetTargets();
+        if (targets.Count == 0)
+            return;
+
+        uint primary = ImGui.GetColorU32(new System.Numerics.Vector4(1.00f, 0.74f, 0.22f, 0.95f));
+        uint secondary = ImGui.GetColorU32(new System.Numerics.Vector4(0.42f, 0.70f, 1.00f, 0.70f));
+        uint fill = ImGui.GetColorU32(new System.Numerics.Vector4(0.18f, 0.42f, 0.85f, 0.06f));
+        int activeIndex = selected != null ? targets.FindIndex(o => o.EditorId == selected.EditorId) : targets.Count - 1;
+        if (activeIndex < 0) activeIndex = targets.Count - 1;
+
+        for (int i = 0; i < targets.Count; i++)
+        {
+            var obj = targets[i];
+            var bounds = GetSelectionBounds(obj);
+            Vector2[] points = new Vector2[8];
+            int pointIndex = 0;
+            bool projected = true;
+            foreach (var corner in bounds.Corners())
+            {
+                if (!TryProject(corner, out var local))
+                {
+                    projected = false;
+                    break;
+                }
+                points[pointIndex++] = viewportContentMin + local;
+            }
+            if (!projected || pointIndex != 8)
+                continue;
+
+            uint color = i == activeIndex ? primary : secondary;
+            DrawProjectedBox(drawList, points, color, i == activeIndex ? 1.7f : 1.1f);
+
+            Vector2 screenMin = points[0];
+            Vector2 screenMax = points[0];
+            for (int p = 1; p < points.Length; p++)
+            {
+                screenMin = new Vector2(Math.Min(screenMin.X, points[p].X), Math.Min(screenMin.Y, points[p].Y));
+                screenMax = new Vector2(Math.Max(screenMax.X, points[p].X), Math.Max(screenMax.Y, points[p].Y));
+            }
+            screenMin = ClampToViewport(screenMin);
+            screenMax = ClampToViewport(screenMax);
+            if (screenMax.X > screenMin.X && screenMax.Y > screenMin.Y)
+                drawList.AddRectFilled(screenMin, screenMax, fill, 0f);
+        }
+    }
+
+    private static void DrawProjectedBox(ImDrawListPtr drawList, ReadOnlySpan<Vector2> p, uint color, float thickness)
+    {
+        ReadOnlySpan<int> edges = stackalloc int[]
+        {
+            0, 1, 0, 2, 1, 3, 2, 3,
+            4, 5, 4, 6, 5, 7, 6, 7,
+            0, 4, 1, 5, 2, 6, 3, 7
+        };
+
+        for (int i = 0; i < edges.Length; i += 2)
+            drawList.AddLine(p[edges[i]], p[edges[i + 1]], color, thickness);
+    }
+
     private Vector2 ClampToViewport(Vector2 point) =>
         new(
             Math.Clamp(point.X, viewportContentMin.X, viewportContentMin.X + viewportContentSize.X),
@@ -428,6 +520,8 @@ internal sealed partial class ImGuiEditorApp
     {
         GameObject? best = null;
         float bestHit = float.MaxValue;
+        GameObject? bestBox = null;
+        float bestBoxHit = float.MaxValue;
 
         if (!BuildCameraRay(mouseX, mouseY, out var rayOrigin, out var rayDirection))
             return null;
@@ -436,14 +530,102 @@ internal sealed partial class ImGuiEditorApp
         {
             if (!obj.IsActive) continue;
             var box = GetSelectionBounds(obj);
-            if (RayIntersectsBox(rayOrigin, rayDirection, box, out float hit) && hit < bestHit)
+            if (!RayIntersectsBox(rayOrigin, rayDirection, box, out float boxHit))
+                continue;
+
+            if (boxHit < bestBoxHit)
             {
-                bestHit = hit;
+                bestBoxHit = boxHit;
+                bestBox = obj;
+            }
+
+            if (TryPickMeshTriangle(obj, rayOrigin, rayDirection, out float meshHit) && meshHit < bestHit)
+            {
+                bestHit = meshHit;
                 best = obj;
             }
         }
 
-        return best;
+        return best ?? bestBox;
+    }
+
+    private static bool TryPickMeshTriangle(GameObject obj, Vector3 rayOrigin, Vector3 rayDirection, out float hit)
+    {
+        hit = float.MaxValue;
+        if (obj.GetComponent<MeshFilter>() is not { } mf ||
+            string.IsNullOrWhiteSpace(mf.MeshPath) ||
+            ObjLoader.Load(mf.MeshPath) is not { } mesh ||
+            mesh.Positions.Length < 9)
+            return false;
+
+        int vertexStart = 0;
+        int vertexEnd = mesh.Positions.Length / 3;
+        if (mf.SubmeshIndex >= 0 && mf.SubmeshIndex < mesh.Submeshes.Count)
+        {
+            var sub = mesh.Submeshes[mf.SubmeshIndex];
+            vertexStart = Math.Clamp(sub.VertexStart, 0, vertexEnd);
+            vertexEnd = Math.Clamp(sub.VertexStart + sub.VertexCount, vertexStart, vertexEnd);
+        }
+
+        // Los meshes del motor están expandidos por triángulo: cada 3 vértices forman una cara.
+        vertexStart -= vertexStart % 3;
+        vertexEnd -= vertexEnd % 3;
+        if (vertexEnd <= vertexStart)
+            return false;
+
+        var wm = obj.WorldMatrix;
+        float importScale = Math.Max(0.0001f, mf.ImportScale);
+        bool found = false;
+        for (int vertex = vertexStart; vertex + 2 < vertexEnd; vertex += 3)
+        {
+            var a = MeshVertexToWorld(mesh.Positions, vertex, importScale, wm);
+            var b = MeshVertexToWorld(mesh.Positions, vertex + 1, importScale, wm);
+            var c = MeshVertexToWorld(mesh.Positions, vertex + 2, importScale, wm);
+            if (RayIntersectsTriangle(rayOrigin, rayDirection, a, b, c, out float t) && t < hit)
+            {
+                hit = t;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    private static Vector3 MeshVertexToWorld(float[] positions, int vertex, float importScale, System.Numerics.Matrix4x4 world)
+    {
+        int i = vertex * 3;
+        var local = new System.Numerics.Vector3(
+            positions[i] * importScale,
+            positions[i + 1] * importScale,
+            positions[i + 2] * importScale);
+        var wp = System.Numerics.Vector3.Transform(local, world);
+        return new Vector3(wp.X, wp.Y, wp.Z);
+    }
+
+    private static bool RayIntersectsTriangle(Vector3 origin, Vector3 direction, Vector3 a, Vector3 b, Vector3 c, out float hit)
+    {
+        hit = 0f;
+        const float epsilon = 0.000001f;
+        var edge1 = b - a;
+        var edge2 = c - a;
+        var p = Vector3.Cross(direction, edge2);
+        float det = Dot(edge1, p);
+        if (Math.Abs(det) < epsilon)
+            return false;
+
+        float invDet = 1f / det;
+        var tvec = origin - a;
+        float u = Dot(tvec, p) * invDet;
+        if (u < 0f || u > 1f)
+            return false;
+
+        var q = Vector3.Cross(tvec, edge1);
+        float v = Dot(direction, q) * invDet;
+        if (v < 0f || u + v > 1f)
+            return false;
+
+        hit = Dot(edge2, q) * invDet;
+        return hit > epsilon && float.IsFinite(hit);
     }
 
     private void SelectObjectsInBox(Vector2 startScreen, Vector2 endScreen, SelectionService.SelectionMode mode)

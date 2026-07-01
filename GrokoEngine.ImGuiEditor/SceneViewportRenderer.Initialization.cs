@@ -47,6 +47,11 @@ internal sealed partial class SceneViewportRenderer
         solidHasRoughnessMapLocation = GL.GetUniformLocation(solidShader, "uHasRoughnessMap");
         solidMetallicMapLocation = GL.GetUniformLocation(solidShader, "uMetallicMap");
         solidHasMetallicMapLocation = GL.GetUniformLocation(solidShader, "uHasMetallicMap");
+        solidRefractivePassLocation = GL.GetUniformLocation(solidShader, "uRefractivePass");
+        solidOpaqueTextureLocation = GL.GetUniformLocation(solidShader, "uOpaqueTexture");
+        solidScreenTexelLocation = GL.GetUniformLocation(solidShader, "uScreenTexel");
+        solidRefractionStrengthLocation = GL.GetUniformLocation(solidShader, "uRefractionStrength");
+        solidDistortionStrengthLocation = GL.GetUniformLocation(solidShader, "uDistortionStrength");
         solidLightMvpLocation = GL.GetUniformLocation(solidShader, "uLightMvp");
         solidCascadeCountLocation = GL.GetUniformLocation(solidShader, "uCascadeCount");
         solidCameraPositionLocation = GL.GetUniformLocation(solidShader, "uShadowCameraPos");
@@ -208,6 +213,10 @@ internal sealed partial class SceneViewportRenderer
         _particleDepthTexLoc = GL.GetUniformLocation(_particleShader, "uDepthTex");
         _particleScreenSizeLoc = GL.GetUniformLocation(_particleShader, "uScreenSize");
         _particleSoftRangeLoc = GL.GetUniformLocation(_particleShader, "uSoftRange");
+        _particleOpaqueTexLoc = GL.GetUniformLocation(_particleShader, "uOpaqueTexture");
+        _particleDistortionLoc = GL.GetUniformLocation(_particleShader, "uDistortionEnabled");
+        _particleDistortionStrengthLoc = GL.GetUniformLocation(_particleShader, "uDistortionStrength");
+        _particleRefractionStrengthLoc = GL.GetUniformLocation(_particleShader, "uRefractionStrength");
 
         // Trail VAO (misma estructura que partículas)
         _trailVao = GL.GenVertexArray();

@@ -151,6 +151,12 @@ internal sealed partial class ImGuiEditorApp
                 ImGui.EndTabItem();
             }
 
+            if (ImGui.BeginTabItem("Render Pipeline"))
+            {
+                DrawRenderPipelineSettingsTab();
+                ImGui.EndTabItem();
+            }
+
             if (ImGui.BeginTabItem("Lighting"))
             {
                 if (ImGui.BeginCombo("Debug View", lightingDebugView.ToString()))
@@ -650,9 +656,221 @@ internal sealed partial class ImGuiEditorApp
         return changed;
     }
 
+    private void DrawRenderPipelineSettingsTab()
+    {
+        ImGui.TextColored(new Vec4(0.86f, 0.86f, 0.82f, 1f), "Groko Render Pipeline Asset");
+        ImGui.TextDisabled("Ajustes globales estilo URP: render scale, MSAA, texturas, sombras, SSAO y Renderer Data.");
+        ImGui.Separator();
+
+        if (ImGui.BeginTable("##renderPipelineRoot", 2, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.BordersInnerV))
+        {
+            ImGui.TableSetupColumn("Asset", ImGuiTableColumnFlags.WidthStretch, 0.92f);
+            ImGui.TableSetupColumn("Renderer", ImGuiTableColumnFlags.WidthStretch, 1.08f);
+
+            ImGui.TableNextColumn();
+            DrawRenderProSection("Pipeline Asset");
+            ImGui.SetNextItemWidth(-1f);
+            ImGui.InputText("Asset Name##rpAssetName", ref renderPipelineAssetName, 96);
+            ImGui.SetNextItemWidth(-1f);
+            ImGui.InputText("Renderer Data##rpRendererName", ref rendererDataName, 96);
+
+            ImGui.Spacing();
+            DrawRenderProSection("Rendering");
+            SmallCheckbox("Depth Texture##rpDepth", ref depthTextureEnabled);
+            ImGui.TextDisabled("Prepara profundidad para postprocess, soft particles y efectos de pantalla.");
+            SmallCheckbox("Opaque Texture##rpOpaque", ref opaqueTextureEnabled);
+            DrawStringCombo("Opaque Downsampling##rpOpaqueDown", ref opaqueDownsampling, ["None", "2x Bilinear", "4x Box", "4x Bilinear"]);
+            SmallCheckbox("HDR##rpHdr", ref hdrEnabled);
+            DrawMsaaCombo("MSAA##rpMsaa", ref msaaSamples);
+            DrawUnitySliderFloat("Render Scale##rpScale", ref renderScale, 0.25f, 2f, 0.01f);
+            renderScale = Math.Clamp(renderScale, 0.25f, 2f);
+            ImGui.TextDisabled($"Target: {GetViewportRenderSize().Width} x {GetViewportRenderSize().Height}");
+            ImGui.TextDisabled($"Runtime: Depth {(sceneTarget.DepthTextureEnabled ? "ON" : "OFF")} / Opaque {(sceneTarget.HasOpaqueTexture ? "Captured" : "Idle")}");
+
+            ImGui.Spacing();
+            DrawRenderProSection("Presets");
+            if (ImGui.Button("Performance##rpPreset", new Vector2(112f, 26f)))
+                ApplyRenderPipelinePreset(0);
+            ImGui.SameLine();
+            if (ImGui.Button("Balanced##rpPreset", new Vector2(104f, 26f)))
+                ApplyRenderPipelinePreset(1);
+            ImGui.SameLine();
+            if (ImGui.Button("Cinematic##rpPreset", new Vector2(108f, 26f)))
+                ApplyRenderPipelinePreset(2);
+
+            ImGui.TableNextColumn();
+            DrawRenderProSection("Renderer Data / Filtering");
+            DrawLayerMaskCombo("Prepass Layer Mask##rpPrepassMask", ref prepassLayerMask);
+            DrawLayerMaskCombo("Opaque Layer Mask##rpOpaqueMask", ref opaqueLayerMask);
+            DrawLayerMaskCombo("Transparent Layer Mask##rpTransparentMask", ref transparentLayerMask);
+
+            ImGui.Spacing();
+            DrawRenderProSection("Renderer Data / Path");
+            DrawStringCombo("Rendering Path##rpPath", ref renderingPath, ["Forward", "Forward+"]);
+            ImGui.TextDisabled(renderingPath == "Forward+"
+                ? "Forward+ prepara el camino para muchas luces por tile/cluster."
+                : "Forward clasico: simple, estable y barato para escenas pequenas.");
+            SmallCheckbox("Transparent Receive Shadows##rpTransparentShadows", ref transparentReceiveShadows);
+            SmallCheckbox("FXAA##rpFxaa", ref fxaaEnabled);
+
+            ImGui.Spacing();
+            DrawRenderProSection("Screen Space Ambient Occlusion");
+            SmallCheckbox("Enabled##rpSsaoEnabled", ref ssaoEnabled);
+            DrawStringCombo("Method##rpSsaoMethod", ref ssaoMethod, ["Blue Noise", "Interleaved Gradient"]);
+            DrawQualityCombo("Quality##rpSsaoQuality", ref ambientOcclusionQuality);
+            DrawUnitySliderFloat("Intensity##rpSsaoIntensity", ref ssaoIntensity, 0f, 2f, 0.01f);
+            DrawUnitySliderFloat("Radius##rpSsaoRadius", ref ssaoRadius, 0.02f, 3f, 0.01f);
+            DrawUnitySliderFloat("Falloff Distance##rpSsaoFalloff", ref ssaoFalloffDistance, 1f, 500f, 1f);
+            DrawUnitySliderFloat("Direct Lighting Strength##rpSsaoDirect", ref ssaoDirectLightingStrength, 0f, 1f, 0.01f);
+
+            ImGui.Spacing();
+            DrawRenderProSection("Shadows");
+            DrawShadowQualityCombo("Shadow Quality##rpShadowQuality");
+            DrawUnitySliderFloat("Shadow Bias##rpShadowBias", ref shadowBias, 0.1f, 4f, 0.01f);
+            shadowBias = Math.Clamp(shadowBias, 0.1f, 4f);
+            ImGui.TextDisabled(ShadowQualityDescription(shadowQuality));
+
+            ImGui.EndTable();
+        }
+
+        ImGui.Separator();
+        ImGui.TextDisabled("Depth Texture alimenta AO/God Rays cuando esta activo. Opaque Texture ya se captura despues del resolve MSAA y queda lista para distortion/refraction.");
+    }
+
+    private static bool DrawStringCombo(string label, ref string value, IReadOnlyList<string> options)
+    {
+        if (options.Count == 0)
+            return false;
+
+        if (!options.Contains(value))
+            value = options[0];
+
+        bool changed = false;
+        if (ImGui.BeginCombo(label, value))
+        {
+            foreach (string option in options)
+            {
+                bool selected = string.Equals(value, option, StringComparison.Ordinal);
+                if (ImGui.Selectable(option, selected))
+                {
+                    value = option;
+                    changed = true;
+                }
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+
+        return changed;
+    }
+
+    private static bool DrawLayerMaskCombo(string label, ref string value)
+    {
+        return DrawStringCombo(label, ref value, LayerMask.CullingMaskOptions);
+    }
+
+    private static bool DrawMsaaCombo(string label, ref int value)
+    {
+        int[] samples = [1, 2, 4, 8];
+        if (!samples.Contains(value))
+            value = 4;
+
+        string preview = value == 1 ? "Disabled" : value + "x";
+        bool changed = false;
+        if (ImGui.BeginCombo(label, preview))
+        {
+            foreach (int sample in samples)
+            {
+                string text = sample == 1 ? "Disabled" : sample + "x";
+                bool selected = value == sample;
+                if (ImGui.Selectable(text, selected))
+                {
+                    value = sample;
+                    changed = true;
+                }
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+
+        return changed;
+    }
+
+    private void DrawShadowQualityCombo(string label)
+    {
+        if (ImGui.BeginCombo(label, shadowQuality.ToString()))
+        {
+            foreach (ShadowQuality quality in Enum.GetValues<ShadowQuality>())
+            {
+                bool selected = shadowQuality == quality;
+                if (ImGui.Selectable(quality.ToString(), selected))
+                    shadowQuality = quality;
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+    }
+
+    private void ApplyRenderPipelinePreset(int preset)
+    {
+        switch (preset)
+        {
+            case 0:
+                renderingPath = "Forward";
+                renderScale = 0.8f;
+                msaaSamples = 2;
+                fxaaEnabled = true;
+                hdrEnabled = true;
+                bloomQuality = 1;
+                ssaoEnabled = true;
+                ambientOcclusionQuality = 1;
+                ssaoIntensity = 0.28f;
+                ssaoRadius = 0.22f;
+                shadowQuality = ShadowQuality.Medium;
+                shadowBias = 1.25f;
+                break;
+            case 2:
+                renderingPath = "Forward+";
+                renderScale = 1f;
+                msaaSamples = 8;
+                fxaaEnabled = true;
+                hdrEnabled = true;
+                bloomQuality = 3;
+                ssaoEnabled = true;
+                ambientOcclusionQuality = 3;
+                ssaoIntensity = 0.55f;
+                ssaoRadius = 0.45f;
+                shadowQuality = ShadowQuality.Ultra;
+                shadowBias = 0.85f;
+                break;
+            default:
+                renderingPath = "Forward+";
+                renderScale = 1f;
+                msaaSamples = 4;
+                fxaaEnabled = true;
+                hdrEnabled = true;
+                bloomQuality = 2;
+                ssaoEnabled = true;
+                ambientOcclusionQuality = 2;
+                ssaoIntensity = 0.4f;
+                ssaoRadius = 0.3f;
+                shadowQuality = ShadowQuality.High;
+                shadowBias = 1f;
+                break;
+        }
+
+        depthTextureEnabled = true;
+        opaqueTextureEnabled = true;
+        transparentReceiveShadows = true;
+        statusMessage = "Render Pipeline preset applied";
+    }
+
     private void DrawRenderProSettingsTab()
     {
-        ImGui.TextColored(new Vec4(0.45f, 0.86f, 1.0f, 1f), "Render Debug / Quality");
+        ImGui.TextColored(new Vec4(0.86f, 0.86f, 0.82f, 1f), "Render Debug / Quality");
         ImGui.TextDisabled("Panel profesional para calibrar IBL, sombras, AO y materiales sin tocar codigo.");
         ImGui.Separator();
 
@@ -826,7 +1044,9 @@ internal sealed partial class ImGuiEditorApp
 
     private static void DrawRenderProSection(string title)
     {
-        ImGui.TextColored(new Vec4(0.74f, 0.82f, 0.96f, 1f), title);
+        ImGui.Spacing();
+        ImGui.TextColored(new Vec4(0.82f, 0.82f, 0.78f, 1f), title);
+        ImGui.Separator();
     }
 
     private static string LightingDebugViewLabel(LightingDebugView view) => view switch

@@ -115,6 +115,9 @@ internal sealed partial class SceneViewportRenderer
         Vector4 Color,
         Vector4 Material,
         Vector4 Emission,
+        float Alpha = 1f,
+        float RefractionStrength = 0f,
+        float DistortionStrength = 0f,
         bool CastShadows = true,
         bool ReceiveShadows = true);
 
@@ -130,9 +133,27 @@ internal sealed partial class SceneViewportRenderer
         string? MetallicMapPath,
         Vector4 Color,
         Vector4 Material,
-        Vector4 Emission);
+        Vector4 Emission,
+        float Alpha = 1f,
+        float RefractionStrength = 0f,
+        float DistortionStrength = 0f);
 
     private readonly record struct SurfaceMaps(string? NormalMapPath, string? RoughnessMapPath, string? MetallicMapPath);
+
+    private readonly record struct SurfaceTransparency(
+        MaterialSurfaceType SurfaceType,
+        float Alpha,
+        float RefractionStrength,
+        float DistortionStrength)
+    {
+        public bool IsTransparent =>
+            SurfaceType == MaterialSurfaceType.Transparent ||
+            Alpha < 0.999f ||
+            RefractionStrength > 0.0001f ||
+            DistortionStrength > 0.0001f;
+
+        public static readonly SurfaceTransparency Opaque = new(MaterialSurfaceType.Opaque, 1f, 0f, 0f);
+    }
 
     private readonly record struct MeshVertData(Vector3 Position, Vector3 Normal, Vector2 Uv);
 

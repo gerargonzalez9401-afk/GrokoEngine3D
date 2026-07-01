@@ -150,6 +150,11 @@ internal sealed partial class SceneViewportRenderer
             uniform bool      uHasRoughnessMap;
             uniform sampler2D uMetallicMap;
             uniform bool      uHasMetallicMap;
+            uniform int       uRefractivePass;
+            uniform sampler2D uOpaqueTexture;
+            uniform vec2      uScreenTexel;
+            uniform float     uRefractionStrength;
+            uniform float     uDistortionStrength;
             uniform sampler2DArray uShadowMap;
             uniform int       uShadowEnabled;
             uniform float     uShadowStrength;
@@ -788,6 +793,20 @@ internal sealed partial class SceneViewportRenderer
                 float forwardFog = pow(max(dot(normalize(uCameraPos - vWorldPos), normalize(-uDirDir)), 0.0), 8.0);
                 vec3 fog = uFogColor * (1.0 + forwardFog * uVolumetricStrength);
                 hdr = mix(hdr, fog, clamp(fogAmount, 0.0, 0.92));
+
+                if (uRefractivePass == 1)
+                {
+                    vec2 screenUv = clamp(gl_FragCoord.xy * uScreenTexel, vec2(0.001), vec2(0.999));
+                    vec2 normalOffset = N.xy * (0.018 + uDistortionStrength * 0.055);
+                    vec2 viewOffset = normalize(max(abs(V.z), 0.08) * V.xy) * 0.012;
+                    vec2 refractUv = clamp(screenUv + (normalOffset + viewOffset) * uRefractionStrength, vec2(0.001), vec2(0.999));
+                    vec3 opaqueScene = texture(uOpaqueTexture, refractUv).rgb;
+                    float alpha = clamp(vColor.a * tex.a, 0.0, 1.0);
+                    vec3 glassTint = mix(opaqueScene, hdr, alpha);
+                    vec3 edgeGlow = FresnelSchlick(max(dot(N, V), 0.0), vec3(0.04)) * 0.18 * alpha;
+                    outColor = vec4(max(glassTint + edgeGlow, vec3(0.0)), 1.0);
+                    return;
+                }
 
                 // Salida en HDR LINEAL (sin tonemap ni gamma encode aquí).
                 // El display transform completo (exposición -> bloom -> AO ->

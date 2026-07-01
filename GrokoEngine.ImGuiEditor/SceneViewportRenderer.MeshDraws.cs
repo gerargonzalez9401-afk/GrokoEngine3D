@@ -12,7 +12,10 @@ internal sealed partial class SceneViewportRenderer
     private void SortDynamicMeshDrawsForStateReuse()
     {
         if (dynamicMeshDraws.Count <= 1)
+        {
+            SortSkinnedMeshDrawsForStateReuse();
             return;
+        }
 
         dynamicMeshDraws.Sort(static (a, b) =>
         {
@@ -23,6 +26,37 @@ internal sealed partial class SceneViewportRenderer
             cmp = StringComparer.OrdinalIgnoreCase.Compare(a.RoughnessMapPath, b.RoughnessMapPath);
             if (cmp != 0) return cmp;
             cmp = StringComparer.OrdinalIgnoreCase.Compare(a.MetallicMapPath, b.MetallicMapPath);
+            if (cmp != 0) return cmp;
+            cmp = a.Mesh.Vao.CompareTo(b.Mesh.Vao);
+            if (cmp != 0) return cmp;
+            cmp = a.Start.CompareTo(b.Start);
+            if (cmp != 0) return cmp;
+            cmp = CompareVector4(a.Color, b.Color);
+            if (cmp != 0) return cmp;
+            cmp = CompareVector4(a.Material, b.Material);
+            if (cmp != 0) return cmp;
+            return CompareVector4(a.Emission, b.Emission);
+        });
+
+        SortSkinnedMeshDrawsForStateReuse();
+    }
+
+    private void SortSkinnedMeshDrawsForStateReuse()
+    {
+        if (skinnedMeshDraws.Count <= 1)
+            return;
+
+        skinnedMeshDraws.Sort(static (a, b) =>
+        {
+            int cmp = StringComparer.OrdinalIgnoreCase.Compare(a.TexturePath, b.TexturePath);
+            if (cmp != 0) return cmp;
+            cmp = StringComparer.OrdinalIgnoreCase.Compare(a.NormalMapPath, b.NormalMapPath);
+            if (cmp != 0) return cmp;
+            cmp = StringComparer.OrdinalIgnoreCase.Compare(a.RoughnessMapPath, b.RoughnessMapPath);
+            if (cmp != 0) return cmp;
+            cmp = StringComparer.OrdinalIgnoreCase.Compare(a.MetallicMapPath, b.MetallicMapPath);
+            if (cmp != 0) return cmp;
+            cmp = RuntimeHelpers.GetHashCode(a.Skin).CompareTo(RuntimeHelpers.GetHashCode(b.Skin));
             if (cmp != 0) return cmp;
             cmp = a.Mesh.Vao.CompareTo(b.Mesh.Vao);
             if (cmp != 0) return cmp;
@@ -47,14 +81,18 @@ internal sealed partial class SceneViewportRenderer
         return a.W.CompareTo(b.W);
     }
 
-    private void DrawDynamicMeshDraws(ref Matrix4 mvp, ShadowInfo shadowInfo, ShadowInfo spotShadowInfo, PointShadowInfo pointShadowInfo, IReadOnlyList<GameObject> objects, Vector3 cameraPosition)
+    private void DrawDynamicMeshDraws(ref Matrix4 mvp, ShadowInfo shadowInfo, ShadowInfo spotShadowInfo, PointShadowInfo pointShadowInfo, IReadOnlyList<GameObject> objects, Vector3 cameraPosition, bool manageShaderState = true)
     {
-        GL.UseProgram(solidShader);
-        GL.UniformMatrix4(solidMvpLocation, true, ref mvp);
-        GL.Uniform1(solidTextureLocation, 0);
-        ApplyShadowUniforms(shadowInfo, spotShadowInfo, pointShadowInfo);
-        ApplySceneLighting(objects, cameraPosition);
-        GL.ActiveTexture(TextureUnit.Texture0);
+        if (manageShaderState)
+        {
+            GL.UseProgram(solidShader);
+            GL.UniformMatrix4(solidMvpLocation, true, ref mvp);
+            GL.Uniform1(solidTextureLocation, 0);
+            ApplyShadowUniforms(shadowInfo, spotShadowInfo, pointShadowInfo);
+            ApplySceneLighting(objects, cameraPosition);
+            SetIntUniform(solidRefractivePassLocation, 0);
+            GL.ActiveTexture(TextureUnit.Texture0);
+        }
 
         bool hasBoundSurface = false;
         string? boundTexture = null;
@@ -62,6 +100,11 @@ internal sealed partial class SceneViewportRenderer
         string? boundRoughness = null;
         string? boundMetallic = null;
         int boundVao = 0;
+        bool? boundReceiveShadows = null;
+        Vector4 boundColor = new(float.NaN);
+        Vector4 boundMaterial = new(float.NaN);
+        Vector4 boundEmission = new(float.NaN);
+        int boundInstancing = -1;
 
         for (int i = 0; i < dynamicMeshDraws.Count;)
         {
@@ -70,11 +113,15 @@ internal sealed partial class SceneViewportRenderer
             while (end < dynamicMeshDraws.Count && CanInstanceTogether(draw, dynamicMeshDraws[end]))
                 end++;
 
-            ApplyShadowUniforms(
-                draw.ReceiveShadows ? shadowInfo : ShadowInfo.Disabled,
-                draw.ReceiveShadows ? spotShadowInfo : new ShadowInfo(false, Matrix4.Identity, 0f),
-                draw.ReceiveShadows ? pointShadowInfo : new PointShadowInfo(false, Vector3.Zero, 1f, 0f));
-            ApplyDynamicSurfaceUniforms(draw);
+            if (boundReceiveShadows != draw.ReceiveShadows)
+            {
+                ApplyShadowUniforms(
+                    draw.ReceiveShadows ? shadowInfo : ShadowInfo.Disabled,
+                    draw.ReceiveShadows ? spotShadowInfo : new ShadowInfo(false, Matrix4.Identity, 0f),
+                    draw.ReceiveShadows ? pointShadowInfo : new PointShadowInfo(false, Vector3.Zero, 1f, 0f));
+                boundReceiveShadows = draw.ReceiveShadows;
+            }
+            ApplyDynamicSurfaceUniformsIfChanged(draw, ref boundColor, ref boundMaterial, ref boundEmission);
             ApplySurfaceTexturesIfChanged(
                 draw.TexturePath,
                 draw.NormalMapPath,
@@ -96,15 +143,22 @@ internal sealed partial class SceneViewportRenderer
             if (instanceCount > 1)
             {
                 UploadInstanceMatrices(i, instanceCount);
-                SetIntUniform(solidUseInstancingLocation, 1);
+                if (boundInstancing != 1)
+                {
+                    SetIntUniform(solidUseInstancingLocation, 1);
+                    boundInstancing = 1;
+                }
                 TrackMainDraw(draw.Count, instanceCount);
                 GL.DrawArraysInstanced(PrimitiveType.Triangles, draw.Start, draw.Count, instanceCount);
-                SetIntUniform(solidUseInstancingLocation, 0);
             }
             else
             {
                 ApplyDynamicModelUniform(draw);
-                SetIntUniform(solidUseInstancingLocation, 0);
+                if (boundInstancing != 0)
+                {
+                    SetIntUniform(solidUseInstancingLocation, 0);
+                    boundInstancing = 0;
+                }
                 TrackMainDraw(draw.Count);
                 GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
             }
@@ -112,20 +166,27 @@ internal sealed partial class SceneViewportRenderer
             i = end;
         }
 
-        GL.BindTexture(TextureTarget.Texture2D, 0);
-        GL.BindVertexArray(0);
-        ApplyBakedSolidVertexMode();
-        GL.UseProgram(0);
+        if (manageShaderState)
+        {
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.BindVertexArray(0);
+            ApplyBakedSolidVertexMode();
+            GL.UseProgram(0);
+        }
     }
 
-    private void DrawSkinnedMeshDraws(ref Matrix4 mvp, ShadowInfo shadowInfo, ShadowInfo spotShadowInfo, PointShadowInfo pointShadowInfo, IReadOnlyList<GameObject> objects, Vector3 cameraPosition)
+    private void DrawSkinnedMeshDraws(ref Matrix4 mvp, ShadowInfo shadowInfo, ShadowInfo spotShadowInfo, PointShadowInfo pointShadowInfo, IReadOnlyList<GameObject> objects, Vector3 cameraPosition, bool manageShaderState = true)
     {
-        GL.UseProgram(solidShader);
-        GL.UniformMatrix4(solidMvpLocation, true, ref mvp);
-        GL.Uniform1(solidTextureLocation, 0);
-        ApplyShadowUniforms(shadowInfo, spotShadowInfo, pointShadowInfo);
-        ApplySceneLighting(objects, cameraPosition);
-        GL.ActiveTexture(TextureUnit.Texture0);
+        if (manageShaderState)
+        {
+            GL.UseProgram(solidShader);
+            GL.UniformMatrix4(solidMvpLocation, true, ref mvp);
+            GL.Uniform1(solidTextureLocation, 0);
+            ApplyShadowUniforms(shadowInfo, spotShadowInfo, pointShadowInfo);
+            ApplySceneLighting(objects, cameraPosition);
+            SetIntUniform(solidRefractivePassLocation, 0);
+            GL.ActiveTexture(TextureUnit.Texture0);
+        }
 
         bool hasBoundSurface = false;
         string? boundTexture = null;
@@ -135,13 +196,28 @@ internal sealed partial class SceneViewportRenderer
         int boundVao = 0;
         SetIntUniform(solidUseInstancingLocation, 0);
         SetIntUniform(solidUseSkinningLocation, 1);
+        Vector4 boundColor = new(float.NaN);
+        Vector4 boundMaterial = new(float.NaN);
+        Vector4 boundEmission = new(float.NaN);
+        System.Numerics.Matrix4x4[]? boundSkin = null;
+        Matrix4 boundWorld = default;
+        bool hasBoundWorld = false;
 
         foreach (var draw in skinnedMeshDraws)
         {
             var world = draw.World;
-            SetMatrixUniform(solidModelLocation, ref world);
-            ApplySkinnedSurfaceUniforms(draw);
-            UploadBoneMatrices(solidBoneMatrixLocations, draw.Skin);
+            if (!hasBoundWorld || boundWorld != world)
+            {
+                SetMatrixUniform(solidModelLocation, ref world);
+                boundWorld = world;
+                hasBoundWorld = true;
+            }
+            ApplySkinnedSurfaceUniformsIfChanged(draw, ref boundColor, ref boundMaterial, ref boundEmission);
+            if (!ReferenceEquals(boundSkin, draw.Skin))
+            {
+                UploadBoneMatrices(solidBoneMatrixLocations, draw.Skin);
+                boundSkin = draw.Skin;
+            }
             ApplySurfaceTexturesIfChanged(
                 draw.TexturePath,
                 draw.NormalMapPath,
@@ -164,10 +240,185 @@ internal sealed partial class SceneViewportRenderer
         }
 
         SetIntUniform(solidUseSkinningLocation, 0);
+        if (manageShaderState)
+        {
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.BindVertexArray(0);
+            ApplyBakedSolidVertexMode();
+            GL.UseProgram(0);
+        }
+    }
+
+    private void DrawRefractiveMeshDraws(ref Matrix4 mvp, ShadowInfo shadowInfo, ShadowInfo spotShadowInfo, PointShadowInfo pointShadowInfo, IReadOnlyList<GameObject> objects, Vector3 cameraPosition, int width, int height)
+    {
+        if ((refractiveMeshDraws.Count == 0 && refractiveSkinnedMeshDraws.Count == 0) || OpaqueTextureHandle == 0)
+            return;
+
+        SortRefractiveDrawsBackToFront(cameraPosition);
+
+        GL.UseProgram(solidShader);
+        GL.UniformMatrix4(solidMvpLocation, true, ref mvp);
+        ApplyBakedSolidVertexMode();
+        ApplyShadowUniforms(ShadowInfo.Disabled, new ShadowInfo(false, Matrix4.Identity, 0f), new PointShadowInfo(false, Vector3.Zero, 1f, 0f));
+        ApplySceneLighting(objects, cameraPosition);
+        SetIntUniform(solidRefractivePassLocation, 1);
+        SetIntUniform(solidOpaqueTextureLocation, 15);
+        if (solidScreenTexelLocation >= 0)
+            GL.Uniform2(solidScreenTexelLocation, 1f / Math.Max(1, width), 1f / Math.Max(1, height));
+
+        GL.ActiveTexture(TextureUnit.Texture15);
+        GL.BindTexture(TextureTarget.Texture2D, OpaqueTextureHandle);
+        GL.ActiveTexture(TextureUnit.Texture0);
+
+        GL.DepthMask(false);
+        GL.Disable(EnableCap.CullFace);
+
+        bool hasBoundSurface = false;
+        string? boundTexture = null;
+        string? boundNormal = null;
+        string? boundRoughness = null;
+        string? boundMetallic = null;
+        int boundVao = 0;
+        int boundSkinningMode = -1;
+        SetIntUniform(solidUseInstancingLocation, 0);
+        SetIntUniform(solidUseSkinningLocation, 0);
+        boundSkinningMode = 0;
+        System.Numerics.Matrix4x4[]? boundSkin = null;
+        Matrix4 boundWorld = default;
+        bool hasBoundWorld = false;
+
+        int dynamicIndex = 0;
+        int skinnedIndex = 0;
+        while (dynamicIndex < refractiveMeshDraws.Count || skinnedIndex < refractiveSkinnedMeshDraws.Count)
+        {
+            bool useSkinned =
+                skinnedIndex < refractiveSkinnedMeshDraws.Count &&
+                (dynamicIndex >= refractiveMeshDraws.Count ||
+                 RefractiveSortDistanceSq(refractiveSkinnedMeshDraws[skinnedIndex].World, cameraPosition) >
+                 RefractiveSortDistanceSq(refractiveMeshDraws[dynamicIndex].World, cameraPosition));
+
+            if (!useSkinned)
+            {
+                var draw = refractiveMeshDraws[dynamicIndex++];
+                if (boundSkinningMode != 0)
+                {
+                    SetIntUniform(solidUseSkinningLocation, 0);
+                    boundSkinningMode = 0;
+                    hasBoundWorld = false;
+                }
+
+                ApplyDynamicModelUniform(draw);
+                ApplyDynamicSurfaceUniforms(draw);
+                if (solidRefractionStrengthLocation >= 0)
+                    GL.Uniform1(solidRefractionStrengthLocation, draw.RefractionStrength);
+                if (solidDistortionStrengthLocation >= 0)
+                    GL.Uniform1(solidDistortionStrengthLocation, draw.DistortionStrength);
+
+                ApplySurfaceTexturesIfChanged(
+                    draw.TexturePath,
+                    draw.NormalMapPath,
+                    draw.RoughnessMapPath,
+                    draw.MetallicMapPath,
+                    ref hasBoundSurface,
+                    ref boundTexture,
+                    ref boundNormal,
+                    ref boundRoughness,
+                    ref boundMetallic);
+
+                if (boundVao != draw.Mesh.Vao)
+                {
+                    GL.BindVertexArray(draw.Mesh.Vao);
+                    boundVao = draw.Mesh.Vao;
+                }
+
+                TrackMainDraw(draw.Count);
+                GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
+            }
+            else
+            {
+                var draw = refractiveSkinnedMeshDraws[skinnedIndex++];
+                if (boundSkinningMode != 1)
+                {
+                    SetIntUniform(solidUseSkinningLocation, 1);
+                    boundSkinningMode = 1;
+                    boundSkin = null;
+                    hasBoundWorld = false;
+                }
+
+                var world = draw.World;
+                if (!hasBoundWorld || boundWorld != world)
+                {
+                    SetMatrixUniform(solidModelLocation, ref world);
+                    boundWorld = world;
+                    hasBoundWorld = true;
+                }
+
+                ApplySkinnedSurfaceUniforms(draw);
+                if (solidRefractionStrengthLocation >= 0)
+                    GL.Uniform1(solidRefractionStrengthLocation, draw.RefractionStrength);
+                if (solidDistortionStrengthLocation >= 0)
+                    GL.Uniform1(solidDistortionStrengthLocation, draw.DistortionStrength);
+
+                if (!ReferenceEquals(boundSkin, draw.Skin))
+                {
+                    UploadBoneMatrices(solidBoneMatrixLocations, draw.Skin);
+                    boundSkin = draw.Skin;
+                }
+
+                ApplySurfaceTexturesIfChanged(
+                    draw.TexturePath,
+                    draw.NormalMapPath,
+                    draw.RoughnessMapPath,
+                    draw.MetallicMapPath,
+                    ref hasBoundSurface,
+                    ref boundTexture,
+                    ref boundNormal,
+                    ref boundRoughness,
+                    ref boundMetallic);
+
+                if (boundVao != draw.Mesh.Vao)
+                {
+                    GL.BindVertexArray(draw.Mesh.Vao);
+                    boundVao = draw.Mesh.Vao;
+                }
+
+                TrackMainDraw(draw.Count);
+                GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
+            }
+        }
+
+        GL.DepthMask(true);
+        GL.Enable(EnableCap.CullFace);
+        SetIntUniform(solidUseSkinningLocation, 0);
+        SetIntUniform(solidRefractivePassLocation, 0);
+        GL.ActiveTexture(TextureUnit.Texture15);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
+        GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.BindVertexArray(0);
         ApplyBakedSolidVertexMode();
         GL.UseProgram(0);
+    }
+
+    private void SortRefractiveDrawsBackToFront(Vector3 cameraPosition)
+    {
+        if (refractiveMeshDraws.Count > 1)
+        {
+            refractiveMeshDraws.Sort((a, b) =>
+                RefractiveSortDistanceSq(b.World, cameraPosition).CompareTo(RefractiveSortDistanceSq(a.World, cameraPosition)));
+        }
+
+        if (refractiveSkinnedMeshDraws.Count > 1)
+        {
+            refractiveSkinnedMeshDraws.Sort((a, b) =>
+                RefractiveSortDistanceSq(b.World, cameraPosition).CompareTo(RefractiveSortDistanceSq(a.World, cameraPosition)));
+        }
+    }
+
+    private static float RefractiveSortDistanceSq(Matrix4 world, Vector3 cameraPosition)
+    {
+        var center = Vector3.TransformPosition(Vector3.Zero, world);
+        return (center - cameraPosition).LengthSquared;
     }
 
     private static bool CanInstanceTogether(DynamicMeshDraw a, DynamicMeshDraw b) =>
@@ -181,6 +432,9 @@ internal sealed partial class SceneViewportRenderer
         a.Color == b.Color &&
         a.Material == b.Material &&
         a.Emission == b.Emission &&
+        Math.Abs(a.Alpha - b.Alpha) < 0.0001f &&
+        Math.Abs(a.RefractionStrength - b.RefractionStrength) < 0.0001f &&
+        Math.Abs(a.DistortionStrength - b.DistortionStrength) < 0.0001f &&
         a.ReceiveShadows == b.ReceiveShadows;
 
     private void ApplyBakedSolidVertexMode()
@@ -208,6 +462,27 @@ internal sealed partial class SceneViewportRenderer
         SetVector4Uniform(solidSurfaceEmissionLocation, draw.Emission);
     }
 
+    private void ApplyDynamicSurfaceUniformsIfChanged(DynamicMeshDraw draw, ref Vector4 boundColor, ref Vector4 boundMaterial, ref Vector4 boundEmission)
+    {
+        if (solidUseSurfaceUniformsLocation >= 0)
+            GL.Uniform1(solidUseSurfaceUniformsLocation, 1);
+        if (boundColor != draw.Color)
+        {
+            SetVector4Uniform(solidSurfaceColorLocation, draw.Color);
+            boundColor = draw.Color;
+        }
+        if (boundMaterial != draw.Material)
+        {
+            SetVector4Uniform(solidSurfaceMaterialLocation, draw.Material);
+            boundMaterial = draw.Material;
+        }
+        if (boundEmission != draw.Emission)
+        {
+            SetVector4Uniform(solidSurfaceEmissionLocation, draw.Emission);
+            boundEmission = draw.Emission;
+        }
+    }
+
     private void ApplySkinnedSurfaceUniforms(SkinnedMeshDraw draw)
     {
         if (solidUseSurfaceUniformsLocation >= 0)
@@ -215,6 +490,27 @@ internal sealed partial class SceneViewportRenderer
         SetVector4Uniform(solidSurfaceColorLocation, draw.Color);
         SetVector4Uniform(solidSurfaceMaterialLocation, draw.Material);
         SetVector4Uniform(solidSurfaceEmissionLocation, draw.Emission);
+    }
+
+    private void ApplySkinnedSurfaceUniformsIfChanged(SkinnedMeshDraw draw, ref Vector4 boundColor, ref Vector4 boundMaterial, ref Vector4 boundEmission)
+    {
+        if (solidUseSurfaceUniformsLocation >= 0)
+            GL.Uniform1(solidUseSurfaceUniformsLocation, 1);
+        if (boundColor != draw.Color)
+        {
+            SetVector4Uniform(solidSurfaceColorLocation, draw.Color);
+            boundColor = draw.Color;
+        }
+        if (boundMaterial != draw.Material)
+        {
+            SetVector4Uniform(solidSurfaceMaterialLocation, draw.Material);
+            boundMaterial = draw.Material;
+        }
+        if (boundEmission != draw.Emission)
+        {
+            SetVector4Uniform(solidSurfaceEmissionLocation, draw.Emission);
+            boundEmission = draw.Emission;
+        }
     }
 
     private static void SetMatrixUniform(int location, ref Matrix4 value)

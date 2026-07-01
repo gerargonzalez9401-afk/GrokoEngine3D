@@ -73,7 +73,7 @@ internal sealed partial class SceneRenderTarget
         SetUniform(uFilmGrainLocation, filmGrain);
         SetUniform(uFilmGrainIntensityLocation, filmGrainIntensity);
         SetUniform(uTimeLocation, time);
-        SetUniform(uGodRaysEnabledLocation, GodRaysEnabled ? 1 : 0);
+        SetUniform(uGodRaysEnabledLocation, GodRaysEnabled && DepthTextureEnabled ? 1 : 0);
         SetUniform(uGodRaySunLocation, GodRaySunU, GodRaySunV);
         SetUniform(uGodRayStrengthLocation, GodRayStrength);
         SetUniform(uBloomStrengthLocation, bloomStrength);
@@ -99,7 +99,7 @@ internal sealed partial class SceneRenderTarget
         SetUniform(uAoStrengthLocation, aoStrength);
         SetUniform(uFxaaEnabledLocation, FxaaEnabled ? 1 : 0);
         SetUniform(uBloomQualityLocation, Math.Clamp(BloomQuality, 0, 3));
-        SetUniform(uAoQualityLocation, Math.Clamp(AmbientOcclusionQuality, 0, 3));
+        SetUniform(uAoQualityLocation, DepthTextureEnabled ? Math.Clamp(AmbientOcclusionQuality, 0, 3) : 0);
         if (uTexelLocation >= 0)
             GL.Uniform2(uTexelLocation, 1f / Math.Max(1, Width), 1f / Math.Max(1, Height));
 

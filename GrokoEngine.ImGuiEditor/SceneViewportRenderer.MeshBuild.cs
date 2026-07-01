@@ -59,7 +59,7 @@ internal sealed partial class SceneViewportRenderer
                 if (!string.IsNullOrWhiteSpace(PreviewMaterialAssetPath) && PreviewMaterialObjectId == obj.EditorId && PreviewMaterialSubmeshIndex == i)
                     slotPath = PreviewMaterialAssetPath;
                 var surf = GetSubmeshSurface(slotPath, sub, fallbackColor);
-                if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures))
+                if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength))
                 {
                     // GPU skinning path.
                 }
@@ -68,7 +68,7 @@ internal sealed partial class SceneViewportRenderer
                     AddSolidRange(surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures,
                         () => AddSkinnedMeshTriangles(mesh, skinMats!, transform, surf.Color, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, skinKey));
                 }
-                else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures))
+                else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength))
                 {
                     AddSolidRange(surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures,
                         () => AddMeshTriangles(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount));
@@ -80,10 +80,11 @@ internal sealed partial class SceneViewportRenderer
             string? texturePath = GetObjectTexturePath(obj);
             var (material, emission) = GetObjectSurface(obj);
             var maps = GetObjectSurfaceMaps(obj);
+            var transparency = GetObjectTransparency(obj);
             string? shaderGraphPath = GetObjectShaderGraphPath(obj);
             var shaderGraphProperties = GetObjectShaderGraphProperties(obj);
             var shaderGraphTextures = GetObjectShaderGraphTextures(obj);
-            if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures))
+            if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength))
             {
                 // GPU skinning path.
             }
@@ -92,7 +93,7 @@ internal sealed partial class SceneViewportRenderer
                 AddSolidRange(texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures,
                     () => AddSkinnedMeshTriangles(mesh, skinMats!, transform, color, material, emission, 0, mesh.Positions.Length / 3, skinKey));
             }
-            else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures))
+            else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength))
             {
                 AddSolidRange(texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures,
                     () => AddMeshTriangles(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3));
@@ -314,6 +315,10 @@ internal sealed partial class SceneViewportRenderer
         string? shaderGraphPath,
         IReadOnlyDictionary<string, float[]>? shaderGraphProperties,
         IReadOnlyDictionary<string, string>? shaderGraphTextures,
+        bool transparent = false,
+        float alpha = 1f,
+        float refractionStrength = 0f,
+        float distortionStrength = 0f,
         bool castShadows = true,
         bool receiveShadows = true)
     {
@@ -343,7 +348,8 @@ internal sealed partial class SceneViewportRenderer
             return true;
         }
 
-        dynamicMeshDraws.Add(new DynamicMeshDraw(
+        var target = transparent ? refractiveMeshDraws : dynamicMeshDraws;
+        target.Add(new DynamicMeshDraw(
             gpuMesh,
             transform,
             start,
@@ -355,8 +361,11 @@ internal sealed partial class SceneViewportRenderer
             color,
             material,
             emission,
-            castShadows,
-            receiveShadows));
+            Math.Clamp(alpha, 0f, 1f),
+            Math.Clamp(refractionStrength, 0f, 1f),
+            Math.Clamp(distortionStrength, 0f, 1f),
+            transparent ? false : castShadows,
+            transparent ? false : receiveShadows));
         return true;
     }
 
@@ -377,7 +386,11 @@ internal sealed partial class SceneViewportRenderer
         string? metallicMapPath,
         string? shaderGraphPath,
         IReadOnlyDictionary<string, float[]>? shaderGraphProperties,
-        IReadOnlyDictionary<string, string>? shaderGraphTextures)
+        IReadOnlyDictionary<string, string>? shaderGraphTextures,
+        bool transparent = false,
+        float alpha = 1f,
+        float refractionStrength = 0f,
+        float distortionStrength = 0f)
     {
         if (_buildingStatic || skin.Length > MaxGpuBones)
             return false;
@@ -406,7 +419,8 @@ internal sealed partial class SceneViewportRenderer
             return true;
         }
 
-        skinnedMeshDraws.Add(new SkinnedMeshDraw(
+        var target = transparent ? refractiveSkinnedMeshDraws : skinnedMeshDraws;
+        target.Add(new SkinnedMeshDraw(
             gpuMesh,
             transform,
             skin,
@@ -418,7 +432,10 @@ internal sealed partial class SceneViewportRenderer
             NormalizeTexturePath(metallicMapPath),
             color,
             material,
-            emission));
+            emission,
+            Math.Clamp(alpha, 0f, 1f),
+            Math.Clamp(refractionStrength, 0f, 1f),
+            Math.Clamp(distortionStrength, 0f, 1f)));
         return true;
     }
 }

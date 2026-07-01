@@ -394,6 +394,11 @@ private static bool SmallCheckbox(string label, ref bool value)
             ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted(visible);
         }
+        else
+        {
+            float rowH = Math.Max(ImGui.GetFrameHeight(), size) + 3f;
+            ImGui.SetCursorScreenPos(new System.Numerics.Vector2(start.X, start.Y + rowH));
+        }
 
         ImGui.PopID();
         return changed;

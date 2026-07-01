@@ -23,6 +23,10 @@ namespace GrokoEngine
         public Dictionary<string, string> ShaderGraphTextures { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public float Roughness { get; set; } = 0.5f;
         public float Metallic { get; set; } = 0f;
+        public MaterialSurfaceType SurfaceType { get; set; } = MaterialSurfaceType.Opaque;
+        public float Alpha { get; set; } = 1f;
+        public float RefractionStrength { get; set; } = 0f;
+        public float DistortionStrength { get; set; } = 0f;
         public bool SpecularHighlights { get; set; } = true;
         public bool EnvironmentReflections { get; set; } = true;
         public float EmissionR { get; set; } = 0f;
@@ -41,6 +45,9 @@ namespace GrokoEngine
             ShaderGraphPath ??= "";
             ShaderGraphProperties ??= new Dictionary<string, float[]>();
             ShaderGraphTextures ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            Alpha = Math.Max(0f, Math.Min(1f, Alpha <= 0f && SurfaceType == MaterialSurfaceType.Opaque ? 1f : Alpha));
+            RefractionStrength = Math.Max(0f, Math.Min(1f, RefractionStrength));
+            DistortionStrength = Math.Max(0f, Math.Min(1f, DistortionStrength));
         }
     }
 
@@ -118,8 +125,10 @@ namespace GrokoEngine
             data.Name = string.IsNullOrWhiteSpace(data.Name)
                 ? Path.GetFileNameWithoutExtension(path)
                 : data.Name;
-            if (string.IsNullOrWhiteSpace(data.AlbedoPath) && !string.IsNullOrWhiteSpace(data.TexturePath))
-                data.AlbedoPath = data.TexturePath;
+            // TexturePath is the old/legacy field. AlbedoPath is the source of truth now.
+            // Do not repopulate AlbedoPath from TexturePath while saving, otherwise clearing
+            // Base Map in the inspector makes the old texture "come back" on the next load.
+            data.TexturePath = data.AlbedoPath;
             RelativizeAssetPaths(data, path);
             data.TexturePath = data.AlbedoPath;
             File.WriteAllText(path, JsonSerializer.Serialize(data, Options));
@@ -143,6 +152,10 @@ namespace GrokoEngine
             mat.ShaderGraphTextures = new Dictionary<string, string>(data.ShaderGraphTextures, StringComparer.OrdinalIgnoreCase);
             mat.Roughness = Clamp01(data.Roughness);
             mat.Metallic = Clamp01(data.Metallic);
+            mat.SurfaceType = data.SurfaceType;
+            mat.Alpha = Clamp01(data.Alpha);
+            mat.RefractionStrength = Clamp01(data.RefractionStrength);
+            mat.DistortionStrength = Clamp01(data.DistortionStrength);
             mat.SpecularHighlights = data.SpecularHighlights;
             mat.EnvironmentReflections = data.EnvironmentReflections;
             mat.EmissionR = Clamp01(data.EmissionR);
@@ -171,6 +184,10 @@ namespace GrokoEngine
                 ShaderGraphTextures = new Dictionary<string, string>(material.ShaderGraphTextures, StringComparer.OrdinalIgnoreCase),
                 Roughness = material.Roughness,
                 Metallic = material.Metallic,
+                SurfaceType = material.SurfaceType,
+                Alpha = material.Alpha,
+                RefractionStrength = material.RefractionStrength,
+                DistortionStrength = material.DistortionStrength,
                 SpecularHighlights = material.SpecularHighlights,
                 EnvironmentReflections = material.EnvironmentReflections,
                 EmissionR = material.EmissionR,

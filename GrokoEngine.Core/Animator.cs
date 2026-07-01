@@ -519,16 +519,46 @@ namespace GrokoEngine
                 // Solo es hueso si su nombre pertenece al rig del modelo. Un GameObject
                 // que el usuario parente dentro del personaje (para organizar/adjuntar)
                 // no entra al boneMap y el Animator no le toca el transform.
-                bool isBone = boneNameWhitelist == null ||
-                              (!string.IsNullOrEmpty(child.Name) && boneNameWhitelist.Contains(child.Name));
-                if (isBone)
+                bool hasRigWhitelist = boneNameWhitelist != null;
+                bool isBone = hasRigWhitelist
+                    ? !string.IsNullOrEmpty(child.Name) && boneNameWhitelist!.Contains(child.Name)
+                    : LooksLikeBoneNode(child);
+
+                if (!isBone)
                 {
-                    if (!string.IsNullOrEmpty(child.Name) && !boneMap!.ContainsKey(child.Name))
-                        boneMap[child.Name] = child;
-                    CaptureRestPose(child);
+                    CollectBones(child);
+                    continue;
                 }
+
+                if (!string.IsNullOrEmpty(child.Name) && !boneMap!.ContainsKey(child.Name))
+                    boneMap[child.Name] = child;
+                CaptureRestPose(child);
                 CollectBones(child);
             }
+        }
+
+        private static bool LooksLikeBoneNode(GameObject node)
+        {
+            if (node.GetComponent<MeshFilter>() != null ||
+                node.GetComponent<MeshRenderer>() != null ||
+                node.GetComponent<Material>() != null ||
+                node.GetComponent<Collider>() != null ||
+                node.GetComponent<Rigidbody>() != null ||
+                node.GetComponent<CharacterController>() != null ||
+                node.GetComponent<Camera>() != null ||
+                node.GetComponent<DirectionalLight>() != null ||
+                node.GetComponent<PointLight>() != null ||
+                node.GetComponent<SpotLight>() != null ||
+                node.GetComponent<AmbientLight>() != null ||
+                node.GetComponent<AreaLight>() != null ||
+                node.GetComponent<RectangleLight>() != null ||
+                node.GetComponent<ParticleSystem>() != null ||
+                node.GetComponent<Canvas>() != null ||
+                node.GetComponent<UIElement>() != null ||
+                node.GetComponent<BoneAttachment>() != null)
+                return false;
+
+            return true;
         }
 
         private BoneRestPose CaptureRestPose(GameObject bone)
@@ -1067,6 +1097,29 @@ namespace GrokoEngine
                     result[i] = System.Numerics.Matrix4x4.Identity;
             }
             return result;
+        }
+
+        public bool TryGetBoneWorldMatrix(string boneName, out System.Numerics.Matrix4x4 matrix)
+        {
+            matrix = System.Numerics.Matrix4x4.Identity;
+            if (string.IsNullOrWhiteSpace(boneName))
+                return false;
+
+            EnsureBoneMap();
+            if (boneMap == null || !boneMap.TryGetValue(boneName, out var bone))
+                return false;
+
+            _worldMemo.Clear();
+            matrix = CleanWorldMatrix(bone, _worldMemo);
+            return true;
+        }
+
+        public IReadOnlyList<string> GetBoneNames()
+        {
+            EnsureBoneMap();
+            return boneMap == null
+                ? Array.Empty<string>()
+                : boneMap.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
         // Mundo limpio (con escala) = Local * MundoPadre, memoizado por nodo.
