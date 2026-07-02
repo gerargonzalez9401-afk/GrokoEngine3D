@@ -129,7 +129,9 @@ internal sealed partial class SceneViewportRenderer
         float RefractionStrength = 0f,
         float DistortionStrength = 0f,
         bool CastShadows = true,
-        bool ReceiveShadows = true);
+        bool ReceiveShadows = true,
+        bool TwoSidedShadows = false,
+        bool ShadowsOnly = false);
 
     private readonly record struct SkinnedMeshDraw(
         CachedSkinnedGpuMesh Mesh,

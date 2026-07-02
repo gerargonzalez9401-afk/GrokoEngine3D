@@ -433,6 +433,13 @@ private void DrawDepthGeometry(int modelLocation)
                 boundVao = draw.Mesh.Vao;
             }
 
+            // "Two Sided" en Cast Shadows: no culear caras traseras al proyectar sombra, para que
+            // geometría delgada (una hoja, una tarjeta) no deje "agujeros" de sombra en el lado
+            // que normalmente se cullea. CanDepthInstanceTogether ya garantiza que todo el grupo
+            // instanciado comparte este mismo valor.
+            if (draw.TwoSidedShadows)
+                GL.Disable(EnableCap.CullFace);
+
             int instanceCount = end - i;
             if (instanceCount > 1)
             {
@@ -449,6 +456,9 @@ private void DrawDepthGeometry(int modelLocation)
                 TrackShadowDraw();
                 GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
             }
+
+            if (draw.TwoSidedShadows)
+                GL.Enable(EnableCap.CullFace);
 
             i = end;
         }

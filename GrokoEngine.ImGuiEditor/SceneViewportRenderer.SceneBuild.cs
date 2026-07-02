@@ -28,10 +28,16 @@ internal sealed partial class SceneViewportRenderer
         bool layerVisible = LayerMask.Contains(_activeCullingMask, obj.Layer);
 
         // Route according to the static/dynamic build pass. Transparent meshes stay out
-        // of the static batch because they need the resolved opaque texture.
+        // of the static batch because they need the resolved opaque texture. A MeshRenderer with
+        // non-default Cast/Receive Shadows also has to stay out: the static batch is one big merged
+        // vertex buffer with no per-object metadata, so a static object needing custom shadow
+        // behavior (Off/Two Sided/Shadows Only, or Receive Shadows unchecked) is instead always
+        // routed through the per-object dynamic path, which is the only one that can honor it.
+        bool meshRendererNeedsCustomShadows = meshRenderer != null && (meshRenderer.CastShadows != 1 || !meshRenderer.ReceiveShadows);
         bool shouldBuildGeometry = _buildingStatic == obj.IsStatic;
-        bool transparentMeshNeedsDynamicPass = obj.IsStatic && meshFilter != null && ObjectUsesTransparentMaterial(obj, meshFilter);
-        if (transparentMeshNeedsDynamicPass)
+        bool objectNeedsDynamicPass = obj.IsStatic && meshFilter != null &&
+            (ObjectUsesTransparentMaterial(obj, meshFilter) || meshRendererNeedsCustomShadows);
+        if (objectNeedsDynamicPass)
             shouldBuildGeometry = !_buildingStatic;
 
         // Mesh Renderer desactivado (como Unity): se oculta la malla, PERO el collider/física sigue
@@ -153,6 +159,14 @@ internal sealed partial class SceneViewportRenderer
                 string? meshPath = NormalizeExistingAssetPath(mf.MeshPath);
                 if (meshPath != null)
                     hash.Add(GetStaticSignatureFileTime(meshPath));
+            }
+
+            // Cast/Receive Shadows no-default saca al objeto del batch estático (ver
+            // BuildObjectRecursive) — si cambian en runtime, el batch tiene que reconstruirse.
+            if (obj.GetComponent<MeshRenderer>() is { } shadowsMr)
+            {
+                hash.Add(shadowsMr.CastShadows);
+                hash.Add(shadowsMr.ReceiveShadows);
             }
 
             if (obj.GetComponent<Material>() is { } material)

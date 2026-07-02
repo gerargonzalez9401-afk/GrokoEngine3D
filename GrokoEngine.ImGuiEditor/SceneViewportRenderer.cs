@@ -936,6 +936,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private static bool CanDepthInstanceTogether(DynamicMeshDraw a, DynamicMeshDraw b) =>
         a.CastShadows &&
         b.CastShadows &&
+        a.TwoSidedShadows == b.TwoSidedShadows &&
         ReferenceEquals(a.Mesh, b.Mesh) &&
         a.Start == b.Start &&
         a.Count == b.Count;

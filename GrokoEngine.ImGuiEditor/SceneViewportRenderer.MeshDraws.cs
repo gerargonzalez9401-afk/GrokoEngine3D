@@ -113,6 +113,15 @@ internal sealed partial class SceneViewportRenderer
             while (end < dynamicMeshDraws.Count && CanInstanceTogether(draw, dynamicMeshDraws[end]))
                 end++;
 
+            // "Shadows Only" (Cast Shadows = Shadows Only en el Inspector): el objeto sigue en
+            // dynamicMeshDraws para que DrawDepthGeometry lo proyecte, pero acá en el pase de
+            // color no se dibuja — es invisible, solo se ve su sombra.
+            if (draw.ShadowsOnly)
+            {
+                i = end;
+                continue;
+            }
+
             if (boundReceiveShadows != draw.ReceiveShadows)
             {
                 ApplyShadowUniforms(
@@ -435,7 +444,8 @@ internal sealed partial class SceneViewportRenderer
         Math.Abs(a.Alpha - b.Alpha) < 0.0001f &&
         Math.Abs(a.RefractionStrength - b.RefractionStrength) < 0.0001f &&
         Math.Abs(a.DistortionStrength - b.DistortionStrength) < 0.0001f &&
-        a.ReceiveShadows == b.ReceiveShadows;
+        a.ReceiveShadows == b.ReceiveShadows &&
+        a.ShadowsOnly == b.ShadowsOnly;
 
     private void ApplyBakedSolidVertexMode()
     {

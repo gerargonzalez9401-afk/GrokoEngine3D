@@ -8,6 +8,25 @@ namespace GrokoEngine.ImGuiEditor;
 
 internal sealed partial class SceneViewportRenderer
 {
+    /// <summary>Traduce el combo "Cast Shadows" (Off/On/Two Sided/Shadows Only) + el checkbox
+    /// "Receive Shadows" del Inspector de MeshRenderer a lo que necesita el pipeline de sombras.
+    /// Sin MeshRenderer (objetos legacy/primitivos) se mantiene el comportamiento de siempre:
+    /// castea y recibe sombra normal.</summary>
+    private static (bool Cast, bool Receive, bool TwoSided, bool ShadowsOnly) ResolveMeshRendererShadowMode(MeshRenderer? mr)
+    {
+        if (mr == null)
+            return (true, true, false, false);
+
+        var (cast, twoSided, shadowsOnly) = mr.CastShadows switch
+        {
+            0 => (false, false, false), // Off
+            2 => (true, true, false),   // Two Sided
+            3 => (true, false, true),   // Shadows Only
+            _ => (true, false, false)   // On
+        };
+        return (cast, mr.ReceiveShadows, twoSided, shadowsOnly);
+    }
+
     private void BuildMeshBounds(GameObject obj, MeshFilter filter, ParsedMesh mesh, bool selected, Matrix4 transform)
     {
         if (mesh == null || string.IsNullOrWhiteSpace(filter.MeshPath)) return;
@@ -29,6 +48,7 @@ internal sealed partial class SceneViewportRenderer
         }
 
         string meshPath = NormalizeExistingAssetPath(filter.MeshPath) ?? filter.MeshPath;
+        var shadowMode = ResolveMeshRendererShadowMode(obj.GetComponent<MeshRenderer>());
 
         var animator = obj.GetComponent<Animator>();
         bool skinned = animator != null && mesh.HasSkin && mesh.BoneNames.Count > 0
@@ -68,7 +88,7 @@ internal sealed partial class SceneViewportRenderer
                     AddSolidRange(surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures,
                         () => AddSkinnedMeshTriangles(mesh, skinMats!, transform, surf.Color, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, skinKey));
                 }
-                else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength))
+                else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
                 {
                     AddSolidRange(surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures,
                         () => AddMeshTriangles(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount));
@@ -93,7 +113,7 @@ internal sealed partial class SceneViewportRenderer
                 AddSolidRange(texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures,
                     () => AddSkinnedMeshTriangles(mesh, skinMats!, transform, color, material, emission, 0, mesh.Positions.Length / 3, skinKey));
             }
-            else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength))
+            else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
             {
                 AddSolidRange(texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures,
                     () => AddMeshTriangles(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3));
@@ -320,7 +340,9 @@ internal sealed partial class SceneViewportRenderer
         float refractionStrength = 0f,
         float distortionStrength = 0f,
         bool castShadows = true,
-        bool receiveShadows = true)
+        bool receiveShadows = true,
+        bool twoSidedShadows = false,
+        bool shadowsOnly = false)
     {
         if (_buildingStatic)
             return false;
@@ -365,7 +387,9 @@ internal sealed partial class SceneViewportRenderer
             Math.Clamp(refractionStrength, 0f, 1f),
             Math.Clamp(distortionStrength, 0f, 1f),
             transparent ? false : castShadows,
-            transparent ? false : receiveShadows));
+            transparent ? false : receiveShadows,
+            transparent ? false : twoSidedShadows,
+            transparent ? false : shadowsOnly));
         return true;
     }
 
