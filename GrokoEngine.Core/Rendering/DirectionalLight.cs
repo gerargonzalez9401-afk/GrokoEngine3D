@@ -33,6 +33,15 @@ namespace GrokoEngine
         /// <summary>Diametro angular del disco solar en grados (Unity: ~0.5 real, mayor = sol mas grande).</summary>
         public float   AngularDiameter { get => _angularDiameter; set => _angularDiameter = Math.Clamp(value, 0.1f, 30f); }
 
+        // ── Physically Based Sky (analitico Rayleigh+Mie, alternativa al HDRI) ──
+        // Turbidity: 1=aire limpio de montana, 3=ciudad normal, 8+=neblina/smog. Afecta el
+        // scattering de Mie (bruma cerca del horizonte); el modo de Environment (HDRI vs
+        // ProceduralSky) vive en el editor (no es una propiedad de escena, igual que el HDRI).
+        private float _turbidity = 3f;
+        public float Turbidity { get => _turbidity; set => _turbidity = Math.Clamp(value, 1f, 15f); }
+        private float _skyExposure = 1f;
+        public float SkyExposure { get => _skyExposure; set => _skyExposure = Math.Clamp(value, 0f, 8f); }
+
         // ── Volumetric / God Rays (light shafts screen-space desde el sol) ──
         public bool    GodRays       { get; set; } = false;
         private float  _godRaysStrength = 1f;

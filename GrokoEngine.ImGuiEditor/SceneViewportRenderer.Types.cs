@@ -27,6 +27,16 @@ public enum ShadowQuality
     Ultra
 }
 
+/// <summary>
+/// Fuente del cielo/entorno: HDRI cargado por el usuario, o un cielo analitico Preetham/Nishita
+/// (Rayleigh+Mie en tiempo real, sin precomputar tablas) dirigido por el sol de la escena.
+/// </summary>
+public enum EnvironmentMode
+{
+    Hdri,
+    ProceduralSky
+}
+
 internal readonly record struct SceneRenderStats(
     int DrawCalls,
     int ShadowDrawCalls,

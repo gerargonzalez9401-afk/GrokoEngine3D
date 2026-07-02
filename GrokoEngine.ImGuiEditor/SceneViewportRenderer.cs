@@ -406,6 +406,17 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     public bool EnvironmentLoaded => _envLoaded;
     public bool DrawEnvironmentBackground { get; set; } = true;
 
+    // Physically Based Sky: modo de entorno alternativo al HDRI (analitico Rayleigh+Mie,
+    // sin precomputar tablas). Vive en el editor/renderer, no en la escena (igual que el HDRI).
+    public EnvironmentMode EnvironmentMode { get; set; } = EnvironmentMode.Hdri;
+    private int _proceduralSkyShader;
+    private int _proSkyCamFrontLoc, _proSkyCamUpLoc, _proSkyTanHalfFovLoc, _proSkyAspectLoc;
+    private int _proSkySunDirLoc, _proSkySunColorLoc, _proSkySunAngularLoc, _proSkySunEnabledLoc;
+    private int _skyTurbidityLoc, _skyExposureLoc;
+    // Ambiente barato para ProceduralSky: se reusa el mismo camino de "ambiente plano" que ya
+    // existia para "sin HDRI" (antes un literal fijo), ahora tintado por el cielo analitico.
+    private Vector3 _flatAmbientColor = new(0.3f, 0.32f, 0.36f);
+
     public ShadowQuality ShadowQuality
     {
         get => _shadowQuality;
@@ -601,7 +612,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             GL.Disable(EnableCap.Blend);
             GL.DepthMask(true);
             EndRenderPass(SceneRenderPass.BuildScene, buildPhaseStart);
-            if (_envLoaded && DrawEnvironmentBackground)
+            if ((_envLoaded || EnvironmentMode == EnvironmentMode.ProceduralSky) && DrawEnvironmentBackground)
             {
                 long skyPhaseStart = BeginRenderPass(SceneRenderPass.Skybox);
                 DrawSkybox(ToTk(camera.Front), ToTk(camera.Up), camera.FOV, width / (float)Math.Max(1, height), FindPrimaryDirectionalLight(objects));
@@ -638,7 +649,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         GL.CullFace(TriangleFace.Back);
 
         // ── Skybox HDRI de fondo (solo si hay HDRI cargado) ─────────
-        if (_envLoaded && DrawEnvironmentBackground)
+        if ((_envLoaded || EnvironmentMode == EnvironmentMode.ProceduralSky) && DrawEnvironmentBackground)
         {
             long skyPhaseStart = BeginRenderPass(SceneRenderPass.Skybox);
             DrawSkybox(ToTk(camera.Front), ToTk(camera.Up), camera.FOV, width / (float)Math.Max(1, height), FindPrimaryDirectionalLight(objects));

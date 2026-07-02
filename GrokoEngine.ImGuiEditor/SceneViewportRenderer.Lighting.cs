@@ -132,8 +132,14 @@ internal sealed partial class SceneViewportRenderer
         }
         else
         {
+            // Sin HDRI: ambiente plano de siempre, salvo que el modo sea ProceduralSky, en cuyo
+            // caso se tine con el promedio barato del cielo analitico (ver DrawProceduralSky).
+            if (EnvironmentMode == EnvironmentMode.ProceduralSky)
+                UpdateProceduralSkyAmbient(_frameDir);
+            else
+                _flatAmbientColor = new Vector3(0.3f, 0.32f, 0.36f);
             GL.Uniform1(uHasEnvMap, 0);
-            GL.Uniform3(uEnvDiffuseColor, new Vector3(0.3f, 0.32f, 0.36f));
+            GL.Uniform3(uEnvDiffuseColor, _flatAmbientColor);
             GL.Uniform1(uUseEnvSh, 0);
             GL.Uniform1(uHasEnvPrefilterMap, 0);
         }

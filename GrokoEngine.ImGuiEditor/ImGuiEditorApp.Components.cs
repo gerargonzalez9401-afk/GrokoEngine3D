@@ -1210,6 +1210,8 @@ internal sealed partial class ImGuiEditorApp
                         DrawFloat("Contact Shadow Length", dl.ContactShadowLength, v => dl.ContactShadowLength = v, 0.001f, 0.001f, 0.1f);
                         DrawInt("Contact Shadow Samples", dl.ContactShadowSamples, v => dl.ContactShadowSamples = v, 1f, 4, 24);
                     }
+                    DrawFloat("Turbidity (Procedural Sky)", dl.Turbidity, v => dl.Turbidity = v, 0.05f, 1f, 15f);
+                    DrawFloat("Sky Exposure (Procedural Sky)", dl.SkyExposure, v => dl.SkyExposure = v, 0.02f, 0f, 8f);
                     DrawCheckRow("Shadows", dl.Shadows, v => dl.Shadows = v);
                     DrawFloat("Shadow Strength", dl.ShadowStrength, v => dl.ShadowStrength = v, 0.01f, 0f, 1f);
                     break;

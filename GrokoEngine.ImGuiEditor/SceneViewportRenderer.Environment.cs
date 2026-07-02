@@ -410,6 +410,12 @@ private void EnsureEnvironment()
 
 private void DrawSkybox(Vector3 camFront, Vector3 camUp, float fovDeg, float aspect, DirectionalLight? sun = null)
     {
+        if (EnvironmentMode == EnvironmentMode.ProceduralSky)
+        {
+            DrawProceduralSky(camFront, camUp, fovDeg, aspect, sun);
+            return;
+        }
+
         GL.DepthMask(false);
         GL.Disable(EnableCap.DepthTest);
         GL.Disable(EnableCap.CullFace);
@@ -446,6 +452,325 @@ private void DrawSkybox(Vector3 camFront, Vector3 camUp, float fovDeg, float asp
         GL.DepthMask(true);
         GL.Enable(EnableCap.DepthTest);
         GL.Enable(EnableCap.CullFace);
+    }
+
+    // Cielo analitico (Preetham/Nishita: scattering Rayleigh+Mie de una sola dispersion, en
+    // tiempo real, sin tablas precalculadas) dirigido por el sol de la escena (direccion,
+    // temperatura/intensidad y AngularDiameter YA existentes se reusan tal cual).
+    private void DrawProceduralSky(Vector3 camFront, Vector3 camUp, float fovDeg, float aspect, DirectionalLight? sun)
+    {
+        GL.DepthMask(false);
+        GL.Disable(EnableCap.DepthTest);
+        GL.Disable(EnableCap.CullFace);
+
+        GL.UseProgram(_proceduralSkyShader);
+        GL.Uniform3(_proSkyCamFrontLoc, camFront);
+        GL.Uniform3(_proSkyCamUpLoc, camUp);
+        GL.Uniform1(_proSkyTanHalfFovLoc, MathF.Tan(MathHelper.DegreesToRadians(fovDeg) * 0.5f));
+        GL.Uniform1(_proSkyAspectLoc, aspect);
+
+        bool hasSun = sun != null && sun.Intensity > 0.0001f;
+        Vector3 sunSkyDir = hasSun ? (ToTk(sun!.GetNormalizedDirection()).Normalized() * -1f) : Vector3.UnitY;
+        Vector3 sunColor = hasSun ? ToTk(sun!.GetEffectiveColor()) * sun.Intensity : Vector3.Zero;
+        float turbidity = sun?.Turbidity ?? 3f;
+        float exposure = sun?.SkyExposure ?? 1f;
+
+        GL.Uniform3(_proSkySunDirLoc, sunSkyDir);
+        GL.Uniform3(_proSkySunColorLoc, sunColor);
+        GL.Uniform1(_skyTurbidityLoc, turbidity);
+        GL.Uniform1(_skyExposureLoc, exposure);
+
+        bool sunDisk = hasSun && sun!.ShowSunDisk;
+        GL.Uniform1(_proSkySunEnabledLoc, sunDisk ? 1 : 0);
+        if (sunDisk)
+            GL.Uniform1(_proSkySunAngularLoc, MathHelper.DegreesToRadians(sun!.AngularDiameter * 0.5f));
+
+        GL.BindVertexArray(_skyboxVao);
+        GL.DrawArrays(PrimitiveType.Triangles, 0, 3);
+        GL.BindVertexArray(0);
+        GL.UseProgram(0);
+
+        GL.DepthMask(true);
+        GL.Enable(EnableCap.DepthTest);
+        GL.Enable(EnableCap.CullFace);
+    }
+
+    // Version CPU (pocas muestras) de la misma dispersion, para tintar el ambiente hemisferico
+    // barato cuando el modo es ProceduralSky (sin construir un pipeline de IBL nuevo completo).
+    private static Vector3 ComputeProceduralSkyColorCpu(Vector3 viewDir, Vector3 sunDir, float turbidity)
+    {
+        const float earthRadius = 6371000f;
+        const float atmosRadius = 6471000f;
+        const float hRayleigh = 8000f;
+        const float hMie = 1200f;
+        var betaRayleigh = new Vector3(5.5e-6f, 13.0e-6f, 22.4e-6f);
+        float betaMieScalar = 21e-6f * Math.Max(turbidity, 0.1f) / 3f;
+        const float mieG = 0.76f;
+        const int primarySamples = 6;
+        const int lightSamples = 3;
+
+        var origin = new Vector3(0f, earthRadius + 500f, 0f);
+        if (!RaySphereIntersect(origin, viewDir, atmosRadius, out float tTop, out _) || tTop < 0f)
+            return Vector3.Zero;
+        if (RaySphereIntersect(origin, viewDir, earthRadius, out float tGroundNear, out _) && tGroundNear > 0f)
+            tTop = Math.Min(tTop, tGroundNear);
+
+        float segmentLength = tTop / primarySamples;
+        float tCurrent = 0f;
+        var sumR = Vector3.Zero;
+        var sumM = Vector3.Zero;
+        float opticalDepthR = 0f;
+        float opticalDepthM = 0f;
+
+        float mu = Vector3.Dot(viewDir, sunDir);
+        float phaseR = 3f / (16f * MathF.PI) * (1f + mu * mu);
+        float g2 = mieG * mieG;
+        float phaseM = 3f / (8f * MathF.PI) * ((1f - g2) * (1f + mu * mu)) /
+            ((2f + g2) * MathF.Pow(1f + g2 - 2f * mieG * mu, 1.5f));
+
+        for (int i = 0; i < primarySamples; i++)
+        {
+            var samplePos = origin + viewDir * (tCurrent + segmentLength * 0.5f);
+            float height = samplePos.Length - earthRadius;
+            if (height < 0f) break;
+            float hr = MathF.Exp(-height / hRayleigh) * segmentLength;
+            float hm = MathF.Exp(-height / hMie) * segmentLength;
+            opticalDepthR += hr;
+            opticalDepthM += hm;
+
+            bool blocked = false;
+            float opticalDepthLightR = 0f;
+            float opticalDepthLightM = 0f;
+            if (RaySphereIntersect(samplePos, sunDir, atmosRadius, out float tLightTop, out _))
+            {
+                float segmentLightLength = tLightTop / lightSamples;
+                float tLight = 0f;
+                for (int j = 0; j < lightSamples; j++)
+                {
+                    var lightSamplePos = samplePos + sunDir * (tLight + segmentLightLength * 0.5f);
+                    float lightHeight = lightSamplePos.Length - earthRadius;
+                    if (lightHeight < 0f) { blocked = true; break; }
+                    opticalDepthLightR += MathF.Exp(-lightHeight / hRayleigh) * segmentLightLength;
+                    opticalDepthLightM += MathF.Exp(-lightHeight / hMie) * segmentLightLength;
+                    tLight += segmentLightLength;
+                }
+            }
+            else
+            {
+                blocked = true;
+            }
+
+            if (!blocked)
+            {
+                var tau = betaRayleigh * (opticalDepthR + opticalDepthLightR) + new Vector3(betaMieScalar) * 1.1f * (opticalDepthM + opticalDepthLightM);
+                var attenuation = new Vector3(MathF.Exp(-tau.X), MathF.Exp(-tau.Y), MathF.Exp(-tau.Z));
+                sumR += attenuation * hr;
+                sumM += attenuation * hm;
+            }
+
+            tCurrent += segmentLength;
+        }
+
+        return (sumR * betaRayleigh * phaseR + sumM * betaMieScalar * phaseM) * 20f;
+    }
+
+    private static bool RaySphereIntersect(Vector3 origin, Vector3 dir, float radius, out float t0, out float t1)
+    {
+        float b = Vector3.Dot(origin, dir);
+        float c = Vector3.Dot(origin, origin) - radius * radius;
+        float disc = b * b - c;
+        if (disc < 0f) { t0 = t1 = 0f; return false; }
+        float sq = MathF.Sqrt(disc);
+        t0 = -b - sq;
+        t1 = -b + sq;
+        return true;
+    }
+
+    // Ambiente barato para ProceduralSky: promedia el cielo analitico en 5 direcciones fijas
+    // (arriba + 4 del horizonte, "arriba" con doble peso) en vez de un prefiltrado IBL completo.
+    private void UpdateProceduralSkyAmbient(DirectionalLight? sun)
+    {
+        if (sun == null || sun.Intensity <= 0.0001f)
+        {
+            _flatAmbientColor = new Vector3(0.3f, 0.32f, 0.36f);
+            return;
+        }
+
+        var sunDir = (ToTk(sun.GetNormalizedDirection()).Normalized() * -1f);
+        float turbidity = sun.Turbidity;
+        float exposure = sun.SkyExposure;
+        var sunColor = ToTk(sun.GetEffectiveColor()) * sun.Intensity;
+
+        Vector3 up = ComputeProceduralSkyColorCpu(Vector3.UnitY, sunDir, turbidity) * sunColor * exposure;
+        Vector3 horizonSum = Vector3.Zero;
+        Vector3[] horizonDirs =
+        {
+            new(1f, 0.05f, 0f), new(-1f, 0.05f, 0f), new(0f, 0.05f, 1f), new(0f, 0.05f, -1f)
+        };
+        foreach (var dir in horizonDirs)
+            horizonSum += ComputeProceduralSkyColorCpu(dir.Normalized(), sunDir, turbidity) * sunColor * exposure;
+
+        _flatAmbientColor = (up * 2f + horizonSum) / 6f;
+    }
+
+    private static int CreateProceduralSkyShader()
+    {
+        const string vert = """
+            #version 330 core
+            out vec2 vNdc;
+            void main()
+            {
+                vec2 p = vec2((gl_VertexID == 1) ? 3.0 : -1.0,
+                              (gl_VertexID == 2) ? 3.0 : -1.0);
+                vNdc = p;
+                gl_Position = vec4(p, 0.0, 1.0);
+            }
+            """;
+        const string frag = """
+            #version 330 core
+            in vec2 vNdc;
+            uniform vec3  uCamFront;
+            uniform vec3  uCamUp;
+            uniform float uTanHalfFov;
+            uniform float uAspect;
+            uniform vec3  uSunDir;
+            uniform vec3  uSunColor;
+            uniform float uSunAngular;
+            uniform int   uSunEnabled;
+            uniform float uTurbidity;
+            uniform float uSkyExposure;
+            out vec4 outColor;
+
+            const float PI = 3.14159265359;
+            const float EARTH_RADIUS = 6371000.0;
+            const float ATMOS_RADIUS = 6471000.0;
+            const float H_RAYLEIGH = 8000.0;
+            const float H_MIE = 1200.0;
+            const vec3 BETA_RAYLEIGH = vec3(5.5e-6, 13.0e-6, 22.4e-6);
+            const float MIE_G = 0.76;
+            const int PRIMARY_SAMPLES = 16;
+            const int LIGHT_SAMPLES = 8;
+
+            bool RaySphereIntersect(vec3 origin, vec3 dir, float radius, out float t0, out float t1)
+            {
+                float b = dot(origin, dir);
+                float c = dot(origin, origin) - radius * radius;
+                float disc = b * b - c;
+                if (disc < 0.0) { t0 = 0.0; t1 = 0.0; return false; }
+                float sq = sqrt(disc);
+                t0 = -b - sq;
+                t1 = -b + sq;
+                return true;
+            }
+
+            // Scattering de una sola dispersion (Rayleigh+Mie), marcha primaria (vista) +
+            // marcha secundaria (hacia el sol, transmitancia) por cada muestra primaria.
+            // Tecnica estandar tiempo-real (sin tablas precalculadas tipo Bruneton/Hillaire).
+            vec3 ComputeSkyColor(vec3 viewDir, vec3 sunDir, float turbidity)
+            {
+                vec3 origin = vec3(0.0, EARTH_RADIUS + 500.0, 0.0);
+                float tTop, tDummy;
+                if (!RaySphereIntersect(origin, viewDir, ATMOS_RADIUS, tTop, tDummy) || tTop < 0.0)
+                    return vec3(0.0);
+                float tGroundNear, tGroundFar;
+                if (RaySphereIntersect(origin, viewDir, EARTH_RADIUS, tGroundNear, tGroundFar) && tGroundNear > 0.0)
+                    tTop = min(tTop, tGroundNear);
+
+                float segmentLength = tTop / float(PRIMARY_SAMPLES);
+                float tCurrent = 0.0;
+                vec3 sumR = vec3(0.0);
+                vec3 sumM = vec3(0.0);
+                float opticalDepthR = 0.0;
+                float opticalDepthM = 0.0;
+                vec3 betaMie = vec3(21e-6 * max(turbidity, 0.1) / 3.0);
+
+                float mu = dot(viewDir, sunDir);
+                float phaseR = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
+                float g2 = MIE_G * MIE_G;
+                float phaseM = 3.0 / (8.0 * PI) * ((1.0 - g2) * (1.0 + mu * mu)) /
+                    ((2.0 + g2) * pow(1.0 + g2 - 2.0 * MIE_G * mu, 1.5));
+
+                for (int i = 0; i < PRIMARY_SAMPLES; i++)
+                {
+                    vec3 samplePos = origin + viewDir * (tCurrent + segmentLength * 0.5);
+                    float height = length(samplePos) - EARTH_RADIUS;
+                    if (height < 0.0) break;
+                    float hr = exp(-height / H_RAYLEIGH) * segmentLength;
+                    float hm = exp(-height / H_MIE) * segmentLength;
+                    opticalDepthR += hr;
+                    opticalDepthM += hm;
+
+                    bool blocked = false;
+                    float opticalDepthLightR = 0.0;
+                    float opticalDepthLightM = 0.0;
+                    float tLightTop, tLightDummy;
+                    if (RaySphereIntersect(samplePos, sunDir, ATMOS_RADIUS, tLightTop, tLightDummy))
+                    {
+                        float segmentLightLength = tLightTop / float(LIGHT_SAMPLES);
+                        float tLight = 0.0;
+                        for (int j = 0; j < LIGHT_SAMPLES; j++)
+                        {
+                            vec3 lightSamplePos = samplePos + sunDir * (tLight + segmentLightLength * 0.5);
+                            float lightHeight = length(lightSamplePos) - EARTH_RADIUS;
+                            if (lightHeight < 0.0) { blocked = true; break; }
+                            opticalDepthLightR += exp(-lightHeight / H_RAYLEIGH) * segmentLightLength;
+                            opticalDepthLightM += exp(-lightHeight / H_MIE) * segmentLightLength;
+                            tLight += segmentLightLength;
+                        }
+                    }
+                    else
+                    {
+                        blocked = true;
+                    }
+
+                    if (!blocked)
+                    {
+                        vec3 tau = BETA_RAYLEIGH * (opticalDepthR + opticalDepthLightR) + betaMie * 1.1 * (opticalDepthM + opticalDepthLightM);
+                        vec3 attenuation = exp(-tau);
+                        sumR += attenuation * hr;
+                        sumM += attenuation * hm;
+                    }
+
+                    tCurrent += segmentLength;
+                }
+
+                return (sumR * BETA_RAYLEIGH * phaseR + sumM * betaMie * phaseM) * 20.0;
+            }
+
+            void main()
+            {
+                vec3 fwd = normalize(uCamFront);
+                vec3 right = normalize(cross(fwd, uCamUp));
+                vec3 up = cross(right, fwd);
+                vec3 dir = normalize(fwd
+                    + right * (vNdc.x * uTanHalfFov * uAspect)
+                    + up    * (vNdc.y * uTanHalfFov));
+
+                vec3 sunDir = normalize(uSunDir);
+                vec3 col = ComputeSkyColor(dir, sunDir, uTurbidity) * uSunColor * uSkyExposure;
+
+                if (uSunEnabled == 1)
+                {
+                    float ang = acos(clamp(dot(dir, sunDir), -1.0, 1.0));
+                    float disk = 1.0 - smoothstep(uSunAngular * 0.75, uSunAngular, ang);
+                    float halo = pow(max(0.0, 1.0 - ang / (uSunAngular * 16.0)), 3.0);
+                    col += uSunColor * (disk * 8.0 + halo * 0.5);
+                }
+
+                outColor = vec4(max(col, vec3(0.0)), 1.0);
+            }
+            """;
+        int v = CompileShader(ShaderType.VertexShader, vert);
+        int f = CompileShader(ShaderType.FragmentShader, frag);
+        int program = GL.CreateProgram();
+        GL.AttachShader(program, v);
+        GL.AttachShader(program, f);
+        GL.LinkProgram(program);
+        GL.GetProgram(program, GetProgramParameterName.LinkStatus, out int ok);
+        if (ok == 0) throw new InvalidOperationException(GL.GetProgramInfoLog(program));
+        GL.DetachShader(program, v); GL.DetachShader(program, f);
+        GL.DeleteShader(v); GL.DeleteShader(f);
+        return program;
     }
 
 private static int CreateSkyboxShader()

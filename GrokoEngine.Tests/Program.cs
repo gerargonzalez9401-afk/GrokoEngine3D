@@ -54,6 +54,7 @@ internal static class Program
             ("Animator transition offset starts state mid clip", AnimatorTransitionOffsetStartsStateMidClip),
             ("Animator interruption switches to higher priority transition mid fade", AnimatorInterruptionSwitchesStateMidFade),
             ("SceneSerializer preserves contact shadow settings", SceneSerializerPreservesContactShadowSettings),
+            ("SceneSerializer preserves procedural sky settings", SceneSerializerPreservesProceduralSkySettings),
             ("SceneSerializer preserves light cookie and IES paths", SceneSerializerPreservesLightCookieAndIesPaths),
             ("IesProfile parses minimal LM-63 file and normalizes peak", IesProfileParsesMinimalLm63FileAndNormalizesPeak),
             ("IesProfile averages asymmetric horizontal angles", IesProfileAveragesAsymmetricHorizontalAngles),
@@ -1996,6 +1997,23 @@ internal static class Program
         AssertTrue(loadedDl.ContactShadows, "contact shadows flag restored");
         AssertNear(0.02f, loadedDl.ContactShadowLength, "contact shadow length restored");
         AssertEqual(12, loadedDl.ContactShadowSamples, "contact shadow samples restored");
+    }
+
+    private static void SceneSerializerPreservesProceduralSkySettings()
+    {
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets"));
+        var obj = new GameObject { Name = "Sun" };
+        var dl = obj.AddComponent<DirectionalLight>();
+        dl.Turbidity = 6.5f;
+        dl.SkyExposure = 2.2f;
+
+        string json = SceneSerializer.Serialize(new[] { obj });
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts);
+        var loadedDl = loaded[0].GetComponent<DirectionalLight>()!;
+
+        AssertNear(6.5f, loadedDl.Turbidity, "turbidity restored");
+        AssertNear(2.2f, loadedDl.SkyExposure, "sky exposure restored");
     }
 
     private static void PhysicsEngineFiresTriggerExitWhenOtherObjectDestroyed()

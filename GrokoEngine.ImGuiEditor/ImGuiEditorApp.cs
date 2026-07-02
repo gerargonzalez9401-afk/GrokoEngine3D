@@ -321,6 +321,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private float iblDiffuseStrength = 0.65f;
     private float iblSpecularStrength;
     private string hdriPath = "";
+    private EnvironmentMode environmentMode = EnvironmentMode.Hdri;
     private readonly EditorProfiler profiler = new();
     private bool showProfiler;
     private bool consoleShowInfo = true;
@@ -850,6 +851,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.IblDiffuseStrength = iblDiffuseStrength;
         sceneRenderer.IblSpecularStrength = iblSpecularStrength;
         sceneRenderer.EnvironmentHdriPath = hdriPath;
+        sceneRenderer.EnvironmentMode = environmentMode;
         sceneRenderer.DrawEnvironmentBackground = !gameView || gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
         sceneRenderer.RenderRealtimeShadows = gameView;
         sceneRenderer.ShadowUpdateIntervalFrames = gameView ? 3 : 1;
@@ -942,6 +944,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.IblDiffuseStrength = iblDiffuseStrength;
         sceneRenderer.IblSpecularStrength = iblSpecularStrength;
         sceneRenderer.EnvironmentHdriPath = hdriPath;
+        sceneRenderer.EnvironmentMode = environmentMode;
         sceneRenderer.DrawEnvironmentBackground = gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
         sceneRenderer.RenderRealtimeShadows = gameCameraComponent?.RenderShadows ?? true;
         sceneRenderer.ShadowUpdateIntervalFrames = 3;
@@ -1270,6 +1273,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             iblDiffuseStrength = Math.Clamp(settings.IblDiffuseStrength <= 0f ? 0.65f : settings.IblDiffuseStrength, 0f, 1.5f);
             iblSpecularStrength = Math.Clamp(settings.IblSpecularStrength <= 0f ? 0.16f : settings.IblSpecularStrength, 0f, 0.35f);
             hdriPath = settings.HdriPath ?? "";
+            environmentMode = Enum.TryParse<EnvironmentMode>(settings.EnvironmentMode, out var envMode) ? envMode : EnvironmentMode.Hdri;
             projectListView = settings.ProjectListView;
             projectTileScale = Math.Clamp(settings.ProjectTileScale, ProjectTileScaleMin, ProjectTileScaleMax);
             projectSortMode = Enum.TryParse<AssetSortMode>(settings.ProjectSortMode, out var mode) ? mode : AssetSortMode.Name;
@@ -1350,6 +1354,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
                 IblDiffuseStrength = iblDiffuseStrength,
                 IblSpecularStrength = iblSpecularStrength,
                 HdriPath = hdriPath,
+                EnvironmentMode = environmentMode.ToString(),
                 ProjectListView = projectListView,
                 ProjectTileScale = projectTileScale,
                 ProjectSortMode = projectSortMode.ToString(),

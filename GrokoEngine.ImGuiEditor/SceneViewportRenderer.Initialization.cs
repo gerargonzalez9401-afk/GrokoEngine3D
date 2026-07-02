@@ -254,6 +254,19 @@ internal sealed partial class SceneViewportRenderer
         _skySunEnabledLoc = GL.GetUniformLocation(_skyboxShader, "uSunEnabled");
         _brdfLutTexture = CreateBrdfLutTexture();
 
+        // ── Physically Based Sky (analitico, alternativa al HDRI) ──
+        _proceduralSkyShader = CreateProceduralSkyShader();
+        _proSkyCamFrontLoc = GL.GetUniformLocation(_proceduralSkyShader, "uCamFront");
+        _proSkyCamUpLoc = GL.GetUniformLocation(_proceduralSkyShader, "uCamUp");
+        _proSkyTanHalfFovLoc = GL.GetUniformLocation(_proceduralSkyShader, "uTanHalfFov");
+        _proSkyAspectLoc = GL.GetUniformLocation(_proceduralSkyShader, "uAspect");
+        _proSkySunDirLoc = GL.GetUniformLocation(_proceduralSkyShader, "uSunDir");
+        _proSkySunColorLoc = GL.GetUniformLocation(_proceduralSkyShader, "uSunColor");
+        _proSkySunAngularLoc = GL.GetUniformLocation(_proceduralSkyShader, "uSunAngular");
+        _proSkySunEnabledLoc = GL.GetUniformLocation(_proceduralSkyShader, "uSunEnabled");
+        _skyTurbidityLoc = GL.GetUniformLocation(_proceduralSkyShader, "uTurbidity");
+        _skyExposureLoc = GL.GetUniformLocation(_proceduralSkyShader, "uSkyExposure");
+
         // VAO/VBO dedicado para occlusion query bounding boxes
         _occVao = GL.GenVertexArray();
         _occVbo = GL.GenBuffer();

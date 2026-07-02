@@ -232,6 +232,7 @@ internal sealed partial class ImGuiEditorApp
         public float IblDiffuseStrength { get; set; } = 0.65f;
         public float IblSpecularStrength { get; set; } = 0f;
         public string HdriPath { get; set; } = "";
+        public string EnvironmentMode { get; set; } = nameof(GrokoEngine.ImGuiEditor.EnvironmentMode.Hdri);
         public bool ConsoleShowInfo { get; set; } = true;
         public bool ConsoleShowWarnings { get; set; } = true;
         public bool ConsoleShowErrors { get; set; } = true;

@@ -223,6 +223,14 @@ internal sealed partial class ImGuiEditorApp
                 ImGui.TextDisabled("Diffuse irradiance + reflections seguras por material. Usa Environment Reflections y Specular Highlights en cada Material para comparar A/B.");
 
                 ImGui.Spacing();
+                ImGui.TextUnformatted("Environment Mode");
+                int envModeIndex = (int)environmentMode;
+                if (ImGui.Combo("##environmentMode", ref envModeIndex, new[] { "HDRI", "Procedural Sky" }, 2))
+                    environmentMode = (EnvironmentMode)envModeIndex;
+                if (environmentMode == EnvironmentMode.ProceduralSky)
+                    ImGui.TextDisabled("Cielo analitico (Rayleigh+Mie, tiempo real) dirigido por el sol de la escena. Ajusta Turbidity/Sky Exposure en el Directional Light. El HDRI de abajo se ignora en este modo.");
+
+                ImGui.Spacing();
                 ImGui.TextUnformatted("HDRI Environment (.hdr)");
                 // Unity-style asset slot: click to browse (native file dialog), or
                 // drag a .hdr from the Project panel. No typing required.
