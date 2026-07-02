@@ -571,7 +571,10 @@ private void DrawSkybox(Vector3 camFront, Vector3 camUp, float fovDeg, float asp
             tCurrent += segmentLength;
         }
 
-        return (sumR * betaRayleigh * phaseR + sumM * betaMieScalar * phaseM) * 20f;
+        var singleScatter = sumR * betaRayleigh * phaseR + sumM * betaMieScalar * phaseM;
+        float airMass = Math.Clamp(tTop / (hRayleigh * 6f), 0f, 1f);
+        var multiScatterApprox = new Vector3(0.35f, 0.45f, 0.65f) * airMass * 0.06f;
+        return (singleScatter + multiScatterApprox) * 20f;
     }
 
     private static bool RaySphereIntersect(Vector3 origin, Vector3 dir, float radius, out float t0, out float t1)
@@ -648,8 +651,8 @@ private void DrawSkybox(Vector3 camFront, Vector3 camUp, float fovDeg, float asp
             const float H_MIE = 1200.0;
             const vec3 BETA_RAYLEIGH = vec3(5.5e-6, 13.0e-6, 22.4e-6);
             const float MIE_G = 0.76;
-            const int PRIMARY_SAMPLES = 16;
-            const int LIGHT_SAMPLES = 8;
+            const int PRIMARY_SAMPLES = 24;
+            const int LIGHT_SAMPLES = 10;
 
             bool RaySphereIntersect(vec3 origin, vec3 dir, float radius, out float t0, out float t1)
             {
@@ -734,7 +737,20 @@ private void DrawSkybox(Vector3 camFront, Vector3 camUp, float fovDeg, float asp
                     tCurrent += segmentLength;
                 }
 
-                return (sumR * BETA_RAYLEIGH * phaseR + sumM * betaMie * phaseM) * 20.0;
+                vec3 singleScatter = sumR * BETA_RAYLEIGH * phaseR + sumM * betaMie * phaseM;
+
+                // Aproximacion barata de multiple-scattering (la luz que rebota varias veces
+                // dentro de la atmosfera, no solo una): sin esto el single-scattering deja el
+                // cielo realista solo cerca del sol y demasiado oscuro/vacio lejos de el, muy
+                // notorio al mediodia con el sol alto. No es fisicamente exacto (para eso hacen
+                // falta las tablas precalculadas de Bruneton/Hillaire, fuera de alcance aqui) pero
+                // es la aproximacion estandar en shaders realtime de una sola pasada: un relleno
+                // ambiental isotropico, tenue, tintado de azul, proporcional a cuanta atmosfera
+                // atraveso el rayo (normalizado por H_RAYLEIGH, no en metros crudos).
+                float airMass = clamp(tTop / (H_RAYLEIGH * 6.0), 0.0, 1.0);
+                vec3 multiScatterApprox = vec3(0.35, 0.45, 0.65) * airMass * 0.06;
+
+                return (singleScatter + multiScatterApprox) * 20.0;
             }
 
             void main()

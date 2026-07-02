@@ -1656,9 +1656,12 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         float totalW = ClientSize.X;
         float totalH = ClientSize.Y - menuH - statusH;
 
-        _panelLeftW = Math.Clamp(_panelLeftW, 170f, totalW * 0.34f);
-        _panelRightW = Math.Clamp(_panelRightW, 240f, totalW * 0.42f);
-        _panelBottomH = Math.Clamp(_panelBottomH, 120f, totalH * 0.50f);
+        // Math.Max en el limite superior: con la ventana muy angosta/baja (p.ej. minimizada,
+        // o redimensionada a mano por debajo de ~500px), totalW*0.34 podia caer por debajo del
+        // minimo fijo (170) y Math.Clamp(min,max) con max<min tira ArgumentException -> crash.
+        _panelLeftW = Math.Clamp(_panelLeftW, 170f, Math.Max(170f, totalW * 0.34f));
+        _panelRightW = Math.Clamp(_panelRightW, 240f, Math.Max(240f, totalW * 0.42f));
+        _panelBottomH = Math.Clamp(_panelBottomH, 120f, Math.Max(120f, totalH * 0.50f));
 
         float leftColW = totalW - _panelRightW - splitter;   // columna izq+centro (el Inspector va aparte, a altura completa)
         float centerW = leftColW - _panelLeftW - splitter;
