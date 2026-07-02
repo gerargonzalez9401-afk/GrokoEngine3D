@@ -1222,6 +1222,7 @@ internal sealed partial class ImGuiEditorApp
                     DrawFloat("Range", pl.Range, v => pl.Range = v, 0.05f, 0f, 10000f);
                     DrawCheckRow("Shadows", pl.Shadows, v => pl.Shadows = v);
                     DrawFloat("Shadow Strength", pl.ShadowStrength, v => pl.ShadowStrength = v, 0.01f, 0f, 1f);
+                    DrawAssetSlot("IES Profile", pl.IesProfilePath, "None (.ies)", p => pl.IesProfilePath = p, IsIesProfilePath);
                     break;
                 case SpotLight sl:
                     DrawVector3("Direction", sl.Direction, v => sl.Direction = v, 0.05f);
@@ -1234,6 +1235,8 @@ internal sealed partial class ImGuiEditorApp
                     DrawFloat("Angle", sl.Angle, v => sl.Angle = v, 0.5f, 1f, 179f);
                     DrawCheckRow("Shadows", sl.Shadows, v => sl.Shadows = v);
                     DrawFloat("Shadow Strength", sl.ShadowStrength, v => sl.ShadowStrength = v, 0.01f, 0f, 1f);
+                    DrawAssetSlot("Cookie", sl.CookiePath, "None (Texture)", p => sl.CookiePath = p, MaterialAsset.IsTexturePath);
+                    DrawAssetSlot("IES Profile", sl.IesProfilePath, "None (.ies)", p => sl.IesProfilePath = p, IsIesProfilePath);
                     break;
                 case AmbientLight al:
                     DrawLightColor(al.R, al.G, al.B, (r, g, b) => { al.R = r; al.G = g; al.B = b; });
@@ -2644,7 +2647,10 @@ internal sealed partial class ImGuiEditorApp
             path.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase) ||
             path.EndsWith(".tga", StringComparison.OrdinalIgnoreCase));
 
-    
+    private static bool IsIesProfilePath(string path) =>
+        !string.IsNullOrWhiteSpace(path) && path.EndsWith(".ies", StringComparison.OrdinalIgnoreCase);
+
+
 
 
     private static void DrawMiniCurve(float mid, float midValue, string id)

@@ -54,6 +54,9 @@ internal static class Program
             ("Animator transition offset starts state mid clip", AnimatorTransitionOffsetStartsStateMidClip),
             ("Animator interruption switches to higher priority transition mid fade", AnimatorInterruptionSwitchesStateMidFade),
             ("SceneSerializer preserves contact shadow settings", SceneSerializerPreservesContactShadowSettings),
+            ("SceneSerializer preserves light cookie and IES paths", SceneSerializerPreservesLightCookieAndIesPaths),
+            ("IesProfile parses minimal LM-63 file and normalizes peak", IesProfileParsesMinimalLm63FileAndNormalizesPeak),
+            ("IesProfile averages asymmetric horizontal angles", IesProfileAveragesAsymmetricHorizontalAngles),
             ("PhysicsEngine fires trigger exit when other object destroyed", PhysicsEngineFiresTriggerExitWhenOtherObjectDestroyed),
             ("PhysicsEngine fires trigger exit when collider disabled mid play", PhysicsEngineFiresTriggerExitWhenColliderDisabledMidPlay),
             ("Terrain samples height bilinear", TerrainSamplesHeightBilinear),
@@ -1896,6 +1899,84 @@ internal static class Program
 
         AssertEqual(1, sensorEvents.TriggerExitCount, "trigger exit sensor");
         AssertEqual(1, playerEvents.TriggerExitCount, "trigger exit player");
+    }
+
+    private static void SceneSerializerPreservesLightCookieAndIesPaths()
+    {
+        var physics = new PhysicsEngine();
+        string assetsDir = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets");
+        Directory.CreateDirectory(assetsDir);
+        var scripts = new ScriptCompiler(assetsDir);
+
+        string cookiePath = Path.Combine(assetsDir, "flashlight.png");
+        File.WriteAllBytes(cookiePath, new byte[] { 0 });
+        string iesPath = Path.Combine(assetsDir, "streetlight.ies");
+        File.WriteAllText(iesPath, "TILT=NONE");
+
+        var spotObj = new GameObject { Name = "Spot" };
+        var sl = spotObj.AddComponent<SpotLight>();
+        sl.CookiePath = cookiePath;
+        sl.IesProfilePath = iesPath;
+
+        var pointObj = new GameObject { Name = "Point" };
+        var pl = pointObj.AddComponent<PointLight>();
+        pl.IesProfilePath = iesPath;
+
+        string json = SceneSerializer.Serialize(new[] { spotObj, pointObj });
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts);
+        var loadedSpot = loaded[0].GetComponent<SpotLight>()!;
+        var loadedPoint = loaded[1].GetComponent<PointLight>()!;
+
+        AssertEqual(cookiePath, loadedSpot.CookiePath, "spot cookie path restored");
+        AssertEqual(iesPath, loadedSpot.IesProfilePath, "spot IES profile path restored");
+        AssertEqual(iesPath, loadedPoint.IesProfilePath, "point IES profile path restored");
+    }
+
+    private static void IesProfileParsesMinimalLm63FileAndNormalizesPeak()
+    {
+        string[] lines =
+        {
+            "IESNA:LM-63-2002",
+            "[TEST] TestLab",
+            "[MANUFAC] Test",
+            "TILT=NONE",
+            "1 1000 1 5 1 1 2 0 0 0",
+            "1 1 100",
+            "0 30 60 90 120",
+            "0",
+            "100 80 40 10 0"
+        };
+
+        var profile = IesProfile.ParseLines(lines);
+
+        AssertTrue(profile != null, "minimal LM-63 file parses successfully");
+        AssertEqual(IesProfile.Resolution, profile!.AngularFalloff.Length, "falloff curve has the expected resolution");
+        AssertNear(1f, profile.AngularFalloff[0], "peak normalized to 1.0 at the brightest angle (0 deg)");
+        AssertNear(0f, profile.AngularFalloff[^1], "falloff reaches ~0 near 180 deg for a downlight profile");
+
+        int midIndex = (int)MathF.Round(60f / 180f * (IesProfile.Resolution - 1));
+        AssertNear(0.4f, profile.AngularFalloff[midIndex], "mid-angle (60 deg) falloff matches the parsed candela ratio", 0.05f);
+    }
+
+    private static void IesProfileAveragesAsymmetricHorizontalAngles()
+    {
+        // 2 angulos horizontales con perfiles distintos: la curva final debe ser el PROMEDIO.
+        string[] lines =
+        {
+            "TILT=NONE",
+            "1 1000 1 3 2 1 2 0 0 0",
+            "1 1 100",
+            "0 90 180",
+            "0 90",
+            "100 50 0",
+            "60 30 0"
+        };
+
+        var profile = IesProfile.ParseLines(lines);
+
+        AssertTrue(profile != null, "LM-63 file with 2 horizontal angles parses successfully");
+        // Angulo 0 deg: promedio de 100 y 60 = 80, pico global = 80 (mayor promedio de la curva) -> normalizado a 1.0.
+        AssertNear(1f, profile!.AngularFalloff[0], "averaged horizontal angles peak at 0 deg");
     }
 
     private static void SceneSerializerPreservesContactShadowSettings()

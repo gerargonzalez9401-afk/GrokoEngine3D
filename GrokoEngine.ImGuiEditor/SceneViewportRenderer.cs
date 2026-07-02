@@ -177,6 +177,10 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly int[] uSpotIntensity = new int[MaxSpotLights];
     private readonly int[] uSpotRange = new int[MaxSpotLights];
     private readonly int[] uSpotAngle = new int[MaxSpotLights];
+    private int uSpotCookieLocation, uSpotHasCookieLocation, uSpotCookieMvpLocation;
+    private int uSpotIesLutLocation, uSpotHasIesLocation, uPointIesLutLocation, uPointHasIesLocation;
+    private int _spotIesTex, _pointIesTex;
+    private string _spotIesPathCached = "", _pointIesPathCached = "";
     private int uAreaCount;
     private readonly int[] uAreaPos = new int[MaxAreaLights];
     private readonly int[] uAreaDir = new int[MaxAreaLights];

@@ -345,6 +345,7 @@ namespace GrokoEngine
                     data.Fields["ShadowStrength"] = pl.ShadowStrength.ToString(CultureInfo.InvariantCulture);
                     data.Fields["UseTemperature"] = pl.UseTemperature.ToString();
                     data.Fields["Temperature"] = pl.Temperature.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["IesProfilePath"] = SerializeAssetPath(pl.IesProfilePath, baseAssetsPath);
                     return data;
                 case SpotLight sl:
                     data.Fields["Intensity"] = sl.Intensity.ToString(CultureInfo.InvariantCulture);
@@ -357,6 +358,8 @@ namespace GrokoEngine
                     data.Fields["ShadowStrength"] = sl.ShadowStrength.ToString(CultureInfo.InvariantCulture);
                     data.Fields["UseTemperature"] = sl.UseTemperature.ToString();
                     data.Fields["Temperature"] = sl.Temperature.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["CookiePath"] = SerializeAssetPath(sl.CookiePath, baseAssetsPath);
+                    data.Fields["IesProfilePath"] = SerializeAssetPath(sl.IesProfilePath, baseAssetsPath);
                     return data;
                 case AmbientLight al:
                     data.Fields["Intensity"] = al.Intensity.ToString(CultureInfo.InvariantCulture);

@@ -113,6 +113,10 @@ namespace GrokoEngine
         public bool  UseTemperature { get; set; } = false;
         private float _temperature = 6500f;
         public float Temperature    { get => _temperature; set => _temperature = Math.Clamp(value, 1500f, 20000f); }
+
+        // Perfil de intensidad IES (LM-63) real: cae angularmente segun datos fotometricos reales
+        // (foco de auto, farola, luminaria comercial) en vez del cono uniforme por defecto.
+        public string IesProfilePath { get; set; } = "";
         public Vector3 GetEffectiveColor()
         {
             var c = new Vector3(R, G, B);
@@ -155,6 +159,12 @@ namespace GrokoEngine
         public bool  UseTemperature { get; set; } = false;
         private float _temperature = 6500f;
         public float Temperature    { get => _temperature; set => _temperature = Math.Clamp(value, 1500f, 20000f); }
+
+        // Cookie: textura 2D proyectada (como una linterna con mascara/rejilla). Cae fuera de
+        // alcance el cookie de PointLight (necesitaria cubemap); solo spot por ahora.
+        public string CookiePath { get; set; } = "";
+        // Perfil de intensidad IES (LM-63) real, mismo mecanismo que PointLight.
+        public string IesProfilePath { get; set; } = "";
         public Vector3 GetEffectiveColor()
         {
             var c = new Vector3(R, G, B);
