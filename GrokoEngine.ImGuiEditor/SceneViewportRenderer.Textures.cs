@@ -186,6 +186,54 @@ private int GetTexture(string path)
         }
     }
 
+// Sube la cookie asignada al spot `slot` a esa capa del array (todas las capas comparten el
+// mismo tamaño fijo CookieArraySize, asi que se redimensiona la imagen de origen al cargarla).
+// Blanco (sin cookie) si el path esta vacio, no existe, o falla la carga.
+private void UpdateSpotCookieLayer(int slot, string path)
+{
+    if (_spotCookiePathPerSlot[slot] == path)
+        return;
+    _spotCookiePathPerSlot[slot] = path;
+
+    byte[] pixels = new byte[CookieArraySize * CookieArraySize * 4];
+    for (int i = 0; i < pixels.Length; i++) pixels[i] = 255; // blanco = sin cookie
+
+    if (!string.IsNullOrWhiteSpace(path))
+    {
+        string? fullPath = NormalizeExistingAssetPath(path);
+        if (fullPath != null)
+        {
+            try
+            {
+                using var original = new Bitmap(fullPath);
+                using var resized = new Bitmap(original, new Size(CookieArraySize, CookieArraySize));
+                using var bitmap = resized.PixelFormat == System.Drawing.Imaging.PixelFormat.Format32bppArgb
+                    ? resized
+                    : resized.Clone(new Rectangle(0, 0, CookieArraySize, CookieArraySize), System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                var rect = new Rectangle(0, 0, CookieArraySize, CookieArraySize);
+                var data = bitmap.LockBits(rect, ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                try
+                {
+                    System.Runtime.InteropServices.Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
+                }
+                finally
+                {
+                    bitmap.UnlockBits(data);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogAssetWarning($"[SceneViewportRenderer] Error cargando cookie '{fullPath}': {ex.Message}");
+            }
+        }
+    }
+
+    GL.BindTexture(TextureTarget.Texture2DArray, _spotCookieArrayTex);
+    GL.TexSubImage3D(TextureTarget.Texture2DArray, 0, 0, 0, slot, CookieArraySize, CookieArraySize, 1,
+        OpenTK.Graphics.OpenGL4.PixelFormat.Bgra, PixelType.UnsignedByte, pixels);
+    GL.BindTexture(TextureTarget.Texture2DArray, 0);
+}
+
 private static void ApplyTextureImportParameters(GrokoEngine.TextureImportSettings settings)
     {
         var wrap = settings.WrapMode.Equals("Clamp", StringComparison.OrdinalIgnoreCase) ||

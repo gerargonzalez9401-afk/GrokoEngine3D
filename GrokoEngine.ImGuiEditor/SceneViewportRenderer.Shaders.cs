@@ -206,17 +206,16 @@ internal sealed partial class SceneViewportRenderer
             uniform float uSpotRange[MAX_SPOT_LIGHTS];
             uniform float uSpotAngle[MAX_SPOT_LIGHTS];
 
-            // Cookie + IES del spot[0] y IES del point[0] (mismo limite que ya tenia la sombra
-            // realtime: solo UNA luz de cada tipo lleva el detalle caro; el resto usa el cono/caida
-            // uniforme de siempre). Cookie: textura 2D proyectada. IES: perfil de caida angular real
+            // Cookie + IES POR LUZ (arrays de textura, una capa por indice de luz -- ya no solo
+            // la luz [0]). Cookie: textura 2D proyectada. IES: perfil de caida angular real
             // (LM-63) horneado a una curva 1D de 256 texeles.
-            uniform sampler2D uSpotCookie;
-            uniform int uSpotHasCookie;
-            uniform mat4 uSpotCookieMvp;
-            uniform sampler2D uSpotIesLut;
-            uniform int uSpotHasIes;
-            uniform sampler2D uPointIesLut;
-            uniform int uPointHasIes;
+            uniform sampler2DArray uSpotCookieArray;
+            uniform int uSpotHasCookie[MAX_SPOT_LIGHTS];
+            uniform mat4 uSpotCookieMvp[MAX_SPOT_LIGHTS];
+            uniform sampler2DArray uSpotIesArray;
+            uniform int uSpotHasIes[MAX_SPOT_LIGHTS];
+            uniform sampler2DArray uPointIesArray;
+            uniform int uPointHasIes[MAX_POINT_LIGHTS];
 
             // Area / rectangle lights, approximated as soft forward-facing emitters
             uniform int   uAreaCount;
@@ -456,37 +455,38 @@ internal sealed partial class SceneViewportRenderer
                 return mix(1.0, 1.0 - shadow, uSpotShadowStrength);
             }
 
-            // Cookie del spot[0]: proyecta uSpotCookie en la superficie (misma matriz view*proj que
-            // la sombra realtime del spot). Fuera del frustum del cookie -> sin modulacion (1.0).
-            float SpotCookieFactor(vec3 worldPos)
+            // Cookie del spot[index]: proyecta la capa `index` de uSpotCookieArray en la superficie
+            // (misma matriz view*proj que la sombra realtime del spot). Fuera del frustum del
+            // cookie -> sin modulacion (1.0).
+            float SpotCookieFactor(int index, vec3 worldPos)
             {
-                if (uSpotHasCookie == 0) return 1.0;
-                vec4 lp = vec4(worldPos, 1.0) * uSpotCookieMvp;
+                if (uSpotHasCookie[index] == 0) return 1.0;
+                vec4 lp = vec4(worldPos, 1.0) * uSpotCookieMvp[index];
                 vec3 proj = lp.xyz / max(lp.w, 0.0001);
                 proj = proj * 0.5 + 0.5;
                 if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || lp.w <= 0.0)
                     return 1.0;
-                return texture(uSpotCookie, proj.xy).r;
+                return texture(uSpotCookieArray, vec3(proj.xy, float(index))).r;
             }
 
-            // IES del spot[0]: caida angular real (LM-63) segun el angulo entre el eje del foco y
-            // la direccion hacia el fragmento, en vez del cono smoothstep uniforme.
-            float SpotIesFactor(vec3 spotDir, vec3 toFragmentDir)
+            // IES del spot[index]: caida angular real (LM-63) segun el angulo entre el eje del foco
+            // y la direccion hacia el fragmento, en vez del cono smoothstep uniforme.
+            float SpotIesFactor(int index, vec3 spotDir, vec3 toFragmentDir)
             {
-                if (uSpotHasIes == 0) return 1.0;
+                if (uSpotHasIes[index] == 0) return 1.0;
                 float cosAngle = clamp(dot(normalize(spotDir), normalize(toFragmentDir)), -1.0, 1.0);
                 float angleDeg = degrees(acos(cosAngle));
-                return texture(uSpotIesLut, vec2(clamp(angleDeg / 180.0, 0.0, 1.0), 0.5)).r;
+                return texture(uSpotIesArray, vec3(clamp(angleDeg / 180.0, 0.0, 1.0), 0.5, float(index))).r;
             }
 
-            // IES del point[0]: asume orientacion hacia abajo (-Y mundial), la convencion mas comun
-            // de luminarias reales (fixture de techo). angleDeg=0 -> justo debajo del punto de luz.
-            float PointIesFactor(vec3 toFragmentDir)
+            // IES del point[index]: asume orientacion hacia abajo (-Y mundial), la convencion mas
+            // comun de luminarias reales (fixture de techo). angleDeg=0 -> justo debajo de la luz.
+            float PointIesFactor(int index, vec3 toFragmentDir)
             {
-                if (uPointHasIes == 0) return 1.0;
+                if (uPointHasIes[index] == 0) return 1.0;
                 float cosAngle = clamp(dot(vec3(0.0, -1.0, 0.0), normalize(toFragmentDir)), -1.0, 1.0);
                 float angleDeg = degrees(acos(cosAngle));
-                return texture(uPointIesLut, vec2(clamp(angleDeg / 180.0, 0.0, 1.0), 0.5)).r;
+                return texture(uPointIesArray, vec3(clamp(angleDeg / 180.0, 0.0, 1.0), 0.5, float(index))).r;
             }
 
             float PointShadowFactor(vec3 N, vec3 worldPos)
@@ -732,7 +732,7 @@ internal sealed partial class SceneViewportRenderer
                     if (dist >= uPointRange[i]) continue;
                     float atten   = RangeAttenuation(dist, uPointRange[i]);
                     float pshadow = i == 0 ? PointShadowFactor(N, vWorldPos) : 1.0;
-                    float pies    = i == 0 ? PointIesFactor(-toLight) : 1.0;
+                    float pies    = PointIesFactor(i, -toLight);
                     directLight  += AddDirectLight(N, V, normalize(toLight), uPointColor[i], uPointIntensity[i] * atten * pshadow * pies, base, roughness, metallic, specularHighlights);
                 }
 
@@ -750,8 +750,8 @@ internal sealed partial class SceneViewportRenderer
                     float spot = smoothstep(outer, inner, cone);
                     float atten = RangeAttenuation(dist, uSpotRange[i]) * spot;
                     float sshadow = i == 0 ? SpotShadowFactor(N, -uSpotDir[i]) : 1.0;
-                    float scookie = i == 0 ? SpotCookieFactor(vWorldPos) : 1.0;
-                    float sies = i == 0 ? SpotIesFactor(uSpotDir[i], -L) : 1.0;
+                    float scookie = SpotCookieFactor(i, vWorldPos);
+                    float sies = SpotIesFactor(i, uSpotDir[i], -L);
                     directLight += AddDirectLight(N, V, L, uSpotColor[i], uSpotIntensity[i] * atten * sshadow * scookie * sies, base, roughness, metallic, specularHighlights);
                 }
 

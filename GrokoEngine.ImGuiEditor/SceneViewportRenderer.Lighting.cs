@@ -189,8 +189,8 @@ internal sealed partial class SceneViewportRenderer
             GL.Uniform1(uSpotRange[i], sl.Range);
             GL.Uniform1(uSpotAngle[i], MathHelper.DegreesToRadians(sl.Angle));
         }
-        ApplySpotCookieAndIes(_frameSpotLights.Count > 0 ? _frameSpotLights[0] : null);
-        ApplyPointIes(_framePointLights.Count > 0 ? _framePointLights[0] : null);
+        ApplySpotCookiesAndIes();
+        ApplyPointIesArray();
 
         int areaCount = Math.Min(MaxAreaLights, _frameAreaLights.Count + _frameRectLights.Count);
         GL.Uniform1(uAreaCount, areaCount);
@@ -219,38 +219,39 @@ internal sealed partial class SceneViewportRenderer
         GL.Uniform2(uAreaSize[index], new Vector2(width, height));
     }
 
-    // Cookie + IES del spot[0] (mismo limite que la sombra realtime: solo una luz de cada tipo
-    // lleva el detalle caro). Reutiliza GetTexture() para el cookie (misma cache/hot-reload que
-    // las texturas de material) y una cache propia (por ruta) para el LUT de IES horneado.
-    private void ApplySpotCookieAndIes(SpotLight? spot)
+    // Cookie + IES POR LUZ: hasta MaxSpotLights spots con cookie/IES propios, y hasta
+    // MaxPointLights points con IES propio, todos a la vez (ya no solo la luz [0]).
+    private void ApplySpotCookiesAndIes()
     {
-        bool hasCookie = spot != null && !string.IsNullOrWhiteSpace(spot.CookiePath);
-        if (hasCookie)
+        EnsureSpotCookieArray();
+        EnsureIesArray(ref _spotIesArrayTex, MaxSpotLights);
+
+        for (int i = 0; i < MaxSpotLights; i++)
         {
-            int tex = GetTexture(spot!.CookiePath);
-            hasCookie = tex != 0;
+            var sl = i < _frameSpotLights.Count ? _frameSpotLights[i] : null;
+            string cookiePath = sl?.CookiePath ?? "";
+            UpdateSpotCookieLayer(i, cookiePath);
+            bool hasCookie = sl != null && !string.IsNullOrWhiteSpace(cookiePath);
+            GL.Uniform1(uSpotHasCookieLoc[i], hasCookie ? 1 : 0);
             if (hasCookie)
             {
-                GL.ActiveTexture(TextureUnit.Texture11);
-                GL.BindTexture(TextureTarget.Texture2D, tex);
-                GL.ActiveTexture(TextureUnit.Texture0);
-                GL.Uniform1(uSpotCookieLocation, 11);
-                _spotCookieMvpScratch = ComputeSpotCookieMatrix(spot);
-                GL.UniformMatrix4(uSpotCookieMvpLocation, false, ref _spotCookieMvpScratch);
+                _spotCookieMvpScratch = ComputeSpotCookieMatrix(sl!);
+                GL.UniformMatrix4(uSpotCookieMvpLoc[i], false, ref _spotCookieMvpScratch);
             }
-        }
-        GL.Uniform1(uSpotHasCookieLocation, hasCookie ? 1 : 0);
 
-        bool hasIes = spot != null && !string.IsNullOrWhiteSpace(spot.IesProfilePath) &&
-            GetOrCreateIesLutTexture(spot.IesProfilePath, ref _spotIesTex, ref _spotIesPathCached);
-        if (hasIes)
-        {
-            GL.ActiveTexture(TextureUnit.Texture12);
-            GL.BindTexture(TextureTarget.Texture2D, _spotIesTex);
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.Uniform1(uSpotIesLutLocation, 12);
+            string iesPath = sl?.IesProfilePath ?? "";
+            UpdateIesLayer(_spotIesArrayTex, _spotIesPathPerSlot, i, iesPath);
+            bool hasIes = sl != null && !string.IsNullOrWhiteSpace(iesPath);
+            GL.Uniform1(uSpotHasIesLoc[i], hasIes ? 1 : 0);
         }
-        GL.Uniform1(uSpotHasIesLocation, hasIes ? 1 : 0);
+
+        GL.ActiveTexture(TextureUnit.Texture11);
+        GL.BindTexture(TextureTarget.Texture2DArray, _spotCookieArrayTex);
+        GL.ActiveTexture(TextureUnit.Texture12);
+        GL.BindTexture(TextureTarget.Texture2DArray, _spotIesArrayTex);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.Uniform1(uSpotCookieLocation, 11);
+        GL.Uniform1(uSpotIesLutLocation, 12);
     }
 
     private Matrix4 _spotCookieMvpScratch;
@@ -269,50 +270,106 @@ internal sealed partial class SceneViewportRenderer
         return view * projection;
     }
 
-    private void ApplyPointIes(PointLight? point)
+    private void ApplyPointIesArray()
     {
-        bool hasIes = point != null && !string.IsNullOrWhiteSpace(point.IesProfilePath) &&
-            GetOrCreateIesLutTexture(point.IesProfilePath, ref _pointIesTex, ref _pointIesPathCached);
-        if (hasIes)
+        EnsureIesArray(ref _pointIesArrayTex, MaxPointLights);
+
+        for (int i = 0; i < MaxPointLights; i++)
         {
-            GL.ActiveTexture(TextureUnit.Texture13);
-            GL.BindTexture(TextureTarget.Texture2D, _pointIesTex);
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.Uniform1(uPointIesLutLocation, 13);
+            var pl = i < _framePointLights.Count ? _framePointLights[i] : null;
+            string iesPath = pl?.IesProfilePath ?? "";
+            UpdateIesLayer(_pointIesArrayTex, _pointIesPathPerSlot, i, iesPath);
+            bool hasIes = pl != null && !string.IsNullOrWhiteSpace(iesPath);
+            GL.Uniform1(uPointHasIesLoc[i], hasIes ? 1 : 0);
         }
-        GL.Uniform1(uPointHasIesLocation, hasIes ? 1 : 0);
+
+        GL.ActiveTexture(TextureUnit.Texture13);
+        GL.BindTexture(TextureTarget.Texture2DArray, _pointIesArrayTex);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.Uniform1(uPointIesLutLocation, 13);
     }
 
-    // Hornea el perfil IES (parseado en Core, sin dependencias de GL) a una textura 1D (256x1, R16F)
-    // de caida angular normalizada. Cache simple por ruta (no por fecha de archivo: los .ies no
-    // suelen editarse en vivo como las texturas de material).
-    private bool GetOrCreateIesLutTexture(string path, ref int texId, ref string cachedPath)
+    private void EnsureSpotCookieArray()
     {
-        if (texId != 0 && cachedPath == path)
-            return true;
+        if (_spotCookieArrayTex != 0)
+            return;
 
+        _spotCookieArrayTex = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2DArray, _spotCookieArrayTex);
+        GL.TexImage3D(TextureTarget.Texture2DArray, 0, PixelInternalFormat.Rgba,
+            CookieArraySize, CookieArraySize, MaxSpotLights, 0,
+            OpenTK.Graphics.OpenGL4.PixelFormat.Bgra, PixelType.UnsignedByte, IntPtr.Zero);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+
+        // Blanco = sin cookie (multiplica x1) en todas las capas por defecto.
+        byte[] white = new byte[CookieArraySize * CookieArraySize * 4];
+        for (int i = 0; i < white.Length; i++) white[i] = 255;
+        for (int layer = 0; layer < MaxSpotLights; layer++)
+            GL.TexSubImage3D(TextureTarget.Texture2DArray, 0, 0, 0, layer, CookieArraySize, CookieArraySize, 1,
+                OpenTK.Graphics.OpenGL4.PixelFormat.Bgra, PixelType.UnsignedByte, white);
+        GL.BindTexture(TextureTarget.Texture2DArray, 0);
+    }
+
+    private static void EnsureIesArray(ref int texId, int layers)
+    {
         if (texId != 0)
-        {
-            GL.DeleteTexture(texId);
-            texId = 0;
-            cachedPath = "";
-        }
-
-        string? fullPath = NormalizeExistingAssetPath(path);
-        var profile = fullPath != null ? IesProfile.Parse(fullPath) : null;
-        if (profile == null)
-            return false;
+            return;
 
         texId = GL.GenTexture();
-        GL.BindTexture(TextureTarget.Texture2D, texId);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.R16f, profile.AngularFalloff.Length, 1, 0,
-            OpenTK.Graphics.OpenGL4.PixelFormat.Red, PixelType.Float, profile.AngularFalloff);
-        GL.BindTexture(TextureTarget.Texture2D, 0);
-        cachedPath = path;
-        return true;
+        GL.BindTexture(TextureTarget.Texture2DArray, texId);
+        GL.TexImage3D(TextureTarget.Texture2DArray, 0, PixelInternalFormat.R16f,
+            IesProfile.Resolution, 1, layers, 0,
+            OpenTK.Graphics.OpenGL4.PixelFormat.Red, PixelType.Float, IntPtr.Zero);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+
+        // 1.0 = sin IES (sin modulacion angular) en todas las capas por defecto.
+        float[] ones = new float[IesProfile.Resolution];
+        for (int i = 0; i < ones.Length; i++) ones[i] = 1f;
+        for (int layer = 0; layer < layers; layer++)
+            GL.TexSubImage3D(TextureTarget.Texture2DArray, 0, 0, 0, layer, IesProfile.Resolution, 1, 1,
+                OpenTK.Graphics.OpenGL4.PixelFormat.Red, PixelType.Float, ones);
+        GL.BindTexture(TextureTarget.Texture2DArray, 0);
     }
+
+    // Hornea el perfil IES (parseado en Core, sin dependencias de GL) a la capa `slot` del array.
+    // Cache simple por ruta (no por fecha de archivo: los .ies no suelen editarse en vivo).
+    private void UpdateIesLayer(int arrayTex, string[] pathPerSlot, int slot, string path)
+    {
+        if (pathPerSlot[slot] == path)
+            return;
+        pathPerSlot[slot] = path;
+
+        float[] falloff;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            falloff = new float[IesProfile.Resolution];
+            for (int i = 0; i < falloff.Length; i++) falloff[i] = 1f;
+        }
+        else
+        {
+            string? fullPath = NormalizeExistingAssetPath(path);
+            var profile = fullPath != null ? IesProfile.Parse(fullPath) : null;
+            if (profile == null)
+            {
+                falloff = new float[IesProfile.Resolution];
+                for (int i = 0; i < falloff.Length; i++) falloff[i] = 1f;
+            }
+            else
+            {
+                falloff = profile.AngularFalloff;
+            }
+        }
+
+        GL.BindTexture(TextureTarget.Texture2DArray, arrayTex);
+        GL.TexSubImage3D(TextureTarget.Texture2DArray, 0, 0, 0, slot, IesProfile.Resolution, 1, 1,
+            OpenTK.Graphics.OpenGL4.PixelFormat.Red, PixelType.Float, falloff);
+        GL.BindTexture(TextureTarget.Texture2DArray, 0);
+    }
+
 }

@@ -101,13 +101,17 @@ internal sealed partial class SceneViewportRenderer
             uSpotRange[i] = GL.GetUniformLocation(solidShader, $"uSpotRange[{i}]");
             uSpotAngle[i] = GL.GetUniformLocation(solidShader, $"uSpotAngle[{i}]");
         }
-        uSpotCookieLocation = GL.GetUniformLocation(solidShader, "uSpotCookie");
-        uSpotHasCookieLocation = GL.GetUniformLocation(solidShader, "uSpotHasCookie");
-        uSpotCookieMvpLocation = GL.GetUniformLocation(solidShader, "uSpotCookieMvp");
-        uSpotIesLutLocation = GL.GetUniformLocation(solidShader, "uSpotIesLut");
-        uSpotHasIesLocation = GL.GetUniformLocation(solidShader, "uSpotHasIes");
-        uPointIesLutLocation = GL.GetUniformLocation(solidShader, "uPointIesLut");
-        uPointHasIesLocation = GL.GetUniformLocation(solidShader, "uPointHasIes");
+        uSpotCookieLocation = GL.GetUniformLocation(solidShader, "uSpotCookieArray");
+        uSpotIesLutLocation = GL.GetUniformLocation(solidShader, "uSpotIesArray");
+        uPointIesLutLocation = GL.GetUniformLocation(solidShader, "uPointIesArray");
+        for (int i = 0; i < MaxSpotLights; i++)
+        {
+            uSpotHasCookieLoc[i] = GL.GetUniformLocation(solidShader, $"uSpotHasCookie[{i}]");
+            uSpotCookieMvpLoc[i] = GL.GetUniformLocation(solidShader, $"uSpotCookieMvp[{i}]");
+            uSpotHasIesLoc[i] = GL.GetUniformLocation(solidShader, $"uSpotHasIes[{i}]");
+        }
+        for (int i = 0; i < MaxPointLights; i++)
+            uPointHasIesLoc[i] = GL.GetUniformLocation(solidShader, $"uPointHasIes[{i}]");
         uAreaCount = GL.GetUniformLocation(solidShader, "uAreaCount");
         for (int i = 0; i < MaxAreaLights; i++)
         {

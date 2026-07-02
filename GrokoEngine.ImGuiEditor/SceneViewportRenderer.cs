@@ -177,10 +177,19 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly int[] uSpotIntensity = new int[MaxSpotLights];
     private readonly int[] uSpotRange = new int[MaxSpotLights];
     private readonly int[] uSpotAngle = new int[MaxSpotLights];
-    private int uSpotCookieLocation, uSpotHasCookieLocation, uSpotCookieMvpLocation;
-    private int uSpotIesLutLocation, uSpotHasIesLocation, uPointIesLutLocation, uPointHasIesLocation;
-    private int _spotIesTex, _pointIesTex;
-    private string _spotIesPathCached = "", _pointIesPathCached = "";
+    // Cookie + IES POR LUZ (hasta MaxSpotLights spots con cookie/IES propios a la vez, y hasta
+    // MaxPointLights points con IES propio). Arrays de textura (mismo tamaño fijo por capa) en
+    // vez de una textura sencilla por-tipo: el limite ya no es "solo la luz [0]".
+    private const int CookieArraySize = 256;
+    private int uSpotCookieLocation, uSpotIesLutLocation, uPointIesLutLocation;
+    private readonly int[] uSpotHasCookieLoc = new int[MaxSpotLights];
+    private readonly int[] uSpotCookieMvpLoc = new int[MaxSpotLights];
+    private readonly int[] uSpotHasIesLoc = new int[MaxSpotLights];
+    private readonly int[] uPointHasIesLoc = new int[MaxPointLights];
+    private int _spotCookieArrayTex, _spotIesArrayTex, _pointIesArrayTex;
+    private readonly string[] _spotCookiePathPerSlot = new string[MaxSpotLights];
+    private readonly string[] _spotIesPathPerSlot = new string[MaxSpotLights];
+    private readonly string[] _pointIesPathPerSlot = new string[MaxPointLights];
     private int uAreaCount;
     private readonly int[] uAreaPos = new int[MaxAreaLights];
     private readonly int[] uAreaDir = new int[MaxAreaLights];
