@@ -229,6 +229,65 @@ internal sealed partial class SceneViewportRenderer
         _particleDistortionStrengthLoc = GL.GetUniformLocation(_particleShader, "uDistortionStrength");
         _particleRefractionStrengthLoc = GL.GetUniformLocation(_particleShader, "uRefractionStrength");
 
+        // ── Particle GPU instancing: shader + quad unitario + VBO de instancias ────
+        _particleInstancedShader = CreateParticleInstancedShader();
+        _particleInstMvpLoc = GL.GetUniformLocation(_particleInstancedShader, "uMvp");
+        _particleInstRightLoc = GL.GetUniformLocation(_particleInstancedShader, "uCamRight");
+        _particleInstUpLoc = GL.GetUniformLocation(_particleInstancedShader, "uCamUp");
+        _particleInstTexLoc = GL.GetUniformLocation(_particleInstancedShader, "uTexture");
+        _particleInstHasTexLoc = GL.GetUniformLocation(_particleInstancedShader, "uHasTexture");
+        _particleInstSoftLoc = GL.GetUniformLocation(_particleInstancedShader, "uSoftParticles");
+        _particleInstDepthTexLoc = GL.GetUniformLocation(_particleInstancedShader, "uDepthTex");
+        _particleInstScreenSizeLoc = GL.GetUniformLocation(_particleInstancedShader, "uScreenSize");
+        _particleInstSoftRangeLoc = GL.GetUniformLocation(_particleInstancedShader, "uSoftRange");
+        _particleInstOpaqueTexLoc = GL.GetUniformLocation(_particleInstancedShader, "uOpaqueTexture");
+        _particleInstDistortionLoc = GL.GetUniformLocation(_particleInstancedShader, "uDistortionEnabled");
+        _particleInstDistortionStrengthLoc = GL.GetUniformLocation(_particleInstancedShader, "uDistortionStrength");
+        _particleInstRefractionStrengthLoc = GL.GetUniformLocation(_particleInstancedShader, "uRefractionStrength");
+
+        float[] particleUnitQuad =
+        {
+            -0.5f, -0.5f, 0f, 1f,
+             0.5f, -0.5f, 1f, 1f,
+             0.5f,  0.5f, 1f, 0f,
+            -0.5f, -0.5f, 0f, 1f,
+             0.5f,  0.5f, 1f, 0f,
+            -0.5f,  0.5f, 0f, 0f,
+        };
+        _particleUnitQuadVbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _particleUnitQuadVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, particleUnitQuad.Length * sizeof(float), particleUnitQuad, BufferUsageHint.StaticDraw);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+
+        _particleInstanceVbo = GL.GenBuffer();
+
+        _particleInstancedVao = GL.GenVertexArray();
+        GL.BindVertexArray(_particleInstancedVao);
+
+        // Atributos por-vértice (divisor 0): offset unitario + uv unitaria del quad compartido
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _particleUnitQuadVbo);
+        GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 16, 0);
+        GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 16, 8);
+
+        // Atributos por-instancia (divisor 1): un registro chico por partícula
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _particleInstanceVbo);
+        int pis = Unsafe.SizeOf<ParticleInstance>();
+        GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, pis, 0);   // center
+        GL.VertexAttribDivisor(2, 1);
+        GL.EnableVertexAttribArray(3); GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, pis, 12);  // size
+        GL.VertexAttribDivisor(3, 1);
+        GL.EnableVertexAttribArray(4); GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, pis, 16);  // color
+        GL.VertexAttribDivisor(4, 1);
+        GL.EnableVertexAttribArray(5); GL.VertexAttribPointer(5, 1, VertexAttribPointerType.Float, false, pis, 32);  // rotation
+        GL.VertexAttribDivisor(5, 1);
+        GL.EnableVertexAttribArray(6); GL.VertexAttribPointer(6, 4, VertexAttribPointerType.Float, false, pis, 36);  // uvRect
+        GL.VertexAttribDivisor(6, 1);
+        GL.EnableVertexAttribArray(7); GL.VertexAttribPointer(7, 2, VertexAttribPointerType.Float, false, pis, 52);  // pivot
+        GL.VertexAttribDivisor(7, 1);
+
+        GL.BindVertexArray(0);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+
         // Trail VAO (misma estructura que partículas)
         _trailVao = GL.GenVertexArray();
         _trailVbo = GL.GenBuffer();

@@ -282,6 +282,25 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int _particleSoftRangeLoc;
     private int _particleOpaqueTexLoc, _particleDistortionLoc, _particleDistortionStrengthLoc, _particleRefractionStrengthLoc;
 
+    // ── Particle GPU instancing ─────────────────────────────────────
+    // Partículas billboard "normales" (no stretched, no mesh): en vez de escribir 6 vértices
+    // por partícula desde la CPU cada frame, se sube 1 registro pequeño por partícula (instancia)
+    // y la GPU repite un quad unitario compartido via glDrawArraysInstanced. Mismo patrón que
+    // ya usa el motor para instanciar mallas (ver UploadInstanceMatrices en MeshDraws.cs).
+    // Los quads "stretched" (StretchedBillboard) siguen el camino viejo por vértice, porque su
+    // forma depende de la dirección de velocidad de cada partícula, no solo de centro+tamaño+rot.
+    private int _particleInstancedShader;
+    private int _particleInstancedVao, _particleUnitQuadVbo, _particleInstanceVbo;
+    private int _particleInstanceBufferCapacity;
+    private ParticleInstance[] _particleInstanceUploadBuffer = new ParticleInstance[256];
+    private int _particleInstMvpLoc, _particleInstRightLoc, _particleInstUpLoc;
+    private int _particleInstTexLoc, _particleInstHasTexLoc;
+    private int _particleInstSoftLoc, _particleInstDepthTexLoc, _particleInstScreenSizeLoc;
+    private int _particleInstSoftRangeLoc;
+    private int _particleInstOpaqueTexLoc, _particleInstDistortionLoc, _particleInstDistortionStrengthLoc, _particleInstRefractionStrengthLoc;
+    private readonly List<ParticleInstance> _particleInstances = new(4096);
+    private readonly List<ParticleInstance> _particleSortedInstances = new(4096);
+
     // ── Depth FBO para soft particles ─────────────────────────────
     private int _depthFbo, _depthTex;
     private int _depthFboWidth, _depthFboHeight;

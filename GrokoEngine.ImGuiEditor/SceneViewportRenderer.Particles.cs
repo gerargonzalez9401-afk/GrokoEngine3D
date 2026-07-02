@@ -29,6 +29,7 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
         var camUp = new Vector3(view.M12, view.M22, view.M32);
 
         _particleVerts.Clear();
+        _particleInstances.Clear();
         _particleRanges.Clear();
         _particleSortSlices.Clear();
         CollectParticleVerts(objects, camRight, camUp, cameraPosition);
@@ -38,7 +39,7 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
         _trailVerts.Clear();
         UpdateAndRenderTrails(objects, camRight, camUp);
 
-        if (_particleVerts.Count == 0 && _trailVerts.Count == 0) return;
+        if (_particleVerts.Count == 0 && _particleInstances.Count == 0 && _trailVerts.Count == 0) return;
 
         bool needsSoftParticles = _particleRanges.Any(r => r.Soft);
         bool needsDistortion = _particleRanges.Any(r => r.Distortion);
@@ -108,44 +109,97 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
         }
 
         // ── Dibujar partículas con soft particles ─────────────────
-        if (_particleVerts.Count > 0)
+        // Cada rango puede ser instanciado (billboard normal, GPU instancing) o legacy
+        // (stretched billboard, sigue subiendo 6 vértices por partícula) — se activa el
+        // programa/VAO correcto solo cuando cambia respecto al rango anterior.
+        if (_particleVerts.Count > 0 || _particleInstances.Count > 0)
         {
-            GL.UseProgram(_particleShader);
-            GL.UniformMatrix4(_particleMvpLoc, true, ref mvp);
-            GL.Uniform3(_particleRightLoc, camRight.X, camRight.Y, camRight.Z);
-            GL.Uniform3(_particleUpLoc, camUp.X, camUp.Y, camUp.Z);
-            GL.Uniform1(_particleTexLoc, 0);
-            GL.Uniform2(_particleScreenSizeLoc, (float)screenW, (float)screenH);
-            GL.Uniform1(_particleSoftRangeLoc, 0.15f);
+            int activeProgram = 0;
+            Matrix4 mvpLocal = mvp;
 
-            // Bind depth texture en unit 1
+            void ActivateLegacy()
+            {
+                if (activeProgram == _particleShader) return;
+                activeProgram = _particleShader;
+                GL.UseProgram(_particleShader);
+                GL.BindVertexArray(_particleVao);
+                GL.UniformMatrix4(_particleMvpLoc, true, ref mvpLocal);
+                GL.Uniform3(_particleRightLoc, camRight.X, camRight.Y, camRight.Z);
+                GL.Uniform3(_particleUpLoc, camUp.X, camUp.Y, camUp.Z);
+                GL.Uniform1(_particleTexLoc, 0);
+                GL.Uniform2(_particleScreenSizeLoc, (float)screenW, (float)screenH);
+                GL.Uniform1(_particleDepthTexLoc, 1);
+                GL.Uniform1(_particleOpaqueTexLoc, 2);
+            }
+
+            void ActivateInstanced()
+            {
+                if (activeProgram == _particleInstancedShader) return;
+                activeProgram = _particleInstancedShader;
+                GL.UseProgram(_particleInstancedShader);
+                GL.BindVertexArray(_particleInstancedVao);
+                GL.UniformMatrix4(_particleInstMvpLoc, true, ref mvpLocal);
+                GL.Uniform3(_particleInstRightLoc, camRight.X, camRight.Y, camRight.Z);
+                GL.Uniform3(_particleInstUpLoc, camUp.X, camUp.Y, camUp.Z);
+                GL.Uniform1(_particleInstTexLoc, 0);
+                GL.Uniform2(_particleInstScreenSizeLoc, (float)screenW, (float)screenH);
+                GL.Uniform1(_particleInstDepthTexLoc, 1);
+                GL.Uniform1(_particleInstOpaqueTexLoc, 2);
+            }
+
+            // Depth/opaque texture van en las mismas unidades para ambos programas
             GL.ActiveTexture(TextureUnit.Texture1);
             GL.BindTexture(TextureTarget.Texture2D, _depthTex);
-            GL.Uniform1(_particleDepthTexLoc, 1);
-            GL.Uniform1(_particleSoftLoc, w > 0 && h > 0 ? 1 : 0);
             GL.ActiveTexture(TextureUnit.Texture2);
             GL.BindTexture(TextureTarget.Texture2D, OpaqueTextureHandle);
-            GL.Uniform1(_particleOpaqueTexLoc, 2);
             GL.ActiveTexture(TextureUnit.Texture0);
-
-            GL.BindVertexArray(_particleVao);
 
             foreach (var range in _particleRanges)
             {
+                int softLoc, softRangeLoc, distortionLoc, distortionStrengthLoc, refractionStrengthLoc, hasTexLoc;
+                if (range.Instanced)
+                {
+                    ActivateInstanced();
+                    softLoc = _particleInstSoftLoc; softRangeLoc = _particleInstSoftRangeLoc;
+                    distortionLoc = _particleInstDistortionLoc;
+                    distortionStrengthLoc = _particleInstDistortionStrengthLoc;
+                    refractionStrengthLoc = _particleInstRefractionStrengthLoc;
+                    hasTexLoc = _particleInstHasTexLoc;
+                }
+                else
+                {
+                    ActivateLegacy();
+                    softLoc = _particleSoftLoc; softRangeLoc = _particleSoftRangeLoc;
+                    distortionLoc = _particleDistortionLoc;
+                    distortionStrengthLoc = _particleDistortionStrengthLoc;
+                    refractionStrengthLoc = _particleRefractionStrengthLoc;
+                    hasTexLoc = _particleHasTexLoc;
+                }
+
                 ApplyParticleBlendMode(range.Blend);
-                GL.Uniform1(_particleSoftRangeLoc, range.SoftRange);
-                GL.Uniform1(_particleSoftLoc, range.Soft && w > 0 && h > 0 ? 1 : 0);
+                GL.Uniform1(softRangeLoc, range.SoftRange);
+                GL.Uniform1(softLoc, range.Soft && w > 0 && h > 0 ? 1 : 0);
                 bool distortionEnabled = range.Distortion && OpaqueTextureHandle != 0 && screenW > 0 && screenH > 0;
-                GL.Uniform1(_particleDistortionLoc, distortionEnabled ? 1 : 0);
-                GL.Uniform1(_particleDistortionStrengthLoc, distortionEnabled ? range.DistortionStrength : 0f);
-                GL.Uniform1(_particleRefractionStrengthLoc, distortionEnabled ? range.RefractionStrength : 0f);
+                GL.Uniform1(distortionLoc, distortionEnabled ? 1 : 0);
+                GL.Uniform1(distortionStrengthLoc, distortionEnabled ? range.DistortionStrength : 0f);
+                GL.Uniform1(refractionStrengthLoc, distortionEnabled ? range.RefractionStrength : 0f);
                 string? texPath = range.TexturePath;
                 bool hasTex = !string.IsNullOrWhiteSpace(texPath) && System.IO.File.Exists(texPath);
                 int texId = hasTex ? GetTexture(texPath!) : 0;
-                GL.Uniform1(_particleHasTexLoc, hasTex ? 1 : 0);
+                GL.Uniform1(hasTexLoc, hasTex ? 1 : 0);
                 GL.BindTexture(TextureTarget.Texture2D, texId);
-                TrackParticleDraw(range.Count);
-                GL.DrawArrays(PrimitiveType.Triangles, range.Start, range.Count);
+
+                if (range.Instanced)
+                {
+                    UploadParticleInstanceRange(range.Start, range.Count);
+                    TrackParticleDraw(range.Count * 6);
+                    GL.DrawArraysInstanced(PrimitiveType.Triangles, 0, 6, range.Count);
+                }
+                else
+                {
+                    TrackParticleDraw(range.Count);
+                    GL.DrawArrays(PrimitiveType.Triangles, range.Start, range.Count);
+                }
             }
 
             GL.ActiveTexture(TextureUnit.Texture2);
@@ -161,6 +215,28 @@ private void DrawParticles(IReadOnlyList<GameObject> objects, ref Matrix4 view, 
         GL.DepthMask(true);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         GL.Disable(EnableCap.Blend);
+    }
+
+/// <summary>Sube (a offset 0, siguiendo el mismo patrón que UploadInstanceMatrices para mallas) el
+/// subrango [start,start+count) de _particleInstances al VBO de instancias, listo para
+/// glDrawArraysInstanced.</summary>
+private void UploadParticleInstanceRange(int start, int count)
+    {
+        if (count <= 0) return;
+        if (_particleInstanceUploadBuffer.Length < count)
+            Array.Resize(ref _particleInstanceUploadBuffer, count);
+        for (int i = 0; i < count; i++)
+            _particleInstanceUploadBuffer[i] = _particleInstances[start + i];
+
+        int bytes = count * Unsafe.SizeOf<ParticleInstance>();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _particleInstanceVbo);
+        if (bytes > _particleInstanceBufferCapacity)
+        {
+            _particleInstanceBufferCapacity = Math.Max(bytes, _particleInstanceBufferCapacity == 0 ? 16384 : _particleInstanceBufferCapacity * 2);
+            GL.BufferData(BufferTarget.ArrayBuffer, _particleInstanceBufferCapacity, IntPtr.Zero, BufferUsageHint.DynamicDraw);
+        }
+        GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, bytes, _particleInstanceUploadBuffer);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
     }
 
 private static void ApplyParticleBlendMode(ParticleBlendMode mode)
@@ -276,35 +352,40 @@ private void CollectParticleVerts(IReadOnlyList<GameObject> objects, Vector3 rig
                     ? GrokoEngine.ParticleSystem.EvaluateParticleCurve(ps.SizeOverLifetimeCurve, p.NormalizedAge, ps.SizeCurveMid, ps.SizeCurveMidValue)
                     : 1f;
 
-                int start = _particleVerts.Count;
-                if (ps.StretchedBillboard || ps.RenderMode == ParticleRenderMode.StretchedBillboard)
+                bool stretched = ps.StretchedBillboard || ps.RenderMode == ParticleRenderMode.StretchedBillboard;
+                if (stretched)
+                {
+                    int start = _particleVerts.Count;
                     AddStretchedQuad(p, wp, renderRight, renderUp, color, ps.StretchSpeedScale, ps.StretchLengthScale,
                                      ps.SheetColumns, ps.SheetRows, ps.SheetFrameRate, sizeMultiplier,
                                      ps.AllowRoll, ps.FlipU, ps.FlipV, ps.PivotX, ps.PivotY);
+                    int count = _particleVerts.Count - start;
+                    if (count > 0)
+                    {
+                        _particleSortSlices.Add(new ParticleSortSlice(
+                            surface.TexturePath, start, count, ps.BlendMode, ps.SoftParticles,
+                            Math.Max(0.001f, ps.SoftParticleRange), queue, ps.SortingLayer, ps.OrderInLayer, ps.SortingFudge,
+                            ps.SortParticles ? ps.SortMode : ParticleSortMode.None, dist, p.Age, insertion++,
+                            distortion, distortionStrength, refractionStrength, Instanced: false));
+                    }
+                }
                 else
-                    AddParticleQuad(p, wp, renderRight, renderUp, ps.SheetColumns, ps.SheetRows, ps.SheetFrameRate,
-                                    color, sizeMultiplier, ps.AllowRoll, ps.FlipU, ps.FlipV, ps.PivotX, ps.PivotY);
-                int count = _particleVerts.Count - start;
-                if (count > 0)
                 {
+                    var uvRect = ComputeSheetUvRect(p, ps.SheetColumns, ps.SheetRows, ps.SheetFrameRate, ps.FlipU, ps.FlipV);
+                    float rot = ps.AllowRoll ? p.Rotation : 0f;
+                    int instStart = _particleInstances.Count;
+                    _particleInstances.Add(new ParticleInstance(
+                        new Vector3(wp.X, wp.Y, wp.Z),
+                        p.CurrentSize * sizeMultiplier,
+                        color,
+                        rot,
+                        uvRect,
+                        new Vector2(ps.PivotX, ps.PivotY)));
                     _particleSortSlices.Add(new ParticleSortSlice(
-                        surface.TexturePath,
-                        start,
-                        count,
-                        ps.BlendMode,
-                        ps.SoftParticles,
-                        Math.Max(0.001f, ps.SoftParticleRange),
-                        queue,
-                        ps.SortingLayer,
-                        ps.OrderInLayer,
-                        ps.SortingFudge,
-                        ps.SortParticles ? ps.SortMode : ParticleSortMode.None,
-                        dist,
-                        p.Age,
-                        insertion++,
-                        distortion,
-                        distortionStrength,
-                        refractionStrength));
+                        surface.TexturePath, instStart, 1, ps.BlendMode, ps.SoftParticles,
+                        Math.Max(0.001f, ps.SoftParticleRange), queue, ps.SortingLayer, ps.OrderInLayer, ps.SortingFudge,
+                        ps.SortParticles ? ps.SortMode : ParticleSortMode.None, dist, p.Age, insertion++,
+                        distortion, distortionStrength, refractionStrength, Instanced: true));
                 }
             }
 
@@ -319,14 +400,25 @@ private void SortParticleSlicesForTransparentPass()
 
         _particleSortSlices.Sort(CompareParticleSortSlices);
         _particleSortedVerts.Clear();
+        _particleSortedInstances.Clear();
         _particleRanges.Clear();
 
         ParticleRenderRange? current = null;
         foreach (var slice in _particleSortSlices)
         {
-            int start = _particleSortedVerts.Count;
-            for (int i = 0; i < slice.Count; i++)
-                _particleSortedVerts.Add(_particleVerts[slice.Start + i]);
+            int start;
+            if (slice.Instanced)
+            {
+                start = _particleSortedInstances.Count;
+                for (int i = 0; i < slice.Count; i++)
+                    _particleSortedInstances.Add(_particleInstances[slice.Start + i]);
+            }
+            else
+            {
+                start = _particleSortedVerts.Count;
+                for (int i = 0; i < slice.Count; i++)
+                    _particleSortedVerts.Add(_particleVerts[slice.Start + i]);
+            }
 
             if (current.HasValue && CanMergeParticleRange(current.Value, slice))
             {
@@ -349,7 +441,8 @@ private void SortParticleSlicesForTransparentPass()
                     slice.SortingFudge,
                     slice.Distortion,
                     slice.DistortionStrength,
-                    slice.RefractionStrength);
+                    slice.RefractionStrength,
+                    slice.Instanced);
                 _particleRanges.Add(range);
                 current = range;
             }
@@ -357,6 +450,8 @@ private void SortParticleSlicesForTransparentPass()
 
         _particleVerts.Clear();
         _particleVerts.AddRange(_particleSortedVerts);
+        _particleInstances.Clear();
+        _particleInstances.AddRange(_particleSortedInstances);
     }
 
 private static int CompareParticleSortSlices(ParticleSortSlice a, ParticleSortSlice b)
@@ -383,7 +478,8 @@ private static int CompareParticleSortSlices(ParticleSortSlice a, ParticleSortSl
 
 private static bool CanMergeParticleRange(ParticleRenderRange range, ParticleSortSlice slice)
     {
-        return string.Equals(range.TexturePath, slice.TexturePath, StringComparison.OrdinalIgnoreCase) &&
+        return range.Instanced == slice.Instanced &&
+               string.Equals(range.TexturePath, slice.TexturePath, StringComparison.OrdinalIgnoreCase) &&
                range.Blend == slice.Blend &&
                range.Soft == slice.Soft &&
                Math.Abs(range.SoftRange - slice.SoftRange) < 0.0001f &&
@@ -796,6 +892,25 @@ private static MiMotor.Mathematics.Vector3 RotateVec3(MiMotor.Mathematics.Vector
 private void CollectParticleVerts(List<GameObject> objects, Vector3 right, Vector3 up, Vector3 cameraPosition)
         => CollectParticleVerts((IReadOnlyList<GameObject>)objects, right, up, cameraPosition);
 
+private static Vector4 ComputeSheetUvRect(Particle p, int sheetCols, int sheetRows, float sheetFps, bool flipU, bool flipV)
+    {
+        float u0 = 0f, v0 = 0f, u1 = 1f, v1 = 1f;
+        if (sheetCols > 1 || sheetRows > 1)
+        {
+            int totalFrames = sheetCols * sheetRows;
+            int frame = (int)(p.Age * sheetFps) % Math.Max(1, totalFrames);
+            int col = frame % sheetCols;
+            int row = frame / sheetCols;
+            float fw = 1f / sheetCols;
+            float fh = 1f / sheetRows;
+            u0 = col * fw; u1 = u0 + fw;
+            v0 = row * fh; v1 = v0 + fh;
+        }
+        if (flipU) (u0, u1) = (u1, u0);
+        if (flipV) (v0, v1) = (v1, v0);
+        return new Vector4(u0, v0, u1, v1);
+    }
+
 private void AddParticleQuad(Particle p, MiMotor.Mathematics.Vector3 worldPos, Vector3 right, Vector3 up,
                                    int sheetCols, int sheetRows, float sheetFps,
                                    Vector4 colorOverride = default, float sizeMultiplier = 1f,
@@ -815,21 +930,8 @@ private void AddParticleQuad(Particle p, MiMotor.Mathematics.Vector3 worldPos, V
         float y1 = half - py;
         float rot = allowRoll ? p.Rotation : 0f;
 
-        // Texture sheet: calcular UVs del fotograma actual
-        float u0 = 0f, v0 = 0f, u1 = 1f, v1 = 1f;
-        if (sheetCols > 1 || sheetRows > 1)
-        {
-            int totalFrames = sheetCols * sheetRows;
-            int frame = (int)(p.Age * sheetFps) % Math.Max(1, totalFrames);
-            int col = frame % sheetCols;
-            int row = frame / sheetCols;
-            float fw = 1f / sheetCols;
-            float fh = 1f / sheetRows;
-            u0 = col * fw; u1 = u0 + fw;
-            v0 = row * fh; v1 = v0 + fh;
-        }
-        if (flipU) (u0, u1) = (u1, u0);
-        if (flipV) (v0, v1) = (v1, v0);
+        var uvRect = ComputeSheetUvRect(p, sheetCols, sheetRows, sheetFps, flipU, flipV);
+        float u0 = uvRect.X, v0 = uvRect.Y, u1 = uvRect.Z, v1 = uvRect.W;
 
         var wp2 = new Vector3(worldPos.X, worldPos.Y, worldPos.Z);
         _particleVerts.Add(new ParticleVertex(wp2, new Vector2(x0, y0), color, rot, new Vector2(u0, v1), 0f));
@@ -1038,75 +1140,124 @@ private static int CreateParticleShader()
                 gl_Position = vec4(world, 1.0) * uMvp;
             }
             """;
-        const string frag = """
-            #version 330 core
-            in  vec4 vColor;
-            in  vec2 vUv;
-            out vec4 outColor;
-            uniform sampler2D uTexture;
-            uniform int       uHasTexture;
-            uniform int       uSoftParticles;
-            uniform sampler2D uDepthTex;
-            uniform sampler2D uOpaqueTexture;
-            uniform vec2      uScreenSize;
-            uniform float     uSoftRange;
-            uniform int       uDistortionEnabled;
-            uniform float     uDistortionStrength;
-            uniform float     uRefractionStrength;
+        int v = CompileShader(ShaderType.VertexShader, vert);
+        int f = CompileShader(ShaderType.FragmentShader, ParticleFragmentShaderSource);
+        int p = GL.CreateProgram();
+        GL.AttachShader(p, v); GL.AttachShader(p, f);
+        GL.LinkProgram(p);
+        GL.GetProgram(p, GetProgramParameterName.LinkStatus, out int ok);
+        if (ok == 0) throw new InvalidOperationException(GL.GetProgramInfoLog(p));
+        GL.DetachShader(p, v); GL.DetachShader(p, f);
+        GL.DeleteShader(v); GL.DeleteShader(f);
+        return p;
+    }
 
-            float LinearizeDepth(float depth)
+private const string ParticleFragmentShaderSource = """
+        #version 330 core
+        in  vec4 vColor;
+        in  vec2 vUv;
+        out vec4 outColor;
+        uniform sampler2D uTexture;
+        uniform int       uHasTexture;
+        uniform int       uSoftParticles;
+        uniform sampler2D uDepthTex;
+        uniform sampler2D uOpaqueTexture;
+        uniform vec2      uScreenSize;
+        uniform float     uSoftRange;
+        uniform int       uDistortionEnabled;
+        uniform float     uDistortionStrength;
+        uniform float     uRefractionStrength;
+
+        float LinearizeDepth(float depth)
+        {
+            float near = 0.01;
+            float far  = 2000.0;
+            float z    = depth * 2.0 - 1.0;
+            return (2.0 * near * far) / (far + near - z * (far - near));
+        }
+
+        void main()
+        {
+            vec4 texColor;
+            if (uHasTexture != 0)
+                texColor = texture(uTexture, vUv);
+            else
             {
-                float near = 0.01;
-                float far  = 2000.0;
-                float z    = depth * 2.0 - 1.0;
-                return (2.0 * near * far) / (far + near - z * (far - near));
+                // Sin textura: disco suave con glow (en vez de cuadrado duro) — partículas vivas
+                float d = length(vUv - vec2(0.5)) * 2.0;          // 0 centro, 1 borde
+                float soft = smoothstep(1.0, 0.0, d);             // borde difuminado
+                soft *= soft;                                     // núcleo más brillante
+                texColor = vec4(1.0, 1.0, 1.0, soft);
+            }
+            outColor = vColor * texColor;
+
+            // Soft particles: fade when intersecting geometry
+            if (uSoftParticles != 0 && uScreenSize.x > 0.0)
+            {
+                vec2 screenUv    = gl_FragCoord.xy / uScreenSize;
+                float sceneDepth = LinearizeDepth(texture(uDepthTex, screenUv).r);
+                float partDepth  = LinearizeDepth(gl_FragCoord.z);
+                float diff       = sceneDepth - partDepth;
+                float fade       = clamp(diff / uSoftRange, 0.0, 1.0);
+                outColor.a      *= fade;
             }
 
+            if (uDistortionEnabled != 0 && uScreenSize.x > 0.0 && outColor.a > 0.001)
+            {
+                vec2 screenUv = gl_FragCoord.xy / uScreenSize;
+                vec2 centered = vUv * 2.0 - 1.0;
+                float radial = clamp(1.0 - length(centered), 0.0, 1.0);
+                vec2 texNoise = texColor.rg * 2.0 - 1.0;
+                vec2 swirl = vec2(-centered.y, centered.x) * radial;
+                vec2 offset = (texNoise * 0.65 + swirl * 0.35) * uDistortionStrength * 0.025 * outColor.a;
+                vec3 sceneColor = texture(uOpaqueTexture, clamp(screenUv + offset, vec2(0.001), vec2(0.999))).rgb;
+                float refract = clamp(uRefractionStrength, 0.0, 2.0) * outColor.a;
+                outColor.rgb = mix(outColor.rgb, sceneColor + outColor.rgb * 0.18, clamp(refract, 0.0, 1.0));
+                outColor.a = max(outColor.a * 0.35, radial * clamp(abs(uDistortionStrength), 0.0, 1.0) * 0.08);
+            }
+
+            if (outColor.a < 0.01) discard;
+        }
+        """;
+
+/// <summary>
+/// Shader instanciado para partículas billboard estándar: la CPU sube 1 registro chico por
+/// partícula (centro, tamaño, color, rotación, uv-rect, pivot) y la GPU repite un quad unitario
+/// compartido (2 atributos por-vértice, divisor 0) multiplicado por instancia (divisor 1) via
+/// glDrawArraysInstanced. Reemplaza escribir 6 vértices duplicados por partícula desde la CPU.
+/// </summary>
+private static int CreateParticleInstancedShader()
+    {
+        const string vert = """
+            #version 330 core
+            layout(location=0) in vec2  aUnitOffset;   // por-vértice (divisor 0): -0.5..0.5
+            layout(location=1) in vec2  aUnitUv;        // por-vértice (divisor 0): 0..1
+            layout(location=2) in vec3  iCenter;        // por-instancia (divisor 1)
+            layout(location=3) in float iSize;
+            layout(location=4) in vec4  iColor;
+            layout(location=5) in float iRotation;
+            layout(location=6) in vec4  iUvRect;        // u0,v0,u1,v1
+            layout(location=7) in vec2  iPivot;
+            uniform mat4 uMvp;
+            uniform vec3 uCamRight;
+            uniform vec3 uCamUp;
+            out vec4 vColor;
+            out vec2 vUv;
             void main()
             {
-                vec4 texColor;
-                if (uHasTexture != 0)
-                    texColor = texture(uTexture, vUv);
-                else
-                {
-                    // Sin textura: disco suave con glow (en vez de cuadrado duro) — partículas vivas
-                    float d = length(vUv - vec2(0.5)) * 2.0;          // 0 centro, 1 borde
-                    float soft = smoothstep(1.0, 0.0, d);             // borde difuminado
-                    soft *= soft;                                     // núcleo más brillante
-                    texColor = vec4(1.0, 1.0, 1.0, soft);
-                }
-                outColor = vColor * texColor;
-
-                // Soft particles: fade when intersecting geometry
-                if (uSoftParticles != 0 && uScreenSize.x > 0.0)
-                {
-                    vec2 screenUv    = gl_FragCoord.xy / uScreenSize;
-                    float sceneDepth = LinearizeDepth(texture(uDepthTex, screenUv).r);
-                    float partDepth  = LinearizeDepth(gl_FragCoord.z);
-                    float diff       = sceneDepth - partDepth;
-                    float fade       = clamp(diff / uSoftRange, 0.0, 1.0);
-                    outColor.a      *= fade;
-                }
-
-                if (uDistortionEnabled != 0 && uScreenSize.x > 0.0 && outColor.a > 0.001)
-                {
-                    vec2 screenUv = gl_FragCoord.xy / uScreenSize;
-                    vec2 centered = vUv * 2.0 - 1.0;
-                    float radial = clamp(1.0 - length(centered), 0.0, 1.0);
-                    vec2 texNoise = texColor.rg * 2.0 - 1.0;
-                    vec2 swirl = vec2(-centered.y, centered.x) * radial;
-                    vec2 offset = (texNoise * 0.65 + swirl * 0.35) * uDistortionStrength * 0.025 * outColor.a;
-                    vec3 sceneColor = texture(uOpaqueTexture, clamp(screenUv + offset, vec2(0.001), vec2(0.999))).rgb;
-                    float refract = clamp(uRefractionStrength, 0.0, 2.0) * outColor.a;
-                    outColor.rgb = mix(outColor.rgb, sceneColor + outColor.rgb * 0.18, clamp(refract, 0.0, 1.0));
-                    outColor.a = max(outColor.a * 0.35, radial * clamp(abs(uDistortionStrength), 0.0, 1.0) * 0.08);
-                }
-
-                if (outColor.a < 0.01) discard;
+                vec2 local = aUnitOffset * iSize - iPivot * iSize;
+                float c = cos(iRotation);
+                float s = sin(iRotation);
+                vec2 rotOff = vec2(c * local.x - s * local.y,
+                                   s * local.x + c * local.y);
+                vec3 world = iCenter + uCamRight * rotOff.x + uCamUp * rotOff.y;
+                vColor      = iColor;
+                vUv         = vec2(mix(iUvRect.x, iUvRect.z, aUnitUv.x), mix(iUvRect.y, iUvRect.w, aUnitUv.y));
+                gl_Position = vec4(world, 1.0) * uMvp;
             }
             """;
         int v = CompileShader(ShaderType.VertexShader, vert);
-        int f = CompileShader(ShaderType.FragmentShader, frag);
+        int f = CompileShader(ShaderType.FragmentShader, ParticleFragmentShaderSource);
         int p = GL.CreateProgram();
         GL.AttachShader(p, v); GL.AttachShader(p, f);
         GL.LinkProgram(p);
@@ -1118,6 +1269,9 @@ private static int CreateParticleShader()
     }
 
 private readonly record struct ParticleVertex(Vector3 Center, Vector2 Offset, Vector4 Color, float Rotation, Vector2 Uv, float Absolute);
+
+/// <summary>Un registro por partícula para el camino de GPU instancing (billboard estándar, no stretched).</summary>
+private readonly record struct ParticleInstance(Vector3 Center, float Size, Vector4 Color, float Rotation, Vector4 UvRect, Vector2 Pivot);
 
 private readonly record struct ParticleRenderSurface(Vector4 Tint, string? TexturePath);
 
@@ -1134,7 +1288,8 @@ private readonly record struct ParticleRenderRange(
     int SortingFudge,
     bool Distortion,
     float DistortionStrength,
-    float RefractionStrength);
+    float RefractionStrength,
+    bool Instanced);
 
 private readonly record struct ParticleSortSlice(
     string? TexturePath,
@@ -1153,7 +1308,8 @@ private readonly record struct ParticleSortSlice(
     int Insertion,
     bool Distortion,
     float DistortionStrength,
-    float RefractionStrength);
+    float RefractionStrength,
+    bool Instanced);
 
 private readonly record struct ParticleVisualMesh(
     string MeshPath,
