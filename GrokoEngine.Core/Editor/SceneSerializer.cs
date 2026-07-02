@@ -331,6 +331,9 @@ namespace GrokoEngine
                     data.Fields["AngularDiameter"] = dl.AngularDiameter.ToString(CultureInfo.InvariantCulture);
                     data.Fields["GodRays"] = dl.GodRays.ToString();
                     data.Fields["GodRaysStrength"] = dl.GodRaysStrength.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ContactShadows"] = dl.ContactShadows.ToString();
+                    data.Fields["ContactShadowLength"] = dl.ContactShadowLength.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ContactShadowSamples"] = dl.ContactShadowSamples.ToString(CultureInfo.InvariantCulture);
                     return data;
                 case PointLight pl:
                     data.Fields["Intensity"] = pl.Intensity.ToString(CultureInfo.InvariantCulture);

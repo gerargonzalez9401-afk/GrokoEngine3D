@@ -38,6 +38,16 @@ namespace GrokoEngine
         private float  _godRaysStrength = 1f;
         public float   GodRaysStrength { get => _godRaysStrength; set => _godRaysStrength = Math.Clamp(value, 0f, 5f); }
 
+        // ── Contact Shadows (screen-space, marcha hacia el sol en el depth buffer de post-proceso) ──
+        // Sombreado de contacto: capta el detalle fino (pies/objetos pegados al suelo) que el shadow
+        // map normal pierde por resolucion/bias, sin costo extra de shadow map.
+        public bool    ContactShadows { get; set; } = false;
+        private float  _contactShadowLength = 0.012f;
+        /// <summary>Longitud de la marcha en espacio de pantalla (UV 0..1). Valores tipicos 0.005-0.03.</summary>
+        public float   ContactShadowLength { get => _contactShadowLength; set => _contactShadowLength = Math.Clamp(value, 0.001f, 0.1f); }
+        private int    _contactShadowSamples = 8;
+        public int     ContactShadowSamples { get => _contactShadowSamples; set => _contactShadowSamples = Math.Clamp(value, 4, 24); }
+
         /// <summary>Color final del sol = Filter(R,G,B) * tinte de temperatura (si UseTemperature).</summary>
         public Vector3 GetEffectiveColor()
         {

@@ -889,6 +889,11 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneTarget.GodRaySunU = sceneRenderer.SunScreenUv.X;
         sceneTarget.GodRaySunV = sceneRenderer.SunScreenUv.Y;
         sceneTarget.GodRayStrength = sceneRenderer.SunGodRaysStrength;
+        sceneTarget.ContactShadowsEnabled = depthTextureActive && sceneRenderer.SunContactShadowsActive;
+        sceneTarget.ContactShadowSunU = sceneRenderer.SunScreenUv.X;
+        sceneTarget.ContactShadowSunV = sceneRenderer.SunScreenUv.Y;
+        sceneTarget.ContactShadowLength = sceneRenderer.SunContactShadowLength;
+        sceneTarget.ContactShadowSamples = sceneRenderer.SunContactShadowSamples;
         long postProcessStart = EditorProfiler.Timestamp();
         sceneTarget.ApplyPostProcess(postSettings);
         profiler.SamplePostProcess(EditorProfiler.ElapsedMs(postProcessStart));
@@ -968,6 +973,11 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         gamePreviewTarget.GodRaySunU = sceneRenderer.SunScreenUv.X;
         gamePreviewTarget.GodRaySunV = sceneRenderer.SunScreenUv.Y;
         gamePreviewTarget.GodRayStrength = sceneRenderer.SunGodRaysStrength;
+        gamePreviewTarget.ContactShadowsEnabled = depthTextureActive && sceneRenderer.SunContactShadowsActive;
+        gamePreviewTarget.ContactShadowSunU = sceneRenderer.SunScreenUv.X;
+        gamePreviewTarget.ContactShadowSunV = sceneRenderer.SunScreenUv.Y;
+        gamePreviewTarget.ContactShadowLength = sceneRenderer.SunContactShadowLength;
+        gamePreviewTarget.ContactShadowSamples = sceneRenderer.SunContactShadowSamples;
         gamePreviewTarget.ApplyPostProcess(postSettings);
     }
 

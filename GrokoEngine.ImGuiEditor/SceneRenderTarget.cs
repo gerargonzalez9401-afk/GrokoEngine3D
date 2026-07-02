@@ -90,6 +90,16 @@ internal sealed partial class SceneRenderTarget : IDisposable
     public float GodRayStrength { get; set; } = 1f;
     private int uGodRaysEnabledLocation, uGodRaySunLocation, uGodRayStrengthLocation;
 
+    // Contact Shadows (screen-space, DirectionalLight.ContactShadows): marcha en el depth buffer
+    // hacia la MISMA posicion de pantalla del sol que usan los God Rays (reutilizada, no hace
+    // falta reconstruir matrices en el post-shader).
+    public bool ContactShadowsEnabled { get; set; } = false;
+    public float ContactShadowSunU { get; set; }
+    public float ContactShadowSunV { get; set; }
+    public float ContactShadowLength { get; set; } = 0.012f;
+    public int ContactShadowSamples { get; set; } = 8;
+    private int uContactShadowsEnabledLocation, uContactShadowSunLocation, uContactShadowLengthLocation, uContactShadowSamplesLocation;
+
     public SceneRenderTarget()
     {
         framebuffer = GL.GenFramebuffer();

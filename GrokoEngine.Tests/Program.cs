@@ -53,6 +53,7 @@ internal static class Program
             ("Animator any state transition fires from trigger", AnimatorAnyStateTransitionFiresFromTrigger),
             ("Animator transition offset starts state mid clip", AnimatorTransitionOffsetStartsStateMidClip),
             ("Animator interruption switches to higher priority transition mid fade", AnimatorInterruptionSwitchesStateMidFade),
+            ("SceneSerializer preserves contact shadow settings", SceneSerializerPreservesContactShadowSettings),
             ("PhysicsEngine fires trigger exit when other object destroyed", PhysicsEngineFiresTriggerExitWhenOtherObjectDestroyed),
             ("PhysicsEngine fires trigger exit when collider disabled mid play", PhysicsEngineFiresTriggerExitWhenColliderDisabledMidPlay),
             ("Terrain samples height bilinear", TerrainSamplesHeightBilinear),
@@ -1895,6 +1896,25 @@ internal static class Program
 
         AssertEqual(1, sensorEvents.TriggerExitCount, "trigger exit sensor");
         AssertEqual(1, playerEvents.TriggerExitCount, "trigger exit player");
+    }
+
+    private static void SceneSerializerPreservesContactShadowSettings()
+    {
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets"));
+        var obj = new GameObject { Name = "Sun" };
+        var dl = obj.AddComponent<DirectionalLight>();
+        dl.ContactShadows = true;
+        dl.ContactShadowLength = 0.02f;
+        dl.ContactShadowSamples = 12;
+
+        string json = SceneSerializer.Serialize(new[] { obj });
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts);
+        var loadedDl = loaded[0].GetComponent<DirectionalLight>()!;
+
+        AssertTrue(loadedDl.ContactShadows, "contact shadows flag restored");
+        AssertNear(0.02f, loadedDl.ContactShadowLength, "contact shadow length restored");
+        AssertEqual(12, loadedDl.ContactShadowSamples, "contact shadow samples restored");
     }
 
     private static void PhysicsEngineFiresTriggerExitWhenOtherObjectDestroyed()

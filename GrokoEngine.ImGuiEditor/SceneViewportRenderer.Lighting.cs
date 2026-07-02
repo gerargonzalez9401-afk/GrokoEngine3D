@@ -12,12 +12,19 @@ internal sealed partial class SceneViewportRenderer
     public bool SunGodRaysActive { get; private set; }
     public float SunGodRaysStrength { get; private set; }
     public Vector3 SunGodRayColor { get; private set; }
+    // Contact Shadows (screen-space): reutiliza la MISMA posicion en pantalla del sol que God
+    // Rays (ya calculada con la MVP real) como direccion de marcha hacia la luz, asi que no hace
+    // falta reconstruir matrices dentro del shader de post-proceso.
+    public bool SunContactShadowsActive { get; private set; }
+    public float SunContactShadowLength { get; private set; }
+    public int SunContactShadowSamples { get; private set; }
 
     private void ComputeSunScreenPosition(IReadOnlyList<GameObject> objects, Vector3 eye, Matrix4 mvp, Vector3 camFront)
     {
         SunGodRaysActive = false;
+        SunContactShadowsActive = false;
         var sun = FindPrimaryDirectionalLight(objects);
-        if (sun == null || !sun.GodRays || sun.Intensity <= 0.0001f)
+        if (sun == null || sun.Intensity <= 0.0001f)
             return;
         // El sol en el cielo esta en la direccion OPUESTA a la que viaja la luz; debe estar delante.
         Vector3 sunSky = (ToTk(sun.GetNormalizedDirection()).Normalized() * -1f);
@@ -27,9 +34,18 @@ internal sealed partial class SceneViewportRenderer
         if (clip.W <= 0.0001f)
             return;
         SunScreenUv = new Vector2((clip.X / clip.W) * 0.5f + 0.5f, (clip.Y / clip.W) * 0.5f + 0.5f);
-        SunGodRaysActive = true;
-        SunGodRaysStrength = sun.GodRaysStrength;
-        SunGodRayColor = ToTk(sun.GetEffectiveColor());
+        if (sun.GodRays)
+        {
+            SunGodRaysActive = true;
+            SunGodRaysStrength = sun.GodRaysStrength;
+            SunGodRayColor = ToTk(sun.GetEffectiveColor());
+        }
+        if (sun.ContactShadows)
+        {
+            SunContactShadowsActive = true;
+            SunContactShadowLength = sun.ContactShadowLength;
+            SunContactShadowSamples = sun.ContactShadowSamples;
+        }
     }
 
     private void CollectFrameLighting(IReadOnlyList<GameObject> objects, Vector3 cameraPosition)

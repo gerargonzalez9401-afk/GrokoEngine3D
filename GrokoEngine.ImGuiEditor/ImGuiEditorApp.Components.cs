@@ -1204,6 +1204,12 @@ internal sealed partial class ImGuiEditorApp
                     DrawCheckRow("God Rays", dl.GodRays, v => dl.GodRays = v);
                     if (dl.GodRays)
                         DrawFloat("God Rays Strength", dl.GodRaysStrength, v => dl.GodRaysStrength = v, 0.01f, 0f, 5f);
+                    DrawCheckRow("Contact Shadows", dl.ContactShadows, v => dl.ContactShadows = v);
+                    if (dl.ContactShadows)
+                    {
+                        DrawFloat("Contact Shadow Length", dl.ContactShadowLength, v => dl.ContactShadowLength = v, 0.001f, 0.001f, 0.1f);
+                        DrawInt("Contact Shadow Samples", dl.ContactShadowSamples, v => dl.ContactShadowSamples = v, 1f, 4, 24);
+                    }
                     DrawCheckRow("Shadows", dl.Shadows, v => dl.Shadows = v);
                     DrawFloat("Shadow Strength", dl.ShadowStrength, v => dl.ShadowStrength = v, 0.01f, 0f, 1f);
                     break;

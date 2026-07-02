@@ -80,6 +80,10 @@ internal sealed partial class SceneRenderTarget
         SetUniform(uGodRaysEnabledLocation, GodRaysEnabled && DepthTextureEnabled ? 1 : 0);
         SetUniform(uGodRaySunLocation, GodRaySunU, GodRaySunV);
         SetUniform(uGodRayStrengthLocation, GodRayStrength);
+        SetUniform(uContactShadowsEnabledLocation, ContactShadowsEnabled && DepthTextureEnabled ? 1 : 0);
+        SetUniform(uContactShadowSunLocation, ContactShadowSunU, ContactShadowSunV);
+        SetUniform(uContactShadowLengthLocation, ContactShadowLength);
+        SetUniform(uContactShadowSamplesLocation, Math.Clamp(ContactShadowSamples, 4, 24));
         SetUniform(uBloomStrengthLocation, bloomStrength);
         SetUniform(uBloomThresholdLocation, bloomThreshold);
         SetUniform(uBloomScatterLocation, bloomScatter);
@@ -171,6 +175,10 @@ internal sealed partial class SceneRenderTarget
         uGodRayStrengthLocation = GL.GetUniformLocation(postShader, "uGodRayStrength");
         uStopNaNsLocation = GL.GetUniformLocation(postShader, "uStopNaNs");
         uDitheringLocation = GL.GetUniformLocation(postShader, "uDithering");
+        uContactShadowsEnabledLocation = GL.GetUniformLocation(postShader, "uContactShadowsEnabled");
+        uContactShadowSunLocation = GL.GetUniformLocation(postShader, "uContactShadowSun");
+        uContactShadowLengthLocation = GL.GetUniformLocation(postShader, "uContactShadowLength");
+        uContactShadowSamplesLocation = GL.GetUniformLocation(postShader, "uContactShadowSamples");
     }
 
     private static void SetUniform(int location, int value)
@@ -273,7 +281,45 @@ internal sealed partial class SceneRenderTarget
             uniform float uGodRayStrength;
             uniform int uStopNaNs;
             uniform int uDithering;
+            uniform int uContactShadowsEnabled;
+            uniform vec2 uContactShadowSun;
+            uniform float uContactShadowLength;
+            uniform int uContactShadowSamples;
             out vec4 outColor;
+
+            // Contact Shadows: sombreado de contacto screen-space. Marcha unos pocos texeles desde
+            // el pixel HACIA la posicion en pantalla del sol (la misma que usan los God Rays, ya
+            // proyectada con la MVP real en C#) y si encuentra geometria mas cerca de la camara que
+            // el propio pixel de origen, asume que esa geometria le tapa el sol de cerca (el detalle
+            // fino que el shadow map pierde por resolucion/bias: pies, esquinas, objetos pegados al suelo).
+            float ContactShadow(vec2 uv)
+            {
+                if (uContactShadowsEnabled == 0) return 1.0;
+                float originDepth = texture(uDepth, uv).r;
+                if (originDepth >= 0.9999) return 1.0; // cielo: no hay a quien hacerle sombra de contacto
+
+                vec2 toSun = uContactShadowSun - uv;
+                float toSunLen = length(toSun);
+                if (toSunLen < 0.0001) return 1.0;
+                vec2 dir = toSun / toSunLen;
+
+                int samples = clamp(uContactShadowSamples, 4, 24);
+                float stepLen = uContactShadowLength / float(samples);
+                float shadow = 1.0;
+                for (int i = 1; i <= samples; i++)
+                {
+                    vec2 sampleUv = uv + dir * stepLen * float(i);
+                    if (sampleUv.x < 0.0 || sampleUv.x > 1.0 || sampleUv.y < 0.0 || sampleUv.y > 1.0)
+                        break;
+                    float d = texture(uDepth, sampleUv).r;
+                    if (d < originDepth - 0.0008)
+                    {
+                        float t = float(i) / float(samples);
+                        shadow = min(shadow, mix(0.25, 1.0, t));
+                    }
+                }
+                return shadow;
+            }
 
             // Stop NaNs (Camera.StopNaNs): un solo texel con NaN/Inf (típico de una división
             // por cero en un shader de material roto) puede propagarse y volver negro/blanco
@@ -556,6 +602,7 @@ internal sealed partial class SceneRenderTarget
                 if (uGodRaysEnabled == 1)
                     hdr += GodRays(vUv);
                 hdr *= ScreenAO(vUv);
+                hdr *= ContactShadow(vUv);
                 hdr *= uExposure * exp2(uPostExposure);
                 hdr = WhiteBalance(hdr, uWbTemp, uWbTint);
                 vec3 mapped;
