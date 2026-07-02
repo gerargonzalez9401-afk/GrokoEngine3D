@@ -210,8 +210,13 @@ private void CollectParticleVerts(IReadOnlyList<GameObject> objects, Vector3 rig
             }
 
             // ── LOD: reducir efectivamente el número a renderizar por distancia ──
+            // OJO: siempre posición MUNDIAL (obj.Position), no PosX/Y/Z local. Si el sistema de
+            // partículas es hijo de otro objeto (p.ej. el escape de un avión que vuela lejos del
+            // origen), PosX/Y/Z local queda cerca de (0,0,0) sin importar dónde esté el avión de
+            // verdad -> el LOD lo trataba como si estuviera siempre en el origen del mundo, así
+            // que solo se veía (lodRatio>0) cuando la cámara se acercaba a ESE punto, no al avión.
             var camPos = new MiMotor.Mathematics.Vector3(cameraPosition.X, cameraPosition.Y, cameraPosition.Z);
-            float lodDist = Vector3Dist(new MiMotor.Mathematics.Vector3(obj.PosX, obj.PosY, obj.PosZ), camPos);
+            float lodDist = Vector3Dist(obj.Position, camPos);
             float lodRatio = ps.LODDistanceMax > ps.LODDistance
                 ? 1f - Math.Clamp((lodDist - ps.LODDistance) / (ps.LODDistanceMax - ps.LODDistance), 0f, 1f)
                 : lodDist > ps.LODDistanceMax ? 0f : 1f;
