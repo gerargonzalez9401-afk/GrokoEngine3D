@@ -1792,15 +1792,20 @@ internal sealed partial class ImGuiEditorApp : GameWindow
 
         if (ImGui.BeginMenu("File"))
         {
-            if (ImGui.MenuItem("Save Scene", "Ctrl+S")) SaveScene();
-            if (ImGui.MenuItem("Reload Scene")) LoadScene();
-            ImGui.Separator();
-            if (ImGui.MenuItem("Build / Export Game…"))
+            // Guardar/exportar durante Play grabaría el estado runtime en vivo (ver SaveScene) ->
+            // deshabilitado y en gris mientras se esta jugando, igual que Unity.
+            using (new DisabledScope(isPlaying))
             {
-                SaveScene(); // exporta la escena actual tal como está
-                string? outDir = BrowseForExportFolder();
-                if (!string.IsNullOrWhiteSpace(outDir))
-                    ExportGame(outDir);
+                if (ImGui.MenuItem("Save Scene", "Ctrl+S")) SaveScene();
+                if (ImGui.MenuItem("Reload Scene")) LoadScene();
+                ImGui.Separator();
+                if (ImGui.MenuItem("Build / Export Game…"))
+                {
+                    SaveScene(); // exporta la escena actual tal como está
+                    string? outDir = BrowseForExportFolder();
+                    if (!string.IsNullOrWhiteSpace(outDir))
+                        ExportGame(outDir);
+                }
             }
             ImGui.Separator();
             if (ImGui.MenuItem("Exit")) Close();
@@ -2288,6 +2293,15 @@ internal sealed partial class ImGuiEditorApp : GameWindow
 
     private void SaveScene()
     {
+        // Guardar durante Play grabaría el estado RUNTIME (posiciones/objetos instanciados en
+        // vivo, p.ej. el avion a mitad de vuelo) como si fuera la escena definitiva, pisando el
+        // diseño real. Igual que Unity, que deshabilita Save mientras se esta jugando.
+        if (isPlaying)
+        {
+            statusMessage = "No se puede guardar en Play Mode (pararia la escena en vivo)";
+            return;
+        }
+
         Directory.CreateDirectory(Path.GetDirectoryName(scenePath)!);
         SceneSerializer.Save(scenePath, objects);
         sceneDirty = false;
