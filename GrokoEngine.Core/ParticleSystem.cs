@@ -515,7 +515,7 @@ namespace GrokoEngine
             _time = 0f;
             _emitTimer = 0f;
             _distanceAccum = 0f;
-            _lastPos = new Vector3(gameObject.PosX, gameObject.PosY, gameObject.PosZ);
+            _lastPos = gameObject.Position;
             _lastEmitterVelocityPos = _lastPos;
             _emitterVelocity = Vector3.Zero;
             _burstFired = false;
@@ -551,7 +551,11 @@ namespace GrokoEngine
             float fdt = (float)dt * Math.Max(0f, SimulationSpeed);
             if (fdt <= 0f) return;
             _time += fdt;
-            var currentEmitterPos = new Vector3(gameObject!.PosX, gameObject.PosY, gameObject.PosZ);
+            // Posicion MUNDIAL real (no PosX/Y/Z local): si el sistema de particulas es hijo de
+            // otro objeto, PosX/Y/Z es relativo al padre y no coincide con donde esta de verdad
+            // en el mundo. Con SimulationSpace=World esto hacia que las particulas nacieran en un
+            // lugar incorrecto (offset del padre ignorado) apenas se emparentaba el objeto.
+            var currentEmitterPos = gameObject!.Position;
             _emitterVelocity = new Vector3(
                 (currentEmitterPos.X - _lastEmitterVelocityPos.X) / fdt,
                 (currentEmitterPos.Y - _lastEmitterVelocityPos.Y) / fdt,
@@ -937,8 +941,11 @@ namespace GrokoEngine
                 ? Lerp(RotationSpeedMin, RotationSpeedMax, (float)_rng.NextDouble())
                 : 0f;
 
+            // Posicion MUNDIAL (gameObject.Position, no PosX/Y/Z local): asi cada particula nace
+            // en el lugar CORRECTO aunque el sistema de particulas sea hijo de otro objeto rotado
+            // o desplazado (antes usaba la posicion local cruda, ignorando al padre por completo).
             var origin = SimulationSpace == ParticleSimulationSpace.World
-                ? new Vector3(gameObject!.PosX, gameObject.PosY, gameObject.PosZ)
+                ? gameObject!.Position
                 : Vector3.Zero;
 
             var offset = ShapeModuleEnabled ? SampleOffset() : Vector3.Zero;

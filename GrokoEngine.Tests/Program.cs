@@ -114,6 +114,7 @@ internal static class Program
             ("SceneSerializer preserves particle curves", SceneSerializerPreservesParticleCurves),
             ("SceneSerializer preserves additional colliders", SceneSerializerPreservesAdditionalColliders),
             ("ParticleSystem rate over distance starts at current position", ParticleSystemRateOverDistanceStartsAtCurrentPosition),
+            ("ParticleSystem emits at world position when parented", ParticleSystemEmitsAtWorldPositionWhenParented),
             ("LightmapBaker handles empty scenes", LightmapBakerHandlesEmptyScenes),
             ("LightmapBaker applies object scale", LightmapBakerAppliesObjectScale),
             ("HdrLoader decodes flat RGBE", HdrLoaderDecodesFlatRgbe),
@@ -2784,6 +2785,37 @@ internal static class Program
         particles.Update(0.016);
 
         AssertEqual(0, particles.Particles.Count, "initial rate-over-distance particles");
+    }
+
+    private static void ParticleSystemEmitsAtWorldPositionWhenParented()
+    {
+        // Bug real reportado: un Particle System hijo de otro objeto emitia en la posicion LOCAL
+        // cruda (relativa al padre) en vez de la posicion MUNDIAL real, asi que las particulas
+        // salian desplazadas apenas se emparentaba el objeto (aunque el objeto en si se moviera
+        // bien via el gizmo).
+        var parent = new GameObject { Name = "Parent" };
+        parent.PosX = 50f;
+        parent.PosY = 10f;
+        parent.PosZ = -20f;
+
+        var child = new GameObject { Name = "Emitter" };
+        child.SetParent(parent, worldPositionStays: false);
+        child.PosX = 2f; // offset local, relativo al padre
+        child.PosY = 0f;
+        child.PosZ = 0f;
+
+        var particles = child.AddComponent<ParticleSystem>();
+        particles.ShapeModuleEnabled = false; // sin offset aleatorio de forma, posicion exacta
+        particles.EmitRate = 0f;
+
+        particles.Play();
+        particles.EmitOne();
+
+        AssertEqual(1, particles.Particles.Count, "emits one particle");
+        var p = particles.Particles[0];
+        AssertNear(52f, p.Position.X, "particle spawns at world X (parent + local offset), not local X");
+        AssertNear(10f, p.Position.Y, "particle spawns at world Y (parent + local offset), not local Y");
+        AssertNear(-20f, p.Position.Z, "particle spawns at world Z (parent + local offset), not local Z");
     }
 
     private static void LightmapBakerHandlesEmptyScenes()
