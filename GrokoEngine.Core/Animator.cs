@@ -871,22 +871,31 @@ namespace GrokoEngine
                 var fromState = ctrl.FindState(_fadeFromStateName);
                 if (fromState != null)
                 {
+                    // La transición que ya está fundiendo NO puede "interrumpirse a sí misma": su
+                    // propia condición casi siempre sigue cumplida un buen rato (p.ej. VerticalSpeed
+                    // > 0.35 durante TODO el ascenso de un salto), así que sin este filtro se
+                    // re-disparaba cada frame, reiniciando el fade a Time=0 en bucle infinito
+                    // (el personaje se quedaba congelado en el primer frame del clip, flotando).
+                    var otherFromTransitions = fromState.Transitions
+                        .Where(t => !ReferenceEquals(t, _activeTransition))
+                        .ToList();
+
                     switch (_activeTransition.Interruption)
                     {
                         case AnimatorInterruptionSource.CurrentState:
-                            if (EvaluateTransitionList(fromState.Transitions, 0f, fromAnyState: false, fromState.Name))
+                            if (EvaluateTransitionList(otherFromTransitions, 0f, fromAnyState: false, fromState.Name))
                                 return;
                             break;
                         case AnimatorInterruptionSource.NextState:
                             break; // el chequeo normal de abajo YA es el "next state" (estado activo)
                         case AnimatorInterruptionSource.CurrentStateThenNextState:
-                            if (EvaluateTransitionList(fromState.Transitions, 0f, fromAnyState: false, fromState.Name))
+                            if (EvaluateTransitionList(otherFromTransitions, 0f, fromAnyState: false, fromState.Name))
                                 return;
                             break;
                         case AnimatorInterruptionSource.NextStateThenCurrentState:
                             if (EvaluateTransitionList(state.Transitions, normalizedTime, fromAnyState: false, state.Name))
                                 return;
-                            if (EvaluateTransitionList(fromState.Transitions, 0f, fromAnyState: false, fromState.Name))
+                            if (EvaluateTransitionList(otherFromTransitions, 0f, fromAnyState: false, fromState.Name))
                                 return;
                             return;
                     }

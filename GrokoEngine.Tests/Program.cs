@@ -53,6 +53,7 @@ internal static class Program
             ("Animator any state transition fires from trigger", AnimatorAnyStateTransitionFiresFromTrigger),
             ("Animator transition offset starts state mid clip", AnimatorTransitionOffsetStartsStateMidClip),
             ("Animator interruption switches to higher priority transition mid fade", AnimatorInterruptionSwitchesStateMidFade),
+            ("Animator interruption does not self-retrigger while condition stays true", AnimatorInterruptionDoesNotSelfRetriggerWhileConditionStaysTrue),
             ("SceneSerializer preserves contact shadow settings", SceneSerializerPreservesContactShadowSettings),
             ("SceneSerializer preserves procedural sky settings", SceneSerializerPreservesProceduralSkySettings),
             ("SceneSerializer preserves light cookie and IES paths", SceneSerializerPreservesLightCookieAndIesPaths),
@@ -1169,6 +1170,66 @@ internal static class Program
         animator.SetTrigger("ToC");
         animator.Update(0.016);
         AssertEqual("C", animator.CurrentState, "interruption from abandoned state jumps to C mid fade");
+    }
+
+    private static void AnimatorInterruptionDoesNotSelfRetriggerWhileConditionStaysTrue()
+    {
+        // Reproduce el bug real reportado: A -> B con Interruption=CurrentState y una condicion
+        // (p.ej. "VerticalSpeed > 0.35" durante un salto) que sigue siendo TRUE varios frames
+        // despues de disparar la transicion. Sin el filtro que excluye la transicion activa de
+        // si misma, esto reiniciaba el fade a Time=0 cada frame -> el personaje se quedaba
+        // congelado en el primer frame de la animacion, flotando en el aire.
+        string dir = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string aPath = WriteTestClip(dir, "Locomotion.anim", 1f, true);
+        string bPath = WriteTestClip(dir, "Jump.anim", 2f, false);
+
+        var controller = new AnimatorControllerData
+        {
+            Name = "JumpRepro",
+            DefaultState = "A",
+            States =
+            {
+                new AnimatorStateData
+                {
+                    Name = "A",
+                    ClipPath = aPath,
+                    Loop = true,
+                    Transitions =
+                    {
+                        new AnimatorTransition
+                        {
+                            ToState = "B",
+                            HasExitTime = false,
+                            FixedDuration = true,
+                            TransitionDuration = 0.12f,
+                            Interruption = AnimatorInterruptionSource.CurrentState,
+                            Conditions = { new AnimatorCondition { Parameter = "Airborne", Mode = AnimatorConditionMode.If } }
+                        }
+                    }
+                },
+                new AnimatorStateData { Name = "B", ClipPath = bPath, Loop = false }
+            },
+            Parameters = { new AnimatorParameter { Name = "Airborne", Type = AnimatorParameterType.Bool } }
+        };
+        string controllerPath = Path.Combine(dir, "JumpRepro.controller");
+        AnimatorControllerAsset.Save(controllerPath, controller);
+
+        var go = new GameObject { Name = "Player" };
+        var animator = go.AddComponent<Animator>();
+        animator.ControllerPath = controllerPath;
+        animator.Start();
+
+        // El parametro se queda en true (como VerticalSpeed>0.35 durante todo el ascenso).
+        animator.SetBool("Airborne", true);
+        animator.Update(0.016);
+        AssertEqual("B", animator.CurrentState, "transitions into B on the first frame");
+
+        for (int i = 0; i < 10; i++)
+            animator.Update(0.016);
+
+        AssertEqual("B", animator.CurrentState, "stays in B, does not bounce back while condition remains true");
+        AssertTrue(animator.Time > 0.05f, "animation time keeps advancing instead of resetting to 0 every frame");
     }
 
     private static void AnimatorIgnoresAttachedMeshChildrenAsBones()
