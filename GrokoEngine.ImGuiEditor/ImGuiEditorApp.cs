@@ -854,7 +854,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.EnvironmentMode = environmentMode;
         sceneRenderer.DrawEnvironmentBackground = !gameView || gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
         sceneRenderer.RenderRealtimeShadows = gameView;
-        sceneRenderer.ShadowUpdateIntervalFrames = gameView ? 3 : 1;
+        sceneRenderer.ShadowUpdateIntervalFrames = gameView ? ShadowUpdateIntervalForQuality(shadowQuality) : 1;
         sceneRenderer.SceneGridAxis = ToRendererGridAxis(sceneGridAxis);
         sceneRenderer.SceneGridSize = sceneGridSize;
         sceneRenderer.SceneGridOpacity = sceneGridOpacity;
@@ -947,7 +947,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.EnvironmentMode = environmentMode;
         sceneRenderer.DrawEnvironmentBackground = gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
         sceneRenderer.RenderRealtimeShadows = gameCameraComponent?.RenderShadows ?? true;
-        sceneRenderer.ShadowUpdateIntervalFrames = 3;
+        sceneRenderer.ShadowUpdateIntervalFrames = ShadowUpdateIntervalForQuality(shadowQuality);
         sceneRenderer.SceneGridAxis = ToRendererGridAxis(sceneGridAxis);
         sceneRenderer.SceneGridSize = sceneGridSize;
         sceneRenderer.SceneGridOpacity = sceneGridOpacity;
@@ -983,6 +983,19 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         gamePreviewTarget.ContactShadowSamples = sceneRenderer.SunContactShadowSamples;
         gamePreviewTarget.ApplyPostProcess(postSettings);
     }
+
+    // Cada cuantos frames se regenera el shadow map en Play/Game (1 = cada frame, sin salto
+    // pero mas costoso). Antes era un 3 fijo sin importar la calidad elegida, lo que hacia que
+    // la sombra de un personaje moviendose rapido (p.ej. saltando) se viera "a tirones" incluso
+    // en Ultra. Ahora sigue la misma calidad que ya elige el usuario en Settings -> Lighting.
+    private static int ShadowUpdateIntervalForQuality(ShadowQuality quality) => quality switch
+    {
+        ShadowQuality.Low => 3,
+        ShadowQuality.Medium => 2,
+        ShadowQuality.High => 1,
+        ShadowQuality.Ultra => 1,
+        _ => 2
+    };
 
     private static bool ResolveCameraTextureMode(CameraTextureMode? mode, bool pipelineEnabled)
         => mode switch

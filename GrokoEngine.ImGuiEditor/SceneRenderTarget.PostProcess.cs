@@ -312,11 +312,17 @@ internal sealed partial class SceneRenderTarget
                     if (sampleUv.x < 0.0 || sampleUv.x > 1.0 || sampleUv.y < 0.0 || sampleUv.y > 1.0)
                         break;
                     float d = texture(uDepth, sampleUv).r;
-                    if (d < originDepth - 0.0008)
-                    {
-                        float t = float(i) / float(samples);
+                    float depthDelta = originDepth - d;
+                    // Sesgo creciente con la distancia recorrida (evita auto-sombreado/bandas en
+                    // superficies casi paralelas a la direccion de marcha, el artefacto clasico de
+                    // esta tecnica) + techo de "grosor" maximo: si lo encontrado esta MUY por
+                    // delante, es geometria distinta y lejana (no un contacto real), se descarta
+                    // para no generar artefactos en objetos con superficies curvas/en angulo.
+                    float t = float(i) / float(samples);
+                    float bias = mix(0.0006, 0.0025, t);
+                    const float maxThickness = 0.01;
+                    if (depthDelta > bias && depthDelta < maxThickness)
                         shadow = min(shadow, mix(0.25, 1.0, t));
-                    }
                 }
                 return shadow;
             }
