@@ -321,7 +321,7 @@ internal sealed partial class SceneRenderTarget
                 return shadow;
             }
 
-            // Stop NaNs (Camera.StopNaNs): un solo texel con NaN/Inf (típico de una división
+            // Stop NaNs (Camera.StopNaNs): un solo texel con NaN/Inf (tipico de una division
             // por cero en un shader de material roto) puede propagarse y volver negro/blanco
             // TODO el post-proceso (bloom/AO/tonemap lo esparcen). Lo cortamos apenas se lee la escena.
             vec3 StopNaNsGuard(vec3 c)
