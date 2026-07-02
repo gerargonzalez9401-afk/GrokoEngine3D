@@ -830,6 +830,7 @@ private static System.Numerics.Vector4 ProjectAssetColorForKind(string kind) => 
 private static string GetAssetKind(string path)
     {
         if (MaterialAsset.IsMaterialPath(path)) return "MAT";
+        if (CubemapAsset.IsCubemapPath(path)) return "CUBE";
         if (MaterialAsset.IsTexturePath(path)) return "IMG";
         if (ObjLoader.IsSupportedMesh(path)) return "MESH";
         if (AvatarAsset.IsAvatarPath(path)) return "AVATAR";
@@ -847,6 +848,7 @@ private static string GetAssetKind(string path)
 private static EditorIcon IconForAssetKind(string kind) => kind switch
     {
         "MAT" => EditorIcon.Prefab,
+        "CUBE" => EditorIcon.Asset,
         "SHDR" => EditorIcon.ShaderGraph,
         "MESH" => EditorIcon.Mesh,
         "SUBMESH" => EditorIcon.Mesh,
@@ -981,6 +983,13 @@ private void DrawProjectCreateMenuItems(string targetDirectory)
         {
             selectedAssetPath = MaterialAsset.Create(targetDirectory);
             statusMessage = "Material created";
+        }
+        if (ImGui.MenuItem("Cubemap"))
+        {
+            string path = CubemapAsset.Create(targetDirectory);
+            selectedAssetPath = path;
+            BeginRenameAsset(path);
+            statusMessage = "Cubemap created — drag an HDRI (.hdr) into it";
         }
         if (ImGui.MenuItem("Animation Clip"))
         {

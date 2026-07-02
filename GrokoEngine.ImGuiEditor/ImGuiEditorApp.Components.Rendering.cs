@@ -250,6 +250,33 @@ private static string? BrowseForHdri()
         }
     }
 
+/// <summary>Resuelve lo que se soltó en un slot "HDRI Environment": puede ser un .hdr directo,
+/// o un asset Cubemap (Create > Cubemap) que a su vez apunta a un .hdr.</summary>
+private static bool TryResolveDroppedHdri(string? droppedPath, out string resolvedHdriPath)
+    {
+        resolvedHdriPath = "";
+        if (string.IsNullOrWhiteSpace(droppedPath) || !File.Exists(droppedPath))
+            return false;
+
+        if (GrokoEngine.HdrLoader.IsHdr(droppedPath))
+        {
+            resolvedHdriPath = droppedPath;
+            return true;
+        }
+
+        if (GrokoEngine.CubemapAsset.IsCubemapPath(droppedPath))
+        {
+            var data = GrokoEngine.CubemapAsset.Load(droppedPath);
+            if (!string.IsNullOrWhiteSpace(data.SourceTexturePath) && File.Exists(data.SourceTexturePath) && GrokoEngine.HdrLoader.IsHdr(data.SourceTexturePath))
+            {
+                resolvedHdriPath = data.SourceTexturePath;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 private List<ModelAnimationInfo> GetModelAnimations(string path)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))

@@ -249,9 +249,9 @@ internal sealed partial class ImGuiEditorApp
                 if (ImGui.BeginDragDropTarget())
                 {
                     bool delivered = AcceptDragDropOnRelease("GROKO_ASSET");
-                    if (delivered && draggingAssetPath != null && File.Exists(draggingAssetPath) && GrokoEngine.HdrLoader.IsHdr(draggingAssetPath))
+                    if (delivered && TryResolveDroppedHdri(draggingAssetPath, out string resolvedHdri))
                     {
-                        hdriPath = draggingAssetPath;
+                        hdriPath = resolvedHdri;
                         draggingAssetPath = null;
                     }
                     ImGui.EndDragDropTarget();
@@ -263,7 +263,7 @@ internal sealed partial class ImGuiEditorApp
                     ImGui.TextDisabled(sceneRenderer.EnvironmentLoaded
                         ? "Loaded — surfaces reflect this HDRI."
                         : "Not loaded (file missing or not a .hdr). See Console.");
-                ImGui.TextDisabled("Click the slot to browse for a Radiance .hdr (RGBE), or drag one from the Project panel. When set, IBL reflects this image instead of the procedural sky. (.exr is NOT supported.)");
+                ImGui.TextDisabled("Click the slot to browse for a Radiance .hdr (RGBE), or drag one (or a Cubemap asset) from the Project panel. When set, IBL reflects this image instead of the procedural sky. (.exr is NOT supported.)");
                 ImGui.EndTabItem();
             }
 
@@ -989,9 +989,9 @@ internal sealed partial class ImGuiEditorApp
         if (ImGui.BeginDragDropTarget())
         {
             bool delivered = AcceptDragDropOnRelease("GROKO_ASSET");
-            if (delivered && draggingAssetPath != null && File.Exists(draggingAssetPath) && GrokoEngine.HdrLoader.IsHdr(draggingAssetPath))
+            if (delivered && TryResolveDroppedHdri(draggingAssetPath, out string resolvedHdriPro))
             {
-                hdriPath = draggingAssetPath;
+                hdriPath = resolvedHdriPro;
                 draggingAssetPath = null;
             }
             ImGui.EndDragDropTarget();

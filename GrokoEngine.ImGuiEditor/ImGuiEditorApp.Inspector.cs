@@ -532,6 +532,12 @@ internal sealed partial class ImGuiEditorApp
             return;
         }
 
+        if (CubemapAsset.IsCubemapPath(path))
+        {
+            DrawCubemapAssetInspector(path);
+            return;
+        }
+
         if (MaterialAsset.IsTexturePath(path))
         {
             DrawTextureAssetInspector(path);
@@ -2311,6 +2317,55 @@ internal sealed partial class ImGuiEditorApp
     {
         if (!mat.IsInstance && !string.IsNullOrWhiteSpace(mat.AssetPath))
             MakeMaterialInstance(mat);
+    }
+
+    /// <summary>Create > Cubemap: asset chico que solo guarda la referencia a una textura HDRI
+    /// equirectangular. Arrastrás el .hdr acá adentro, y después arrastrás ESTE asset al slot
+    /// "HDRI Environment" de Project Settings — igual que Unity, pero sin generar 6 caras porque
+    /// el motor ya samplea el equirect directo.</summary>
+    private void DrawCubemapAssetInspector(string path)
+    {
+        var data = CubemapAsset.Load(path);
+
+        ImGui.TextDisabled("Cubemap Asset");
+        ImGui.TextWrapped(Path.GetFileName(path));
+        ImGui.Spacing();
+
+        string name = data.Name;
+        FieldRow("Name");
+        if (ImGui.InputText("##cubemapname", ref name, 128) && ImGui.IsItemDeactivatedAfterEdit())
+        {
+            data.Name = name;
+            CubemapAsset.Save(path, data);
+        }
+        ImGui.Spacing();
+
+        ImGui.TextUnformatted("Source HDRI (.hdr)");
+        string slotLabel = string.IsNullOrWhiteSpace(data.SourceTexturePath)
+            ? "None  —  drag a .hdr here"
+            : Path.GetFileName(data.SourceTexturePath);
+        ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.10f, 0.10f, 0.11f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new System.Numerics.Vector4(0.17f, 0.20f, 0.24f, 1f));
+        ImGui.Button(slotLabel + "##cubemapSlot", new Vector2(-1f, 0f));
+        ImGui.PopStyleColor(2);
+        if (ImGui.BeginDragDropTarget())
+        {
+            bool delivered = AcceptDragDropOnRelease("GROKO_ASSET");
+            if (delivered && draggingAssetPath != null && File.Exists(draggingAssetPath) && GrokoEngine.HdrLoader.IsHdr(draggingAssetPath))
+            {
+                data.SourceTexturePath = draggingAssetPath;
+                CubemapAsset.Save(path, data);
+                draggingAssetPath = null;
+                statusMessage = "Assigned " + Path.GetFileName(data.SourceTexturePath);
+            }
+            ImGui.EndDragDropTarget();
+        }
+        if (!string.IsNullOrWhiteSpace(data.SourceTexturePath) && ImGui.Button("Clear##cubemapClear"))
+        {
+            data.SourceTexturePath = "";
+            CubemapAsset.Save(path, data);
+        }
+        ImGui.TextDisabled("Drag a Radiance .hdr from the Project panel. Then drag this Cubemap asset onto \"HDRI Environment\" in Project Settings > Lighting to use it as the scene skybox.");
     }
 
     private void DrawMaterialAssetInspector(string path)
