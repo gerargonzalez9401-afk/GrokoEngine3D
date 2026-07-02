@@ -54,6 +54,7 @@ internal static class Program
             ("Animator transition offset starts state mid clip", AnimatorTransitionOffsetStartsStateMidClip),
             ("Animator interruption switches to higher priority transition mid fade", AnimatorInterruptionSwitchesStateMidFade),
             ("Animator interruption does not self-retrigger while condition stays true", AnimatorInterruptionDoesNotSelfRetriggerWhileConditionStaysTrue),
+            ("Animator interruption respects exit time from abandoned state", AnimatorInterruptionRespectsExitTimeFromAbandonedState),
             ("SceneSerializer preserves contact shadow settings", SceneSerializerPreservesContactShadowSettings),
             ("SceneSerializer preserves procedural sky settings", SceneSerializerPreservesProceduralSkySettings),
             ("SceneSerializer preserves light cookie and IES paths", SceneSerializerPreservesLightCookieAndIesPaths),
@@ -1230,6 +1231,84 @@ internal static class Program
 
         AssertEqual("B", animator.CurrentState, "stays in B, does not bounce back while condition remains true");
         AssertTrue(animator.Time > 0.05f, "animation time keeps advancing instead of resetting to 0 every frame");
+    }
+
+    private static void AnimatorInterruptionRespectsExitTimeFromAbandonedState()
+    {
+        // A -> B empieza a fundir de inmediato (sin Exit Time). Mientras funde, A tambien tiene
+        // A -> C CON Exit Time (0.5 de la duracion de A). Aunque la condicion de C ya este lista,
+        // NO debe interrumpir hasta que el tiempo (en vivo) del estado abandonado (A) cruce ese
+        // Exit Time -- antes de este cambio, el chequeo de interrupcion siempre usaba 0f, asi que
+        // una transicion con Exit Time desde el estado abandonado nunca podia dispararse.
+        string dir = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string aPath = WriteTestClip(dir, "A.anim", 2f, true);
+        string bPath = WriteTestClip(dir, "B.anim", 1f, true);
+        string cPath = WriteTestClip(dir, "C.anim", 1f, true);
+
+        var controller = new AnimatorControllerData
+        {
+            Name = "ExitTimeRepro",
+            DefaultState = "A",
+            States =
+            {
+                new AnimatorStateData
+                {
+                    Name = "A",
+                    ClipPath = aPath,
+                    Loop = true,
+                    Transitions =
+                    {
+                        new AnimatorTransition
+                        {
+                            ToState = "B",
+                            HasExitTime = false,
+                            FixedDuration = true,
+                            TransitionDuration = 1f,
+                            Interruption = AnimatorInterruptionSource.CurrentState,
+                            Conditions = { new AnimatorCondition { Parameter = "ToB", Mode = AnimatorConditionMode.If } }
+                        },
+                        new AnimatorTransition
+                        {
+                            ToState = "C",
+                            HasExitTime = true,
+                            ExitTime = 0.5f,
+                            FixedDuration = true,
+                            TransitionDuration = 0f,
+                            Conditions = { new AnimatorCondition { Parameter = "ToC", Mode = AnimatorConditionMode.If } }
+                        }
+                    }
+                },
+                new AnimatorStateData { Name = "B", ClipPath = bPath, Loop = true },
+                new AnimatorStateData { Name = "C", ClipPath = cPath, Loop = true }
+            },
+            Parameters =
+            {
+                new AnimatorParameter { Name = "ToB", Type = AnimatorParameterType.Bool },
+                new AnimatorParameter { Name = "ToC", Type = AnimatorParameterType.Bool }
+            }
+        };
+        string controllerPath = Path.Combine(dir, "ExitTimeRepro.controller");
+        AnimatorControllerAsset.Save(controllerPath, controller);
+
+        var go = new GameObject { Name = "Repro" };
+        var animator = go.AddComponent<Animator>();
+        animator.ControllerPath = controllerPath;
+        animator.Start();
+
+        animator.SetBool("ToB", true);
+        animator.Update(0.016);
+        AssertEqual("B", animator.CurrentState, "fires A->B immediately (no exit time)");
+
+        animator.SetBool("ToC", true);
+        animator.Update(0.016);
+        AssertEqual("B", animator.CurrentState, "A->C does not interrupt yet: abandoned state's exit time not reached");
+
+        // A dura 2s, ExitTime=0.5 -> hace falta que el tiempo del estado abandonado cruce 1.0s.
+        for (int i = 0; i < 100; i++)
+            animator.Update(0.016);
+
+        AssertEqual("C", animator.CurrentState, "A->C interrupts once the abandoned state's live time crosses its exit time");
     }
 
     private static void AnimatorIgnoresAttachedMeshChildrenAsBones()

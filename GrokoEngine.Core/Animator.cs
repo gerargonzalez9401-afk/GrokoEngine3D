@@ -451,8 +451,11 @@ namespace GrokoEngine
             var activeState = GetActiveState();
             if (activeState?.MotionType != AnimatorMotionType.BlendTree)
                 return 0f;
+            return BlendTreeDuration(activeState.BlendTree);
+        }
 
-            var tree = activeState.BlendTree;
+        private float BlendTreeDuration(BlendTreeData tree)
+        {
             tree.Normalize();
 
             // Hijos válidos (con clip), igual que en SampleBlendTree.
@@ -477,6 +480,30 @@ namespace GrokoEngine
                 if (weights[i] > 0.0001f) { weighted += weights[i] * d; wsum += weights[i]; }
             }
             return wsum > 0f ? weighted / wsum : maxDur;
+        }
+
+        // Duracion de un estado EXPLICITO (no necesariamente el activo), sin pasar por la cache
+        // de "clips esqueletales del estado activo" (GetSkeletalClipList/CurrentSkeletalClip):
+        // se usa para llevar el tiempo del estado que se esta ABANDONANDO durante un fade, que
+        // por definicion ya NO es el estado activo cuando se le pregunta la duracion.
+        private float ResolveStateDuration(AnimatorStateData? state)
+        {
+            if (state == null) return 0f;
+            if (state.MotionType == AnimatorMotionType.BlendTree)
+                return BlendTreeDuration(state.BlendTree);
+
+            string path = state.ClipPath;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                return 0f;
+
+            if (AnimationClipAsset.IsAnimationPath(path))
+            {
+                var data = AnimationClipAsset.Load(path);
+                return data.Keyframes.Count > 0 ? data.Keyframes[^1].Time : 0f;
+            }
+
+            var mesh = ObjLoader.Load(path);
+            return mesh?.Clips != null && mesh.Clips.Count > 0 ? mesh.Clips[0].Duration : 0f;
         }
 
         private void EnsureBoneMap()
@@ -681,6 +708,8 @@ namespace GrokoEngine
                 skelFadeFrom = null;
                 _activeTransition = null;
                 _fadeFromStateName = "";
+                _fadeFromTime = 0f;
+                _fadeFromDuration = 0f;
             }
         }
 
@@ -688,6 +717,13 @@ namespace GrokoEngine
         // del estado que se está abandonando (para poder re-evaluar SUS transiciones mientras funde).
         private AnimatorTransition? _activeTransition;
         private string _fadeFromStateName = "";
+        // Tiempo/velocidad/duración del estado abandonado, avanzados cada Update() mientras dura
+        // el fade: permite que Interruption funcione tambien con transiciones CON Exit Time desde
+        // el estado que se abandona (antes solo funcionaba con transiciones sin Exit Time, porque
+        // no había ningun tiempo normalizado que comparar).
+        private float _fadeFromTime;
+        private float _fadeFromSpeed = 1f;
+        private float _fadeFromDuration;
 
         private static float QuatDotA(Quaternion a, Quaternion b) =>
             a.X * b.X + a.Y * b.Y + a.Z * b.Z + a.W * b.W;
@@ -769,6 +805,11 @@ namespace GrokoEngine
 
             EnsureParamsInitialized();
             UpdateDampedParams((float)dt);   // suaviza parámetros (damping) del blend tree
+
+            // Avanza el tiempo del estado ABANDONADO mientras dura el fade (independiente de si
+            // el estado activo usa la rama esqueletal o la de keyframes) — ver EvaluateTransitions.
+            if (skelFadeTimer > 0f)
+                _fadeFromTime += (float)dt * _fadeFromSpeed;
 
             var c = GetClip();
             if (c == null || c.Keyframes.Count == 0)
@@ -855,15 +896,16 @@ namespace GrokoEngine
             if (ctrl == null || state == null)
                 return;
 
-            if (EvaluateTransitionList(ctrl.AnyStateTransitions, normalizedTime, fromAnyState: true, state.Name))
+            if (EvaluateTransitionList(ctrl.AnyStateTransitions, normalizedTime, fromAnyState: true, state))
                 return;
 
             // Interrupción: mientras hay un crossfade en curso, según Interruption también se
             // pueden evaluar las transiciones del estado que se está ABANDONANDO (no solo las
-            // del estado activo/"next state"). Limitación deliberada: como no re-muestreamos en
-            // vivo el estado abandonado (ver ApplySkeletalCrossFade, usa una foto de la pose),
-            // no llevamos su tiempo normalizado real -> solo transiciones SIN Exit Time (basadas
-            // en condiciones/triggers) pueden interrumpir desde el estado abandonado.
+            // del estado activo/"next state"). _fadeFromTime lleva el tiempo del estado abandonado
+            // (avanzado en Update mientras dura el fade), así que las transiciones CON Exit Time
+            // desde ese estado también funcionan (no solo las basadas en condición/trigger).
+            // Nota: la POSE del estado abandonado sigue siendo una foto congelada (ver
+            // ApplySkeletalCrossFade) — solo el TIEMPO/duración se lleva en vivo para este chequeo.
             if (skelFadeTimer > 0f && _activeTransition != null
                 && _activeTransition.Interruption != AnimatorInterruptionSource.None
                 && !string.IsNullOrEmpty(_fadeFromStateName))
@@ -879,33 +921,36 @@ namespace GrokoEngine
                     var otherFromTransitions = fromState.Transitions
                         .Where(t => !ReferenceEquals(t, _activeTransition))
                         .ToList();
+                    // Tiempo normalizado real del estado abandonado (avanzado en Update mientras
+                    // dura el fade) -> las transiciones CON Exit Time desde ese estado ya funcionan.
+                    float fromNormalizedTime = _fadeFromDuration > 0.0001f ? _fadeFromTime / _fadeFromDuration : 0f;
 
                     switch (_activeTransition.Interruption)
                     {
                         case AnimatorInterruptionSource.CurrentState:
-                            if (EvaluateTransitionList(otherFromTransitions, 0f, fromAnyState: false, fromState.Name))
+                            if (EvaluateTransitionList(otherFromTransitions, fromNormalizedTime, fromAnyState: false, fromState))
                                 return;
                             break;
                         case AnimatorInterruptionSource.NextState:
                             break; // el chequeo normal de abajo YA es el "next state" (estado activo)
                         case AnimatorInterruptionSource.CurrentStateThenNextState:
-                            if (EvaluateTransitionList(otherFromTransitions, 0f, fromAnyState: false, fromState.Name))
+                            if (EvaluateTransitionList(otherFromTransitions, fromNormalizedTime, fromAnyState: false, fromState))
                                 return;
                             break;
                         case AnimatorInterruptionSource.NextStateThenCurrentState:
-                            if (EvaluateTransitionList(state.Transitions, normalizedTime, fromAnyState: false, state.Name))
+                            if (EvaluateTransitionList(state.Transitions, normalizedTime, fromAnyState: false, state))
                                 return;
-                            if (EvaluateTransitionList(otherFromTransitions, 0f, fromAnyState: false, fromState.Name))
+                            if (EvaluateTransitionList(otherFromTransitions, fromNormalizedTime, fromAnyState: false, fromState))
                                 return;
                             return;
                     }
                 }
             }
 
-            EvaluateTransitionList(state.Transitions, normalizedTime, fromAnyState: false, state.Name);
+            EvaluateTransitionList(state.Transitions, normalizedTime, fromAnyState: false, state);
         }
 
-        private bool EvaluateTransitionList(List<AnimatorTransition> transitions, float normalizedTime, bool fromAnyState, string fromStateName)
+        private bool EvaluateTransitionList(List<AnimatorTransition> transitions, float normalizedTime, bool fromAnyState, AnimatorStateData? fromState)
         {
             if (transitions.Count == 0)
                 return false;
@@ -935,7 +980,10 @@ namespace GrokoEngine
                     : t.TransitionDuration * MathF.Max(0.0001f, CurrentSkeletalOrBlendDuration());
                 BeginSkeletalCrossFade(fadeSecs);
                 _activeTransition = t;
-                _fadeFromStateName = fromStateName;
+                _fadeFromStateName = fromState?.Name ?? "";
+                _fadeFromTime = Time;
+                _fadeFromSpeed = Speed * (fromState?.Speed ?? 1f);
+                _fadeFromDuration = ResolveStateDuration(fromState);
                 CurrentState = t.ToState;
                 CurrentClipName = t.ToState;
                 clip = null;        // fuerza recargar el clip del nuevo estado
