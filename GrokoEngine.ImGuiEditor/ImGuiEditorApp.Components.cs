@@ -626,6 +626,11 @@ internal sealed partial class ImGuiEditorApp
             new("Physics", "Sphere Collider", "Sphere shape used for radial collisions and triggers.", true, () => obj.AddComponentWithEngine<SphereCollider>(physicsEngine)),
             new("Physics", "Capsule Collider", "Capsule shape for characters and rounded volumes.", true, () => obj.AddComponentWithEngine<CapsuleCollider>(physicsEngine)),
             new("Physics", "Mesh Collider", "Collider fitted from the object's mesh bounds.", true, () => obj.AddComponentWithEngine<MeshCollider>(physicsEngine)),
+            new("Physics", "Terrain Collider", obj.GetComponent<Terrain>() != null
+                ? "Collision derived from this object's Terrain heightmap."
+                : "Collision derived from a Terrain heightmap. Add a Terrain component too, or this collider has nothing to sample.",
+                obj.GetComponent<TerrainCollider>() == null,
+                () => obj.AddComponentWithEngine<TerrainCollider>(physicsEngine)),
             new("Physics", "Character Controller", "Kinematic player movement with step offset, gravity and grounded state.", obj.GetComponent<CharacterController>() == null, () => AddCharacterController(obj)),
             new("Rendering", "Material", "Editable material instance for this object.", true, () => obj.AddComponent<Material>()),
             new("Rendering", "Mesh Filter", "Mesh source used by the renderer.", obj.GetComponent<MeshFilter>() == null, () => obj.AddComponent<MeshFilter>()),
