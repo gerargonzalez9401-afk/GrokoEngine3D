@@ -24,6 +24,8 @@ internal sealed partial class SceneViewportRenderer
         if (_particleInstanceVbo != 0) GL.DeleteBuffer(_particleInstanceVbo);
         if (_particleStretchedUnitQuadVbo != 0) GL.DeleteBuffer(_particleStretchedUnitQuadVbo);
         if (_particleStretchedInstanceVbo != 0) GL.DeleteBuffer(_particleStretchedInstanceVbo);
+        if (_treeBillboardUnitQuadVbo != 0) GL.DeleteBuffer(_treeBillboardUnitQuadVbo);
+        if (_treeBillboardInstanceVbo != 0) GL.DeleteBuffer(_treeBillboardInstanceVbo);
         if (dynamicInstanceBuffer != 0) GL.DeleteBuffer(dynamicInstanceBuffer);
 
         GL.DeleteVertexArray(vertexArray);
@@ -34,6 +36,8 @@ internal sealed partial class SceneViewportRenderer
         if (_particleInstancedShader != 0) GL.DeleteProgram(_particleInstancedShader);
         if (_particleStretchedVao != 0) GL.DeleteVertexArray(_particleStretchedVao);
         if (_particleStretchedShader != 0) GL.DeleteProgram(_particleStretchedShader);
+        if (_treeBillboardVao != 0) GL.DeleteVertexArray(_treeBillboardVao);
+        if (_treeBillboardShader != 0) GL.DeleteProgram(_treeBillboardShader);
 
         if (_depthTex != 0) GL.DeleteTexture(_depthTex);
         if (_depthFbo != 0) GL.DeleteFramebuffer(_depthFbo);

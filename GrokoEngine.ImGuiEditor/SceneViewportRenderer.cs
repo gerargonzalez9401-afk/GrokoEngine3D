@@ -315,6 +315,19 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly List<ParticleStretchedInstance> _particleStretchedInstances = new(2048);
     private readonly List<ParticleStretchedInstance> _particleSortedStretchedInstances = new(2048);
 
+    // ── Billboards de árboles de Terrain (LOD lejano) ────────────────
+    // Estilo Unity "Billboard Start": más allá de esa distancia (o fuera del ranking de
+    // MaxMeshTrees más cercanos) un árbol se dibuja como un quad plano en vez de la malla 3D
+    // completa. Simplificación respecto a Unity: reusa la textura del prototipo directo sobre
+    // el quad (sin bake de un snapshot recortado), y solo rota en Y para mirar a cámara (no es
+    // billboard esférico completo) — documentado en Terrain.cs.
+    private int _treeBillboardShader;
+    private int _treeBillboardVao, _treeBillboardUnitQuadVbo, _treeBillboardInstanceVbo;
+    private int _treeBillboardInstanceBufferCapacity;
+    private TreeBillboardInstance[] _treeBillboardUploadBuffer = new TreeBillboardInstance[64];
+    private int _treeBillboardMvpLoc, _treeBillboardTexLoc, _treeBillboardHasTexLoc;
+    private readonly Dictionary<string, List<TreeBillboardInstance>> _treeBillboardsByTexture = new(StringComparer.OrdinalIgnoreCase);
+
     // ── Depth FBO para soft particles ─────────────────────────────
     private int _depthFbo, _depthTex;
     private int _depthFboWidth, _depthFboHeight;
@@ -634,6 +647,8 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         dynamicMeshDraws.Clear();
         refractiveMeshDraws.Clear();
         skinnedMeshDraws.Clear();
+        foreach (var list in _treeBillboardsByTexture.Values)
+            list.Clear();
         refractiveSkinnedMeshDraws.Clear();
         shaderGraphDynamicMeshDraws.Clear();
         shaderGraphSkinnedMeshDraws.Clear();
@@ -804,6 +819,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             RenderTerrainRanges(_staticRanges, _staticVertexArray, ref mvp, objects);
         if (solidVertices.Count > 0)
             RenderTerrainRanges(solidRanges, solidVertexArray, ref mvp, objects);
+        DrawTerrainTreeBillboards(ref mvp);
         EndRenderPass(SceneRenderPass.Terrain, terrainPhaseStart);
 
         if (refractiveMeshDraws.Count > 0 || refractiveSkinnedMeshDraws.Count > 0)

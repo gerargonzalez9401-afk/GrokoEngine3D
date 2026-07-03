@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
@@ -69,17 +70,15 @@ private void QueueTerrainTreeInstances(Terrain terrain, Matrix4 transform, Frust
             return;
 
         int maxMeshTrees = Math.Max(0, terrain.MaxMeshTrees);
-        if (maxMeshTrees == 0)
-            return;
 
-        // Estilo Unity "Tree Distance"/"Max Mesh Trees": más allá de TreeDistance un árbol ni se
-        // procesa; de los que quedan, si hay más plantados que maxMeshTrees solo se dibujan los
-        // más cercanos a la cámara (evita que un bosque entero de miles de árboles intente
-        // encolarse cada frame). Unity, más allá del límite, cae a billboards en vez de ocultarlos
-        // — este motor todavía no tiene esa parte (ver nota en Terrain.cs), así que acá el
-        // excedente directamente no se dibuja.
+        // Estilo Unity "Tree Distance"/"Billboard Start"/"Max Mesh Trees": más allá de
+        // TreeDistance un árbol ni se procesa. De los que quedan, un árbol es malla 3D solo si
+        // está más cerca que BillboardStart Y entra en el ranking de los maxMeshTrees más
+        // cercanos a cámara; el resto es billboard (quad plano que rota en Y hacia la cámara).
         float treeDistance = Math.Max(0.01f, terrain.TreeDistance);
         float treeDistanceSq = treeDistance * treeDistance;
+        float billboardStart = Math.Max(0f, terrain.BillboardStart);
+        float billboardStartSq = billboardStart * billboardStart;
 
         _terrainTreeSortScratch.Clear();
         for (int i = 0; i < terrain.Trees.Count; i++)
@@ -101,17 +100,16 @@ private void QueueTerrainTreeInstances(Terrain terrain, Matrix4 transform, Frust
         if (_terrainTreeSortScratch.Count == 0)
             return;
 
-        if (_terrainTreeSortScratch.Count > maxMeshTrees)
-        {
-            _terrainTreeSortScratch.Sort((a, b) => a.DistanceSq.CompareTo(b.DistanceSq));
-            _terrainTreeSortScratch.RemoveRange(maxMeshTrees, _terrainTreeSortScratch.Count - maxMeshTrees);
-        }
+        // El ranking por distancia decide qué entra como malla 3D (los maxMeshTrees más cercanos)
+        // — necesario aunque no hubiera límite de billboard, porque también define el orden.
+        _terrainTreeSortScratch.Sort((a, b) => a.DistanceSq.CompareTo(b.DistanceSq));
 
         var tint = new Vector4(1f, 1f, 1f, 1f);
         var material = new Vector4(0f, 0.5f, 1f, 1f); // metallic 0, roughness 0.5 por defecto
 
-        foreach (var (treeIndex, _) in _terrainTreeSortScratch)
+        for (int rank = 0; rank < _terrainTreeSortScratch.Count; rank++)
         {
+            var (treeIndex, distSq) = _terrainTreeSortScratch[rank];
             var instance = terrain.Trees[treeIndex];
             string protoPath = terrain.TreePrototypes[instance.PrototypeIndex];
             protoPath = NormalizeExistingAssetPath(protoPath) ?? protoPath;
@@ -131,27 +129,111 @@ private void QueueTerrainTreeInstances(Terrain terrain, Matrix4 transform, Frust
             if (!frustum.ContainsSphere(worldPos, boundRadius))
                 continue;
 
-            Matrix4 instanceWorld =
-                Matrix4.CreateScale(Math.Max(0.0001f, instance.Scale)) *
-                Matrix4.CreateRotationY(MathHelper.DegreesToRadians(instance.RotationY)) *
-                Matrix4.CreateTranslation(localPos.X, localPos.Y, localPos.Z) *
-                transform;
+            bool isBillboard = rank >= maxMeshTrees || distSq > billboardStartSq;
 
-            if (mesh.Submeshes.Count > 1)
+            if (!isBillboard)
             {
-                foreach (var sub in mesh.Submeshes)
+                Matrix4 instanceWorld =
+                    Matrix4.CreateScale(Math.Max(0.0001f, instance.Scale)) *
+                    Matrix4.CreateRotationY(MathHelper.DegreesToRadians(instance.RotationY)) *
+                    Matrix4.CreateTranslation(localPos.X, localPos.Y, localPos.Z) *
+                    transform;
+
+                if (mesh.Submeshes.Count > 1)
                 {
+                    foreach (var sub in mesh.Submeshes)
+                    {
+                        TryQueueDynamicMeshDraw(mesh, instanceWorld, 1f, tint, protoPath, material, Vector4.Zero,
+                            sub.VertexStart, sub.VertexCount, sub.TexturePath, null, null, null, null, null, null);
+                    }
+                }
+                else
+                {
+                    string? texturePath = mesh.Submeshes.Count > 0 ? mesh.Submeshes[0].TexturePath : null;
                     TryQueueDynamicMeshDraw(mesh, instanceWorld, 1f, tint, protoPath, material, Vector4.Zero,
-                        sub.VertexStart, sub.VertexCount, sub.TexturePath, null, null, null, null, null, null);
+                        0, mesh.Positions.Length / 3, texturePath, null, null, null, null, null, null);
                 }
             }
             else
             {
-                string? texturePath = mesh.Submeshes.Count > 0 ? mesh.Submeshes[0].TexturePath : null;
-                TryQueueDynamicMeshDraw(mesh, instanceWorld, 1f, tint, protoPath, material, Vector4.Zero,
-                    0, mesh.Positions.Length / 3, texturePath, null, null, null, null, null, null);
+                QueueTreeBillboard(worldPos, extent, cameraPosition, mesh);
             }
         }
+    }
+
+// Encola un árbol como billboard: quad plano, ancho X/Z tomado del bounding box de la malla real
+// (escalado por Scale de la instancia), anclado al piso, que rota SOLO en Y para mirar siempre
+// a cámara (no billboard esférico como las partículas). Simplificación deliberada respecto a
+// Unity: usa la MISMA textura del prototipo 3D directo sobre el quad, en vez de un snapshot
+// recortado horneado — más barato de implementar, algo menos fiel visualmente de cerca (que es
+// justo donde no se usa: los billboards solo aparecen lejos o fuera del ranking de malla).
+private void QueueTreeBillboard(Vector3 worldPos, MiMotor.Mathematics.Vector3 extent, Vector3 cameraPosition, ParsedMesh mesh)
+    {
+        string texturePath = mesh.Submeshes.Count > 0 ? (mesh.Submeshes[0].TexturePath ?? "") : "";
+        if (!string.IsNullOrWhiteSpace(texturePath))
+            texturePath = NormalizeExistingAssetPath(texturePath) ?? texturePath;
+
+        float halfWidth = Math.Max(0.05f, MathF.Max(extent.X, extent.Z) * 0.5f);
+        float height = Math.Max(0.05f, extent.Y);
+
+        float dx = cameraPosition.X - worldPos.X;
+        float dz = cameraPosition.Z - worldPos.Z;
+        float yaw = (MathF.Abs(dx) > 1e-5f || MathF.Abs(dz) > 1e-5f) ? MathF.Atan2(dx, dz) : 0f;
+
+        if (!_treeBillboardsByTexture.TryGetValue(texturePath, out var list))
+        {
+            list = new List<TreeBillboardInstance>();
+            _treeBillboardsByTexture[texturePath] = list;
+        }
+        list.Add(new TreeBillboardInstance(worldPos, halfWidth, height, yaw, new Vector4(1f, 1f, 1f, 1f)));
+    }
+
+// Dibuja todos los billboards de árbol acumulados este frame (de todos los Terrain de la
+// escena), agrupados por textura — una llamada glDrawArraysInstanced por textura distinta.
+private void DrawTerrainTreeBillboards(ref Matrix4 mvp)
+    {
+        if (_treeBillboardsByTexture.Count == 0 || _treeBillboardShader == 0)
+            return;
+
+        GL.Enable(EnableCap.CullFace);
+        GL.UseProgram(_treeBillboardShader);
+        GL.UniformMatrix4(_treeBillboardMvpLoc, true, ref mvp);
+        GL.Uniform1(_treeBillboardTexLoc, 0);
+        GL.BindVertexArray(_treeBillboardVao);
+        GL.ActiveTexture(TextureUnit.Texture0);
+
+        foreach (var (texturePath, list) in _treeBillboardsByTexture)
+        {
+            if (list.Count == 0)
+                continue;
+
+            bool hasTex = !string.IsNullOrWhiteSpace(texturePath) && File.Exists(texturePath);
+            int texId = hasTex ? GetTexture(texturePath) : 0;
+            GL.Uniform1(_treeBillboardHasTexLoc, hasTex ? 1 : 0);
+            GL.BindTexture(TextureTarget.Texture2D, texId);
+
+            if (_treeBillboardUploadBuffer.Length < list.Count)
+                Array.Resize(ref _treeBillboardUploadBuffer, list.Count);
+            list.CopyTo(_treeBillboardUploadBuffer);
+
+            int bytes = list.Count * Unsafe.SizeOf<TreeBillboardInstance>();
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBillboardInstanceVbo);
+            if (bytes > _treeBillboardInstanceBufferCapacity)
+            {
+                _treeBillboardInstanceBufferCapacity = Math.Max(bytes, _treeBillboardInstanceBufferCapacity == 0 ? 8192 : _treeBillboardInstanceBufferCapacity * 2);
+                GL.BufferData(BufferTarget.ArrayBuffer, _treeBillboardInstanceBufferCapacity, IntPtr.Zero, BufferUsageHint.DynamicDraw);
+            }
+            GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, bytes, _treeBillboardUploadBuffer);
+
+            TrackMainDraw(6, list.Count);
+            GL.DrawArraysInstanced(PrimitiveType.Triangles, 0, 6, list.Count);
+
+            list.Clear();
+        }
+
+        GL.BindTexture(TextureTarget.Texture2D, 0);
+        GL.BindVertexArray(0);
+        GL.UseProgram(0);
     }
 
 private (ParsedMesh Mesh, string MeshPath) GetTerrainMesh(GameObject obj, Terrain terrain)
@@ -379,5 +461,61 @@ private static int CreateTerrainShader()
         GL.DeleteShader(vertex);
         GL.DeleteShader(fragment);
         return program;
+    }
+
+private readonly record struct TreeBillboardInstance(Vector3 Center, float HalfWidth, float Height, float Yaw, Vector4 Color);
+
+// Shader instanciado para billboards de árbol: quad unitario compartido (offset -0.5..0.5 en X,
+// 0..1 en Y anclado al piso), rotado SOLO en Y para mirar hacia la cámara (no billboard esférico
+// como las partículas) usando el yaw ya calculado en CPU por instancia.
+private static int CreateTreeBillboardShader()
+    {
+        const string vert = """
+            #version 330 core
+            layout(location=0) in vec2  aUnitOffset;   // por-vértice (divisor 0): x en -0.5..0.5, y en 0..1
+            layout(location=1) in vec2  aUnitUv;        // por-vértice (divisor 0): 0..1
+            layout(location=2) in vec3  iCenter;        // por-instancia (divisor 1): base del árbol, a nivel de piso
+            layout(location=3) in float iHalfWidth;
+            layout(location=4) in float iHeight;
+            layout(location=5) in float iYaw;
+            layout(location=6) in vec4  iColor;
+            uniform mat4 uMvp;
+            out vec4 vColor;
+            out vec2 vUv;
+            void main()
+            {
+                float c = cos(iYaw);
+                float s = sin(iYaw);
+                vec3 right = vec3(c, 0.0, -s);
+                vec3 world = iCenter + right * (aUnitOffset.x * iHalfWidth * 2.0) + vec3(0.0, aUnitOffset.y * iHeight, 0.0);
+                vColor = iColor;
+                vUv = aUnitUv;
+                gl_Position = vec4(world, 1.0) * uMvp;
+            }
+            """;
+        const string frag = """
+            #version 330 core
+            in  vec4 vColor;
+            in  vec2 vUv;
+            out vec4 outColor;
+            uniform sampler2D uTexture;
+            uniform int       uHasTexture;
+            void main()
+            {
+                vec4 tex = uHasTexture != 0 ? texture(uTexture, vUv) : vec4(1.0);
+                outColor = tex * vColor;
+                if (outColor.a < 0.3) discard;
+            }
+            """;
+        int v = CompileShader(ShaderType.VertexShader, vert);
+        int f = CompileShader(ShaderType.FragmentShader, frag);
+        int p = GL.CreateProgram();
+        GL.AttachShader(p, v); GL.AttachShader(p, f);
+        GL.LinkProgram(p);
+        GL.GetProgram(p, GetProgramParameterName.LinkStatus, out int ok);
+        if (ok == 0) throw new InvalidOperationException(GL.GetProgramInfoLog(p));
+        GL.DetachShader(p, v); GL.DetachShader(p, f);
+        GL.DeleteShader(v); GL.DeleteShader(f);
+        return p;
     }
 }

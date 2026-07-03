@@ -57,13 +57,14 @@ namespace GrokoEngine
         public List<string> TreePrototypes = new();
         public List<TerrainTreeInstance> Trees = new();
 
-        // Estilo Unity ("Tree Distance"/"Max Mesh Trees" en Terrain Settings): más allá de
-        // TreeDistance un árbol ni se dibuja; de los que quedan dentro, solo los MaxMeshTrees más
-        // cercanos a la cámara se renderizan (evita que un bosque de miles de árboles intente
-        // dibujarse entero cada frame). Unity, más allá del límite, cae a billboards en vez de
-        // ocultarlos — este motor todavía no tiene esa parte, así que acá el excedente
-        // directamente no se dibuja.
+        // Estilo Unity ("Tree Distance"/"Billboard Start"/"Max Mesh Trees" en Terrain Settings):
+        // más allá de TreeDistance un árbol ni se procesa. De los que quedan dentro, un árbol se
+        // dibuja como malla 3D solo si está más cerca que BillboardStart Y entra en el ranking de
+        // los MaxMeshTrees más cercanos a la cámara; el resto (más lejos que BillboardStart, o
+        // dentro pero fuera del ranking) se dibuja como un quad plano ("billboard") que rota para
+        // mirar siempre a cámara — mucho más barato que la malla completa a esa distancia.
         public float TreeDistance = 250f;
+        public float BillboardStart = 80f;
         public int MaxMeshTrees = 1500;
 
         // Se incrementa cada vez que cambia algo que afecta al mesh generado

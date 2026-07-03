@@ -1216,7 +1216,9 @@ internal sealed partial class ImGuiEditorApp
                     {
                         DrawTerrainTreePrototypeList(terrain);
                         DrawFloat("Tree Distance", terrain.TreeDistance, v => terrain.TreeDistance = Math.Max(1f, v), 1f, 1f, 20000f);
-                        ImGui.TextDisabled("Más allá de esta distancia los árboles no se dibujan.");
+                        ImGui.TextDisabled("Más allá de esta distancia un árbol ni se dibuja (ni malla ni billboard).");
+                        DrawFloat("Billboard Start", terrain.BillboardStart, v => terrain.BillboardStart = Math.Max(0f, v), 1f, 0f, 20000f);
+                        ImGui.TextDisabled("Más allá de esta distancia, un árbol se dibuja como billboard (quad plano) en vez de malla 3D.");
                         {
                             int maxMeshTrees = terrain.MaxMeshTrees;
                             FieldRow("Max Mesh Trees");
@@ -1225,7 +1227,7 @@ internal sealed partial class ImGuiEditorApp
                                 terrain.MaxMeshTrees = Math.Max(0, maxMeshTrees);
                             ImGui.PopStyleVar();
                         }
-                        ImGui.TextDisabled("Si hay más árboles plantados que este número, solo se dibujan los más cercanos a cámara (a diferencia de Unity, los que exceden el límite no caen a billboard: no se dibujan).");
+                        ImGui.TextDisabled("Si hay más árboles dentro de rango que este número, los que sobran (los más lejos de cámara) también se dibujan como billboard.");
                     }
 
                     DrawFloat("Brush Radius", terrainBrushRadius, v => terrainBrushRadius = v, 0.1f, 0.5f, 100f);

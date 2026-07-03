@@ -425,6 +425,52 @@ internal sealed partial class SceneViewportRenderer
 
         GL.BindVertexArray(0);
         GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+
+        // ── Billboards de árbol de Terrain: shader + quad unitario + VBO de instancias ──
+        _treeBillboardShader = CreateTreeBillboardShader();
+        _treeBillboardMvpLoc = GL.GetUniformLocation(_treeBillboardShader, "uMvp");
+        _treeBillboardTexLoc = GL.GetUniformLocation(_treeBillboardShader, "uTexture");
+        _treeBillboardHasTexLoc = GL.GetUniformLocation(_treeBillboardShader, "uHasTexture");
+
+        // Quad unitario anclado al piso: X en -0.5..0.5 (ancho), Y en 0..1 (0 = base, 1 = copa).
+        float[] treeBillboardUnitQuad =
+        {
+            -0.5f, 0f, 0f, 1f,
+             0.5f, 0f, 1f, 1f,
+             0.5f, 1f, 1f, 0f,
+            -0.5f, 0f, 0f, 1f,
+             0.5f, 1f, 1f, 0f,
+            -0.5f, 1f, 0f, 0f,
+        };
+        _treeBillboardUnitQuadVbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBillboardUnitQuadVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, treeBillboardUnitQuad.Length * sizeof(float), treeBillboardUnitQuad, BufferUsageHint.StaticDraw);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+
+        _treeBillboardInstanceVbo = GL.GenBuffer();
+
+        _treeBillboardVao = GL.GenVertexArray();
+        GL.BindVertexArray(_treeBillboardVao);
+
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBillboardUnitQuadVbo);
+        GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 16, 0);
+        GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 16, 8);
+
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _treeBillboardInstanceVbo);
+        int tbi = Unsafe.SizeOf<TreeBillboardInstance>();
+        GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, tbi, 0);   // center
+        GL.VertexAttribDivisor(2, 1);
+        GL.EnableVertexAttribArray(3); GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, tbi, 12);  // halfWidth
+        GL.VertexAttribDivisor(3, 1);
+        GL.EnableVertexAttribArray(4); GL.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, tbi, 16);  // height
+        GL.VertexAttribDivisor(4, 1);
+        GL.EnableVertexAttribArray(5); GL.VertexAttribPointer(5, 1, VertexAttribPointerType.Float, false, tbi, 20);  // yaw
+        GL.VertexAttribDivisor(5, 1);
+        GL.EnableVertexAttribArray(6); GL.VertexAttribPointer(6, 4, VertexAttribPointerType.Float, false, tbi, 24);  // color
+        GL.VertexAttribDivisor(6, 1);
+
+        GL.BindVertexArray(0);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
     }
 
 }
