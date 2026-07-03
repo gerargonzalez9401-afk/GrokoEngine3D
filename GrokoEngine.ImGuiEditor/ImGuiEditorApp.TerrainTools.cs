@@ -20,6 +20,7 @@ internal sealed partial class ImGuiEditorApp
 
     private TerrainEditMode terrainEditMode = TerrainEditMode.Sculpt;
     private TerrainBrushTool terrainBrushTool = TerrainBrushTool.Raise;
+    private TerrainBrushFalloff terrainBrushFalloff = TerrainBrushFalloff.Soft;
     private int terrainPaintLayer;
     private float terrainBrushRadius = 5f;
     private float terrainBrushStrength = 0.5f;
@@ -125,7 +126,8 @@ internal sealed partial class ImGuiEditorApp
     private void ApplyTerrainSculptBrush(Terrain terrain, float localX, float localZ, float deltaTime)
     {
         bool changed = TerrainBrush.ApplySculpt(terrain, terrainBrushTool, localX, localZ,
-            terrainBrushRadius, terrainBrushStrength, deltaTime, terrainNoiseSeed, ref terrainFlattenHeight);
+            terrainBrushRadius, terrainBrushStrength, deltaTime, terrainNoiseSeed, ref terrainFlattenHeight,
+            terrainBrushFalloff);
         if (changed)
             terrain.Version++;
     }

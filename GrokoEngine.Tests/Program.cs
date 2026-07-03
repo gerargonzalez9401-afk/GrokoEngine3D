@@ -69,6 +69,7 @@ internal static class Program
             ("TerrainBrush raise increases height with falloff", TerrainBrushRaiseIncreasesHeightWithFalloff),
             ("TerrainBrush flatten converges toward captured height", TerrainBrushFlattenConvergesTowardCapturedHeight),
             ("TerrainBrush paint increases active layer and reduces others", TerrainBrushPaintIncreasesActiveLayerAndReducesOthers),
+            ("TerrainBrush hard falloff pushes uniformly within radius", TerrainBrushHardFalloffPushesUniformlyWithinRadius),
             ("TerrainHeightmapImport maps black to low and white to high", TerrainHeightmapImportMapsBlackToLowAndWhiteToHigh),
             ("TerrainHeightmapImport resamples to current resolution, not source size", TerrainHeightmapImportResamplesToCurrentResolutionNotSourceSize),
             ("SceneManager resolves scene path by name", SceneManagerResolveScenePathFindsSceneByName),
@@ -2323,6 +2324,23 @@ internal static class Program
         AssertTrue(terrain.SplatMap[pixel + 0] < 255, "other layer channel reduced proportionally");
         int sum = terrain.SplatMap[pixel + 0] + terrain.SplatMap[pixel + 1] + terrain.SplatMap[pixel + 2] + terrain.SplatMap[pixel + 3];
         AssertTrue(sum >= 250 && sum <= 260, "layer weights stay close to the original ~255 sum");
+    }
+
+    private static void TerrainBrushHardFalloffPushesUniformlyWithinRadius()
+    {
+        var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
+        float? flatten = null;
+        // strength/deltaTime chicos a propósito para no saturar el clamp [-2,2] y poder comparar
+        // el valor real de las dos celdas (si no, ambas terminarían iguales en el techo del clamp
+        // sin que eso demuestre nada sobre el falloff).
+        bool changed = TerrainBrush.ApplySculpt(terrain, TerrainBrushTool.Raise, 0f, 0f, 2f, 1f, 0.1f, 1, ref flatten,
+            TerrainBrushFalloff.Hard);
+
+        AssertTrue(changed, "hard raise brush reports a change");
+        float center = terrain.Heightmap[4 * 9 + 4];
+        float edgeInsideRadius = terrain.Heightmap[4 * 9 + 3]; // one cell over, still inside the 2-unit radius
+        AssertNear(center, edgeInsideRadius, "hard falloff pushes evenly across the whole brush, no soft edge taper");
+        AssertNear(0f, terrain.Heightmap[0], "corner cell far outside brush radius stays unchanged");
     }
 
     private static void TerrainHeightmapImportMapsBlackToLowAndWhiteToHigh()

@@ -12,6 +12,15 @@ namespace GrokoEngine
         Extrude
     }
 
+    // Forma del pincel: Soft degrada hacia el borde (colinas redondeadas, el comportamiento de
+    // siempre). Hard empuja parejo en todo el radio, sin degradado -> con Raise/Extrude repetido
+    // da una meseta de arriba plana y borde filoso en vez de una colina.
+    public enum TerrainBrushFalloff
+    {
+        Soft,
+        Hard
+    }
+
     // Matematica pura de las brochas de Terrain (sculpt/paint), extraida del editor para que sea
     // testeable desde GrokoEngine.Tests sin ImGui/OpenGL. El editor (ImGuiEditorApp.TerrainTools.cs)
     // solo se encarga de raycast/mouse/undo y llama a estos metodos con el mismo resultado de antes.
@@ -64,7 +73,8 @@ namespace GrokoEngine
         // flattenHeight: el llamador la captura al primer click del trazo (null = capturar aqui esta vez).
         // Devuelve true si modifico alguna celda (el llamador debe incrementar terrain.Version en ese caso).
         public static bool ApplySculpt(Terrain terrain, TerrainBrushTool tool, float localX, float localZ,
-            float radius, float strength, float deltaTime, int noiseSeed, ref float? flattenHeight)
+            float radius, float strength, float deltaTime, int noiseSeed, ref float? flattenHeight,
+            TerrainBrushFalloff falloffMode = TerrainBrushFalloff.Soft)
         {
             if (!ComputeBrushCells(terrain, localX, localZ, radius, out float gx, out float gz, out float stepX, out float stepZ,
                 out int minX, out int maxX, out int minZ, out int maxZ))
@@ -91,8 +101,16 @@ namespace GrokoEngine
                     if (dist > radius)
                         continue;
 
-                    float t = 1f - dist / radius;
-                    float falloff = t * t * (3f - 2f * t);
+                    float falloff;
+                    if (falloffMode == TerrainBrushFalloff.Hard)
+                    {
+                        falloff = 1f;
+                    }
+                    else
+                    {
+                        float t = 1f - dist / radius;
+                        falloff = t * t * (3f - 2f * t);
+                    }
                     int index = z * resolution + x;
 
                     switch (tool)

@@ -1168,6 +1168,18 @@ internal sealed partial class ImGuiEditorApp
                             if (DrawToggleButton("Extrude", terrainBrushTool == TerrainBrushTool.Extrude, brushSize))
                                 terrainBrushTool = TerrainBrushTool.Extrude;
                         }
+
+                        FieldRow("Brush Shape");
+                        {
+                            var falloffSize = new Vector2(90f, 0f);
+                            if (DrawToggleButton("Soft", terrainBrushFalloff == TerrainBrushFalloff.Soft, falloffSize))
+                                terrainBrushFalloff = TerrainBrushFalloff.Soft;
+                            ImGui.SameLine();
+                            if (DrawToggleButton("Hard", terrainBrushFalloff == TerrainBrushFalloff.Hard, falloffSize))
+                                terrainBrushFalloff = TerrainBrushFalloff.Hard;
+                        }
+                        if (terrainBrushFalloff == TerrainBrushFalloff.Hard)
+                            ImGui.TextDisabled("Empuja parejo en todo el radio, sin degradar hacia el borde. Ideal para mesetas: Raise repetido da una zona plana de arriba con borde filoso, en vez de una colina redondeada.");
                     }
                     else
                     {
