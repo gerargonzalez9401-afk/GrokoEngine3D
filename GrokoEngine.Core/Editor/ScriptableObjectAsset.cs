@@ -78,8 +78,9 @@ namespace GrokoEngine
 
                     return SceneSerializer.LoadPrefab(fullPath, ctx.PhysicsEngine, ctx.ScriptCompiler);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Debug.LogWarning($"[ScriptableObjectAsset] No se pudo resolver la referencia a prefab '{raw}': {ex.Message}");
                     return null;
                 }
             }
@@ -149,8 +150,9 @@ namespace GrokoEngine
                 File.WriteAllText(path, JsonSerializer.Serialize(envelope, Options));
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                Debug.LogWarning($"[ScriptableObjectAsset] No se pudo guardar '{path}': {ex.Message}");
                 return false;
             }
             finally
@@ -184,8 +186,9 @@ namespace GrokoEngine
                     instance.Name = Path.GetFileNameWithoutExtension(path);
                 return instance;
             }
-            catch
+            catch (Exception ex)
             {
+                Debug.LogWarning($"[ScriptableObjectAsset] No se pudo cargar '{path}': {ex.Message}");
                 return null;
             }
             finally
@@ -202,8 +205,10 @@ namespace GrokoEngine
                 envelope?.Normalize();
                 return envelope?.TypeName;
             }
-            catch
+            catch (Exception ex)
             {
+                if (File.Exists(path))
+                    Debug.LogWarning($"[ScriptableObjectAsset] No se pudo leer el tipo de '{path}': {ex.Message}");
                 return null;
             }
         }

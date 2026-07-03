@@ -189,8 +189,10 @@ namespace GrokoEngine
                 data.Normalize();
                 return data;
             }
-            catch
+            catch (Exception ex)
             {
+                if (File.Exists(path))
+                    Debug.LogWarning($"[AnimatorControllerAsset] No se pudo cargar '{path}': {ex.Message}");
                 return new AnimatorControllerData { Name = Path.GetFileNameWithoutExtension(path) };
             }
         }

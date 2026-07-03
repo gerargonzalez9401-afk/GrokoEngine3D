@@ -30,6 +30,7 @@ internal static class Program
             ("SceneSerializer loads legacy prefab payload", SceneSerializerLoadsLegacyPrefabPayload),
             ("SceneSerializer normalizes null collections", SceneSerializerNormalizesNullCollections),
             ("MaterialAsset stores texture paths relative to Assets", MaterialAssetStoresTexturePathsRelativeToAssets),
+            ("AnimationClipAsset stores model/avatar paths relative to Assets", AnimationClipAssetStoresModelAndAvatarPathsRelativeToAssets),
             ("MaterialAsset clearing base map clears legacy texture path", MaterialAssetClearingBaseMapClearsLegacyTexturePath),
             ("MaterialAsset loads legacy null shader graph dictionaries", MaterialAssetLoadsLegacyNullShaderGraphDictionaries),
             ("MaterialAsset reuses imported materials", MaterialAssetReusesImportedMaterials),
@@ -513,6 +514,34 @@ internal static class Program
         var reloaded = MaterialAsset.Load(materialPath);
         AssertTrue(string.IsNullOrWhiteSpace(reloaded.AlbedoPath), "cleared albedo stays cleared");
         AssertTrue(string.IsNullOrWhiteSpace(reloaded.TexturePath), "legacy texture path is cleared too");
+    }
+
+    private static void AnimationClipAssetStoresModelAndAvatarPathsRelativeToAssets()
+    {
+        string root = CreateTempProject();
+        string assets = Path.Combine(root, "Assets");
+        string clipPath = Path.Combine(assets, "Animations", "Walk.anim");
+        string modelPath = Path.Combine(assets, "Models", "Hero.fbx");
+        string avatarPath = Path.Combine(assets, "Models", "Hero.fbx.avatar");
+        Directory.CreateDirectory(Path.GetDirectoryName(clipPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(modelPath)!);
+        File.WriteAllText(modelPath, "model");
+        File.WriteAllText(avatarPath, "avatar");
+
+        AnimationClipAsset.Save(clipPath, new AnimationClipData
+        {
+            Name = "Walk",
+            SourceModelPath = modelPath,
+            AvatarPath = avatarPath
+        });
+
+        string json = File.ReadAllText(clipPath);
+        AssertContains(json, "Models/Hero.fbx", "relative source model path");
+        AssertFalse(json.Contains(root, StringComparison.OrdinalIgnoreCase), "clip should not contain absolute project root");
+
+        var loaded = AnimationClipAsset.Load(clipPath);
+        AssertEqual(Path.GetFullPath(modelPath), Path.GetFullPath(loaded.SourceModelPath), "resolved source model path");
+        AssertEqual(Path.GetFullPath(avatarPath), Path.GetFullPath(loaded.AvatarPath), "resolved avatar path");
     }
 
     private static void MaterialAssetReusesImportedMaterials()

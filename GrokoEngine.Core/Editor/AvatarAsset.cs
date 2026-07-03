@@ -65,7 +65,12 @@ namespace GrokoEngine
                 d.Normalize();
                 return d;
             }
-            catch { return new AvatarData { Name = Path.GetFileNameWithoutExtension(path) }; }
+            catch (Exception ex)
+            {
+                if (File.Exists(path))
+                    Debug.LogWarning($"[AvatarAsset] No se pudo cargar '{path}': {ex.Message}");
+                return new AvatarData { Name = Path.GetFileNameWithoutExtension(path) };
+            }
         }
 
         public static bool IsCompatibleWithModel(string avatarPath, string modelPath, out string message)

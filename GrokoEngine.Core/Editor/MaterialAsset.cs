@@ -113,8 +113,10 @@ namespace GrokoEngine
                 data.TexturePath = data.AlbedoPath;
                 return data;
             }
-            catch
+            catch (Exception ex)
             {
+                if (File.Exists(path))
+                    Debug.LogWarning($"[MaterialAsset] No se pudo cargar '{path}': {ex.Message}");
                 return new MaterialAssetData { Name = Path.GetFileNameWithoutExtension(path) };
             }
         }

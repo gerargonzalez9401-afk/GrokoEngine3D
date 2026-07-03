@@ -192,13 +192,17 @@ namespace GrokoEngine
                 var text = File.ReadAllText(path);
                 var data = JsonSerializer.Deserialize<AnimationClipData>(text) ?? new AnimationClipData();
                 data.Normalize();
+                ResolveAssetPaths(data, path);
 
                 if (_cache.Count >= MaxCached) _cache.Clear();
                 _cache[path] = (data, write);
                 return data;
             }
-            catch
+            catch (Exception ex)
             {
+                // No avisar si simplemente no existe (caso normal: referencia opcional sin asignar).
+                if (File.Exists(path))
+                    Debug.LogWarning($"[AnimationClipAsset] No se pudo cargar '{path}': {ex.Message}");
                 return new AnimationClipData { Name = Path.GetFileNameWithoutExtension(path) };
             }
         }
@@ -210,13 +214,58 @@ namespace GrokoEngine
                 ? Path.GetFileNameWithoutExtension(path)
                 : data.Name;
             data.Keyframes.Sort((a, b) => a.Time.CompareTo(b.Time));
-            File.WriteAllText(path, JsonSerializer.Serialize(data, Options));
+
+            // SourceModelPath/AvatarPath se guardan como referencia relativa (guid:...;path:...),
+            // igual que MaterialAsset, para que el .anim no se rompa si se mueve la carpeta del
+            // proyecto. Se relativiza solo para el JSON escrito a disco; el objeto en memoria (y
+            // lo que queda en cache) se queda con las rutas absolutas resueltas, que es lo que
+            // esperan Animator.cs/Animator.Skeletal.cs al leer data.SourceModelPath directamente.
+            string originalSourceModelPath = data.SourceModelPath;
+            string originalAvatarPath = data.AvatarPath;
+            try
+            {
+                RelativizeAssetPaths(data, path);
+                File.WriteAllText(path, JsonSerializer.Serialize(data, Options));
+            }
+            finally
+            {
+                data.SourceModelPath = originalSourceModelPath;
+                data.AvatarPath = originalAvatarPath;
+            }
+
             // Mantén el caché coherente: la instancia recién guardada pasa a ser la cacheada.
             try { _cache[path] = (data, File.GetLastWriteTimeUtc(path)); }
             catch (Exception ex)
             {
                 Debug.LogWarning($"[AnimationClipAsset] No se pudo actualizar cache para '{path}': {ex.Message}");
             }
+        }
+
+        private static void RelativizeAssetPaths(AnimationClipData data, string clipPath)
+        {
+            string? assetsRoot = InferAssetsRoot(clipPath);
+            data.SourceModelPath = AssetDatabase.SerializeReference(data.SourceModelPath, assetsRoot);
+            data.AvatarPath = AssetDatabase.SerializeReference(data.AvatarPath, assetsRoot);
+        }
+
+        private static void ResolveAssetPaths(AnimationClipData data, string clipPath)
+        {
+            string? assetsRoot = InferAssetsRoot(clipPath);
+            data.SourceModelPath = AssetDatabase.ResolveReference(data.SourceModelPath, assetsRoot) ?? "";
+            data.AvatarPath = AssetDatabase.ResolveReference(data.AvatarPath, assetsRoot) ?? "";
+        }
+
+        private static string? InferAssetsRoot(string filePath)
+        {
+            var dir = new DirectoryInfo(Path.GetDirectoryName(Path.GetFullPath(filePath)) ?? "");
+            while (dir != null)
+            {
+                if (string.Equals(dir.Name, "Assets", StringComparison.OrdinalIgnoreCase))
+                    return dir.FullName;
+                dir = dir.Parent;
+            }
+
+            return null;
         }
 
         private static string GetUniquePath(string desiredPath)
