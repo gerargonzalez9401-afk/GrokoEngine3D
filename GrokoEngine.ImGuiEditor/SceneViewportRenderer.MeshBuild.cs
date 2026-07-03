@@ -366,7 +366,11 @@ internal sealed partial class SceneViewportRenderer
                 count,
                 shaderGraphPath,
                 shaderGraphProperties,
-                shaderGraphTextures));
+                shaderGraphTextures,
+                transparent ? false : castShadows,
+                transparent ? false : receiveShadows,
+                transparent ? false : twoSidedShadows,
+                transparent ? false : shadowsOnly));
             return true;
         }
 
@@ -443,7 +447,11 @@ internal sealed partial class SceneViewportRenderer
                 count,
                 shaderGraphPath,
                 shaderGraphProperties,
-                shaderGraphTextures));
+                shaderGraphTextures,
+                transparent ? false : castShadows,
+                transparent ? false : receiveShadows,
+                transparent ? false : twoSidedShadows,
+                transparent ? false : shadowsOnly));
             return true;
         }
 

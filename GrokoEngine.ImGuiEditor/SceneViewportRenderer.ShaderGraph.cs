@@ -278,6 +278,10 @@ void main()
 
         foreach (var draw in shaderGraphDynamicMeshDraws)
         {
+            // "Shadows Only": sigue proyectando sombra (depth pass), pero acá en color no se dibuja.
+            if (draw.ShadowsOnly)
+                continue;
+
             var entry = GetShaderGraphEntry(draw.ShaderGraphPath);
             if (entry == null || entry.Program == 0) continue;
 
@@ -285,7 +289,7 @@ void main()
             GL.UseProgram(entry.Program);
 
             var world = draw.World;
-            ApplyShaderGraphFrameUniforms(entry, ref mvp, cameraPosition, viewportWidth, viewportHeight, lightDir, lightColor, lightIntensity, cameraNear, cameraFar);
+            ApplyShaderGraphFrameUniforms(entry, ref mvp, cameraPosition, viewportWidth, viewportHeight, lightDir, lightColor, lightIntensity, cameraNear, cameraFar, draw.ReceiveShadows);
             SetMatrixUniform(entry.ModelLocation, ref world);
             SetIntUniform(entry.UseModelLocation, 1);
             SetIntUniform(entry.UseSkinningLocation, 0);
@@ -313,6 +317,9 @@ void main()
 
         foreach (var draw in shaderGraphSkinnedMeshDraws)
         {
+            if (draw.ShadowsOnly)
+                continue;
+
             var entry = GetShaderGraphEntry(draw.ShaderGraphPath);
             if (entry == null || entry.Program == 0) continue;
 
@@ -320,7 +327,7 @@ void main()
             GL.UseProgram(entry.Program);
 
             var world = draw.World;
-            ApplyShaderGraphFrameUniforms(entry, ref mvp, cameraPosition, viewportWidth, viewportHeight, lightDir, lightColor, lightIntensity, cameraNear, cameraFar);
+            ApplyShaderGraphFrameUniforms(entry, ref mvp, cameraPosition, viewportWidth, viewportHeight, lightDir, lightColor, lightIntensity, cameraNear, cameraFar, draw.ReceiveShadows);
             SetMatrixUniform(entry.ModelLocation, ref world);
             SetIntUniform(entry.UseModelLocation, 1);
             SetIntUniform(entry.UseSkinningLocation, 1);
@@ -368,7 +375,8 @@ void main()
             Vector3 lightColor,
             float lightIntensity,
             float cameraNear,
-            float cameraFar)
+            float cameraFar,
+            bool receiveShadows = true)
     {
         if (entry.ViewProjLocation >= 0)
             GL.UniformMatrix4(entry.ViewProjLocation, true, ref mvp);
@@ -382,13 +390,14 @@ void main()
         SetUniformIfPresent(entry.ColorSpaceLinearLocation, ColorSpace == ColorSpace.Linear ? 1 : 0);
         SetUniformIfPresent(entry.CameraNearLocation, Math.Max(0.001f, cameraNear));
         SetUniformIfPresent(entry.CameraFarLocation, Math.Max(cameraNear + 0.001f, cameraFar));
-        ApplyShaderGraphShadowUniforms(entry);
+        ApplyShaderGraphShadowUniforms(entry, receiveShadows);
     }
 
-    private void ApplyShaderGraphShadowUniforms(ShaderGraphMaterialEntry entry)
+    private void ApplyShaderGraphShadowUniforms(ShaderGraphMaterialEntry entry, bool receiveShadows = true)
     {
         var shadow = _cachedDirectionalShadow;
-        SetIntUniform(entry.ShadowEnabledLocation, shadow.Enabled ? 1 : 0);
+        bool shadowsEnabled = shadow.Enabled && receiveShadows;
+        SetIntUniform(entry.ShadowEnabledLocation, shadowsEnabled ? 1 : 0);
         SetIntUniform(entry.CascadeCountLocation, shadow.CascadeCount);
         SetIntUniform(entry.ShadowPcfRadiusLocation, ShadowPcfRadiusFor(_shadowQuality));
         SetUniformIfPresent(entry.ShadowStrengthLocation, shadow.Strength);
@@ -411,7 +420,7 @@ void main()
         {
             GL.Uniform1(entry.ShadowMapLocation, 14); // unidad de textura alta para no chocar con los samplers del graph
             GL.ActiveTexture(TextureUnit.Texture14);
-            GL.BindTexture(TextureTarget.Texture2DArray, shadow.Enabled ? _shadowArrayTex : 0);
+            GL.BindTexture(TextureTarget.Texture2DArray, shadowsEnabled ? _shadowArrayTex : 0);
             GL.ActiveTexture(TextureUnit.Texture0);
         }
     }
@@ -1034,7 +1043,7 @@ void main()
         return program;
     }
 
-    private readonly record struct ShaderGraphDynamicMeshDraw(CachedGpuMesh Mesh, Matrix4 World, int Start, int Count, string ShaderGraphPath, IReadOnlyDictionary<string, float[]>? ShaderGraphProperties, IReadOnlyDictionary<string, string>? ShaderGraphTextures);
+    private readonly record struct ShaderGraphDynamicMeshDraw(CachedGpuMesh Mesh, Matrix4 World, int Start, int Count, string ShaderGraphPath, IReadOnlyDictionary<string, float[]>? ShaderGraphProperties, IReadOnlyDictionary<string, string>? ShaderGraphTextures, bool CastShadows = true, bool ReceiveShadows = true, bool TwoSidedShadows = false, bool ShadowsOnly = false);
 
-    private readonly record struct ShaderGraphSkinnedMeshDraw(CachedSkinnedGpuMesh Mesh, Matrix4 World, System.Numerics.Matrix4x4[] Skin, int Start, int Count, string ShaderGraphPath, IReadOnlyDictionary<string, float[]>? ShaderGraphProperties, IReadOnlyDictionary<string, string>? ShaderGraphTextures);
+    private readonly record struct ShaderGraphSkinnedMeshDraw(CachedSkinnedGpuMesh Mesh, Matrix4 World, System.Numerics.Matrix4x4[] Skin, int Start, int Count, string ShaderGraphPath, IReadOnlyDictionary<string, float[]>? ShaderGraphProperties, IReadOnlyDictionary<string, string>? ShaderGraphTextures, bool CastShadows = true, bool ReceiveShadows = true, bool TwoSidedShadows = false, bool ShadowsOnly = false);
 }
