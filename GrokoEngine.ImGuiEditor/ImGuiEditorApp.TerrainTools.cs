@@ -140,6 +140,16 @@ internal sealed partial class ImGuiEditorApp
                 _ => "Sculpt Terrain "
             };
             PushSceneState(label + selected.Name, terrainSculptUndoStart.Value, CaptureSceneState());
+
+            // Un Terrain Static (el default al crearlo, como en Unity) vive horneado en el batch
+            // estático general junto con el resto de la geometría estática de la escena. Si lo
+            // invalidáramos en CADA frame mientras se arrastra el pincel, cada trazo forzaría
+            // reconstruir TODO ese batch (no solo el terreno) 60 veces por segundo — así que se
+            // invalida una vez, al soltar el mouse, cuando ya termina el trazo completo. Mientras
+            // se sculpea/pinta/planta en vivo, un Terrain Static no se actualiza visualmente
+            // hasta soltar (uno no-Static sí, porque pasa por el pase dinámico normal cada frame).
+            if (selected.IsStatic)
+                sceneRenderer.InvalidateStaticBatch();
         }
 
         terrainSculptUndoStart = null;
@@ -208,6 +218,8 @@ internal sealed partial class ImGuiEditorApp
             if (terrainTreePrototypeIndex >= terrain.TreePrototypes.Count)
                 terrainTreePrototypeIndex = Math.Max(0, terrain.TreePrototypes.Count - 1);
             terrain.TreeVersion++;
+            if (terrain.gameObject.IsStatic)
+                sceneRenderer.InvalidateStaticBatch();
         }
 
         FieldRow("");
@@ -275,6 +287,8 @@ internal sealed partial class ImGuiEditorApp
         TerrainHeightmapImport.Apply(terrain, gray, width, height);
         terrain.Version++;
         PushSceneState("Import Heightmap " + (selected?.Name ?? terrain.gameObject.Name), before, CaptureSceneState());
+        if (terrain.gameObject.IsStatic)
+            sceneRenderer.InvalidateStaticBatch();
         statusMessage = $"Heightmap importado desde {Path.GetFileName(imagePath)}";
     }
 

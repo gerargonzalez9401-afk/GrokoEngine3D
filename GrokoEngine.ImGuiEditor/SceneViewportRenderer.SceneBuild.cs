@@ -172,6 +172,18 @@ internal sealed partial class SceneViewportRenderer
                 hash.Add(shadowsMr.ReceiveShadows);
             }
 
+            // Terrain marcado Static (el default al crearlo, como en Unity): esculpir, pintar
+            // capas o plantar/borrar árboles no reconstruye el batch estático por sí solo — son
+            // cambios al Heightmap/SplatMap/Trees, no a la Transform ni a otro campo ya hasheado
+            // arriba. Sin esto, un Terrain Static dejaría de reflejar sculpting/pintura/árboles
+            // hasta que ALGO MÁS en la escena forzara una reconstrucción del batch.
+            if (obj.GetComponent<Terrain>() is { } terrain)
+            {
+                hash.Add(terrain.Version);
+                hash.Add(terrain.SplatVersion);
+                hash.Add(terrain.TreeVersion);
+            }
+
             if (obj.GetComponent<Material>() is { } material)
             {
                 hash.Add(material.AssetPath ?? string.Empty);

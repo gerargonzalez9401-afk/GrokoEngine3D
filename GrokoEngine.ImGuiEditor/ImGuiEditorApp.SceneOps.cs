@@ -267,6 +267,7 @@ internal sealed partial class ImGuiEditorApp
             var obj = new GameObject { Name = GetUniqueChildObjectName(parent, "Terrain"), Type = 0, Parent = parent };
             obj.AddComponent<Terrain>();
             obj.AddComponentWithEngine<TerrainCollider>(physicsEngine);
+            obj.IsStatic = true; // Unity crea el Terrain como Static por defecto.
             selected = obj;
             statusMessage = $"Created child {obj.Name}";
             return obj;

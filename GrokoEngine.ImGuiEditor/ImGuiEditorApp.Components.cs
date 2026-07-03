@@ -125,6 +125,7 @@ internal sealed partial class ImGuiEditorApp
             var obj = CreateObject("Terrain", 0);
             obj.AddComponent<Terrain>();
             obj.AddComponentWithEngine<TerrainCollider>(physicsEngine);
+            obj.IsStatic = true; // Unity crea el Terrain como Static por defecto.
             return obj;
         });
     }
