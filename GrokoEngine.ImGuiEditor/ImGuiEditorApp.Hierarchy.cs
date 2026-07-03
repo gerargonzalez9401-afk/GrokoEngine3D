@@ -117,7 +117,12 @@ internal sealed partial class ImGuiEditorApp
 
     private void DrawHierarchyInsertDropTarget(GameObject? parent, int index, string id)
     {
-        if (isPlaying || !string.IsNullOrWhiteSpace(hierarchyFilter))
+        // Este hueco de 6px entre cada fila solo hace falta como blanco para soltar un drag de
+        // reordenar. En reposo (que es la mayoría del tiempo) no reservarlo: la Hierarchy queda
+        // compacta como en Play, en vez de con un hueco fantasma en cada fila. En cuanto arrancás
+        // a arrastrar un objeto reaparecen para poder soltar entre ítems.
+        bool activeDrag = hierarchyDragObjectId != null && ImGui.IsMouseDragging(ImGuiMouseButton.Left);
+        if (isPlaying || !string.IsNullOrWhiteSpace(hierarchyFilter) || !activeDrag)
             return;
 
         ImGui.PushID(id);
