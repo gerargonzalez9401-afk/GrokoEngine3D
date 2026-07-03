@@ -18,6 +18,17 @@ internal sealed partial class ImGuiEditorApp
         Paint
     }
 
+    private static string SculptToolTooltip(TerrainBrushTool tool) => tool switch
+    {
+        TerrainBrushTool.Raise => "Levanta el terreno bajo el pincel.",
+        TerrainBrushTool.Lower => "Hunde el terreno bajo el pincel.",
+        TerrainBrushTool.Smooth => "Suaviza promediando con los vecinos.",
+        TerrainBrushTool.Flatten => "Nivela hacia la altura del primer clic.",
+        TerrainBrushTool.Noise => "Agrega ruido aleatorio.",
+        TerrainBrushTool.Extrude => "Empuja parejo hacia arriba, sin promediar con la altura actual.",
+        _ => ""
+    };
+
     private TerrainEditMode terrainEditMode = TerrainEditMode.Sculpt;
     private TerrainBrushTool terrainBrushTool = TerrainBrushTool.Raise;
     private TerrainBrushFalloff terrainBrushFalloff = TerrainBrushFalloff.Soft;

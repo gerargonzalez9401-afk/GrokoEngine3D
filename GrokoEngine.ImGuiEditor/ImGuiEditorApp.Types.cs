@@ -138,7 +138,14 @@ internal sealed partial class ImGuiEditorApp
         ShaderGraph,
         CameraGizmo,
         Save,
-        Refresh
+        Refresh,
+        TerrainRaise,
+        TerrainLower,
+        TerrainSmooth,
+        TerrainFlatten,
+        TerrainNoise,
+        TerrainExtrude,
+        TerrainPaint
     }
 
     private readonly struct DisabledScope : IDisposable

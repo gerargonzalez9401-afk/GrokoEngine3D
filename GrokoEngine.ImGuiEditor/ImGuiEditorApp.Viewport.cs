@@ -1254,6 +1254,55 @@ internal sealed partial class ImGuiEditorApp
                     drawList.AddLine(center + d * size * .34f, center + d * size * .46f, color, 1.6f);
                 }
                 break;
+            // ── Iconos de herramientas de Terrain (fila estilo Unity en el Inspector) ──
+            case EditorIcon.TerrainRaise:
+                // Pico de montaña con flecha hacia arriba: subir terreno.
+                drawList.AddLine(min + new Vector2(size * .16f, size * .80f), min + new Vector2(size * .50f, size * .30f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .50f, size * .30f), min + new Vector2(size * .84f, size * .80f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .50f, size * .78f), min + new Vector2(size * .50f, size * .18f), color, 1.6f);
+                drawList.AddTriangleFilled(min + new Vector2(size * .50f, size * .08f), min + new Vector2(size * .40f, size * .26f), min + new Vector2(size * .60f, size * .26f), color);
+                break;
+            case EditorIcon.TerrainLower:
+                // Mismo pico, flecha hacia abajo: bajar/excavar terreno.
+                drawList.AddLine(min + new Vector2(size * .16f, size * .80f), min + new Vector2(size * .50f, size * .30f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .50f, size * .30f), min + new Vector2(size * .84f, size * .80f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .50f, size * .18f), min + new Vector2(size * .50f, size * .78f), color, 1.6f);
+                drawList.AddTriangleFilled(min + new Vector2(size * .50f, size * .88f), min + new Vector2(size * .40f, size * .70f), min + new Vector2(size * .60f, size * .70f), color);
+                break;
+            case EditorIcon.TerrainSmooth:
+                // Onda suave: alisar.
+                drawList.AddBezierCubic(min + new Vector2(size * .12f, size * .60f), min + new Vector2(size * .30f, size * .20f),
+                    min + new Vector2(size * .40f, size * .84f), min + new Vector2(size * .56f, size * .48f), color, 1.8f);
+                drawList.AddBezierCubic(min + new Vector2(size * .56f, size * .48f), min + new Vector2(size * .66f, size * .16f),
+                    min + new Vector2(size * .76f, size * .78f), min + new Vector2(size * .90f, size * .42f), color, 1.8f);
+                break;
+            case EditorIcon.TerrainFlatten:
+                // Meseta: barra plana con dos escalones cortos a los lados (plateau).
+                drawList.AddLine(min + new Vector2(size * .14f, size * .70f), min + new Vector2(size * .30f, size * .70f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .30f, size * .70f), min + new Vector2(size * .38f, size * .40f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .38f, size * .40f), min + new Vector2(size * .62f, size * .40f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .62f, size * .40f), min + new Vector2(size * .70f, size * .70f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .70f, size * .70f), min + new Vector2(size * .86f, size * .70f), color, 1.8f);
+                break;
+            case EditorIcon.TerrainNoise:
+                // Zigzag irregular: ruido.
+                drawList.AddLine(min + new Vector2(size * .12f, size * .62f), min + new Vector2(size * .30f, size * .30f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .30f, size * .30f), min + new Vector2(size * .46f, size * .72f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .46f, size * .72f), min + new Vector2(size * .64f, size * .22f), color, 1.8f);
+                drawList.AddLine(min + new Vector2(size * .64f, size * .22f), min + new Vector2(size * .88f, size * .58f), color, 1.8f);
+                break;
+            case EditorIcon.TerrainExtrude:
+                // Bloque recto que sube: extrude (a diferencia de Raise, que es un pico redondeado).
+                drawList.AddRect(min + new Vector2(size * .26f, size * .46f), min + new Vector2(size * .74f, size * .84f), color, 1f, ImDrawFlags.None, 1.7f);
+                drawList.AddLine(min + new Vector2(size * .50f, size * .40f), min + new Vector2(size * .50f, size * .10f), color, 1.7f);
+                drawList.AddTriangleFilled(min + new Vector2(size * .50f, size * .04f), min + new Vector2(size * .40f, size * .20f), min + new Vector2(size * .60f, size * .20f), color);
+                break;
+            case EditorIcon.TerrainPaint:
+                // Pincel de pintura: mango diagonal + punta con "gota" de color.
+                drawList.AddLine(min + new Vector2(size * .78f, size * .16f), min + new Vector2(size * .42f, size * .52f), color, 3.2f);
+                drawList.AddTriangleFilled(min + new Vector2(size * .42f, size * .52f), min + new Vector2(size * .30f, size * .58f), min + new Vector2(size * .46f, size * .68f), color);
+                drawList.AddCircleFilled(min + new Vector2(size * .26f, size * .78f), size * .10f, color);
+                break;
         }
     }
 

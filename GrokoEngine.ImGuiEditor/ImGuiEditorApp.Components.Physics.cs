@@ -300,6 +300,36 @@ private void DrawMeshColliderInspector(MeshCollider meshCollider)
         }, 0.01f, 0f, 1f);
     }
 
+// Estilo Unity "Terrain Collider": colisión real derivada del heightmap del Terrain de este
+// mismo GameObject (ver TerrainCollider.SampleHeight/GetBounds en Colliders.cs) — no tiene
+// tamaño/centro propio como una BoxCollider, así que solo expone Trigger + Physic Material.
+private void DrawTerrainColliderInspector(TerrainCollider terrainCollider)
+    {
+        bool hasTerrain = terrainCollider.gameObject.GetComponent<Terrain>() != null;
+        if (!hasTerrain)
+            ImGui.TextColored(new System.Numerics.Vector4(1f, 0.78f, 0.25f, 1f), "Falta un componente Terrain en este objeto: no hay heightmap del que tomar la colisión.");
+
+        DrawCheckRow("Is Trigger", terrainCollider.IsTrigger, v =>
+        {
+            terrainCollider.IsTrigger = v;
+            physicsEngine.MarkSpatialHashDirty();
+        });
+
+        DrawColliderPhysicMaterial(terrainCollider);
+
+        DrawFloat("Friction", terrainCollider.Friction, v =>
+        {
+            terrainCollider.Friction = Math.Clamp(v, 0f, 1f);
+            ApplyColliderMaterialPreset(terrainCollider, "Custom", preserveValues: true);
+        }, 0.01f, 0f, 1f);
+
+        DrawFloat("Bounciness", terrainCollider.Bounciness, v =>
+        {
+            terrainCollider.Bounciness = Math.Clamp(v, 0f, 1f);
+            ApplyColliderMaterialPreset(terrainCollider, "Custom", preserveValues: true);
+        }, 0.01f, 0f, 1f);
+    }
+
 private void DrawColliderPhysicMaterial(Collider box)
     {
         FieldRow("Material");

@@ -819,6 +819,9 @@ internal sealed partial class ImGuiEditorApp
                 case MeshCollider meshCollider:
                     DrawMeshColliderInspector(meshCollider);
                     break;
+                case TerrainCollider terrainCollider:
+                    DrawTerrainColliderInspector(terrainCollider);
+                    break;
                 case Rigidbody rb:
                     bool characterControlledRigidbody = rb.gameObject.GetComponent<CharacterController>() != null;
                     if (characterControlledRigidbody)
@@ -1135,40 +1138,39 @@ internal sealed partial class ImGuiEditorApp
                     }
                     ImGui.TextDisabled("Reemplaza todo el heightmap: negro = más bajo, blanco = más alto. Arrastrá una imagen en escala de grises acá, o hacé clic para elegir un archivo.");
 
-                    FieldRow("Edit Mode");
+                    // Fila de iconos estilo Unity: un solo toolbar arriba en vez de "Edit Mode" +
+                    // "Sculpt Tool" como dos filas separadas. Elegir un icono de sculpt implica
+                    // modo Sculpt con esa herramienta; el icono de pincel implica modo Paint.
+                    FieldRow("");
                     {
-                        var modeSize = new Vector2(90f, 0f);
-                        if (DrawToggleButton("Sculpt", terrainEditMode == TerrainEditMode.Sculpt, modeSize))
-                            terrainEditMode = TerrainEditMode.Sculpt;
+                        var iconSize = new Vector2(30f, 26f);
+                        bool sculptActive(TerrainBrushTool tool) => terrainEditMode == TerrainEditMode.Sculpt && terrainBrushTool == tool;
+
+                        if (DrawIconButton(EditorIcon.TerrainRaise, "Raise Terrain", sculptActive(TerrainBrushTool.Raise), iconSize))
+                        { terrainEditMode = TerrainEditMode.Sculpt; terrainBrushTool = TerrainBrushTool.Raise; }
                         ImGui.SameLine();
-                        if (DrawToggleButton("Paint", terrainEditMode == TerrainEditMode.Paint, modeSize))
+                        if (DrawIconButton(EditorIcon.TerrainLower, "Lower Terrain", sculptActive(TerrainBrushTool.Lower), iconSize))
+                        { terrainEditMode = TerrainEditMode.Sculpt; terrainBrushTool = TerrainBrushTool.Lower; }
+                        ImGui.SameLine();
+                        if (DrawIconButton(EditorIcon.TerrainSmooth, "Smooth Height", sculptActive(TerrainBrushTool.Smooth), iconSize))
+                        { terrainEditMode = TerrainEditMode.Sculpt; terrainBrushTool = TerrainBrushTool.Smooth; }
+                        ImGui.SameLine();
+                        if (DrawIconButton(EditorIcon.TerrainFlatten, "Flatten (Plateau)", sculptActive(TerrainBrushTool.Flatten), iconSize))
+                        { terrainEditMode = TerrainEditMode.Sculpt; terrainBrushTool = TerrainBrushTool.Flatten; }
+                        ImGui.SameLine();
+                        if (DrawIconButton(EditorIcon.TerrainNoise, "Noise", sculptActive(TerrainBrushTool.Noise), iconSize))
+                        { terrainEditMode = TerrainEditMode.Sculpt; terrainBrushTool = TerrainBrushTool.Noise; }
+                        ImGui.SameLine();
+                        if (DrawIconButton(EditorIcon.TerrainExtrude, "Extrude", sculptActive(TerrainBrushTool.Extrude), iconSize))
+                        { terrainEditMode = TerrainEditMode.Sculpt; terrainBrushTool = TerrainBrushTool.Extrude; }
+                        ImGui.SameLine();
+                        if (DrawIconButton(EditorIcon.TerrainPaint, "Paint Texture", terrainEditMode == TerrainEditMode.Paint, iconSize))
                             terrainEditMode = TerrainEditMode.Paint;
                     }
+                    ImGui.TextDisabled(terrainEditMode == TerrainEditMode.Sculpt ? SculptToolTooltip(terrainBrushTool) : "Pintar capas de textura.");
 
                     if (terrainEditMode == TerrainEditMode.Sculpt)
                     {
-                        FieldRow("Sculpt Tool");
-                        {
-                            var brushSize = new Vector2(70f, 0f);
-                            if (DrawToggleButton("Raise", terrainBrushTool == TerrainBrushTool.Raise, brushSize))
-                                terrainBrushTool = TerrainBrushTool.Raise;
-                            ImGui.SameLine();
-                            if (DrawToggleButton("Lower", terrainBrushTool == TerrainBrushTool.Lower, brushSize))
-                                terrainBrushTool = TerrainBrushTool.Lower;
-                            ImGui.SameLine();
-                            if (DrawToggleButton("Smooth", terrainBrushTool == TerrainBrushTool.Smooth, brushSize))
-                                terrainBrushTool = TerrainBrushTool.Smooth;
-                            ImGui.SameLine();
-                            if (DrawToggleButton("Flatten", terrainBrushTool == TerrainBrushTool.Flatten, brushSize))
-                                terrainBrushTool = TerrainBrushTool.Flatten;
-                            ImGui.SameLine();
-                            if (DrawToggleButton("Noise", terrainBrushTool == TerrainBrushTool.Noise, brushSize))
-                                terrainBrushTool = TerrainBrushTool.Noise;
-                            ImGui.SameLine();
-                            if (DrawToggleButton("Extrude", terrainBrushTool == TerrainBrushTool.Extrude, brushSize))
-                                terrainBrushTool = TerrainBrushTool.Extrude;
-                        }
-
                         FieldRow("Brush Shape");
                         {
                             var falloffSize = new Vector2(90f, 0f);
