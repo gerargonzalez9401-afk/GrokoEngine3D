@@ -327,6 +327,18 @@ internal sealed partial class ImGuiEditorApp
         if (gizmoDragging || gizmoMouseCaptured || colliderEditDragging || colliderEditMouseCaptured || viewGizmoMouseCaptured)
             return;
 
+        // Si hay un Terrain seleccionado y el click cae sobre su plano, ese click es para el
+        // pincel de sculpt/paint/árboles/detalles (HandleTerrainSculpting, que corre DESPUÉS en
+        // el mismo frame), no para (re)seleccionar. Sin esto, soltar el mouse tras cada trazo
+        // volvía a correr el picking normal de acá abajo y deseleccionaba el Terrain (o
+        // seleccionaba lo que hubiera debajo), justo cuando se estaba por terminar el trazo.
+        if (selected?.GetComponent<Terrain>() is { } selectedTerrainForClick && (leftDown || released) &&
+            TryGetTerrainBrushHit(selectedTerrainForClick, mouse, out _, out _))
+        {
+            selectionBoxActive = false;
+            return;
+        }
+
         if (pressed)
         {
             selectionBoxActive = false;
