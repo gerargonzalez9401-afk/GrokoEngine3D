@@ -652,7 +652,7 @@ namespace GrokoEngine
             return mesh.Clips[0];
         }
 
-        private void ApplySkeletalRootMotion(SkeletalClip skeletal, float previousTime, float currentTime, bool wrapped)
+        private void ApplySkeletalRootMotion(SkeletalClip skeletal, float previousTime, float currentTime, bool wrapped, float dt)
         {
             var settings = GetPlaybackSettings();
             if (!ApplyRootMotion || skeletal.Duration <= 0f || !HasExtractableRootMotion(settings))
@@ -686,15 +686,15 @@ namespace GrokoEngine
             {
                 var end = SampleRootMotionFrame(skeletal, settings, skeletal.Duration);
                 if (end.Valid)
-                    ApplyRootMotionDelta(settings, lastRootMotionFrame, end);
+                    ApplyRootMotionDelta(settings, lastRootMotionFrame, end, dt);
 
                 var start = SampleRootMotionFrame(skeletal, settings, 0f);
                 if (start.Valid)
-                    ApplyRootMotionDelta(settings, start, current);
+                    ApplyRootMotionDelta(settings, start, current, dt);
             }
             else
             {
-                ApplyRootMotionDelta(settings, lastRootMotionFrame, current);
+                ApplyRootMotionDelta(settings, lastRootMotionFrame, current, dt);
             }
 
             lastRootMotionFrame = current;
@@ -767,7 +767,7 @@ namespace GrokoEngine
                        .FirstOrDefault(c => c.Rotations.Count > 0);
         }
 
-        private void ApplyRootMotionDelta(AnimationClipData settings, RootMotionFrame from, RootMotionFrame to)
+        private void ApplyRootMotionDelta(AnimationClipData settings, RootMotionFrame from, RootMotionFrame to, float dt)
         {
             if (!from.Valid || !to.Valid)
                 return;
@@ -787,9 +787,32 @@ namespace GrokoEngine
                 delta.Y *= gameObject.ScaleY;
                 delta.Z *= gameObject.ScaleZ;
                 var worldDelta = RotateY(delta, gameObject.RotY * MathF.PI / 180f);
-                gameObject.PosX += worldDelta.X;
-                gameObject.PosY += worldDelta.Y;
-                gameObject.PosZ += worldDelta.Z;
+
+                // Si el objeto tiene Rigidbody + Collider sólido, el desplazamiento pasa por el
+                // mismo barrido+despenetración que ya usa Rigidbody.Update() (MoveRigidbody), en
+                // vez de escribir la posición directo. Sin esto, root motion podía meter al
+                // personaje dentro de paredes/objetos porque el Animator corre ANTES del paso de
+                // física cada frame (StepAnimators -> physicsEngine.Step en el loop de Play), y
+                // nada corregía la penetración resultante para un Rigidbody cinemático (Bepu no
+                // resuelve colisión sobre cuerpos cinemáticos, solo los usa para empujar a otros).
+                // Sin Rigidbody/Collider (p.ej. un personaje puramente visual/de cutscene) el
+                // comportamiento se queda exactamente igual que antes.
+                var rigidbody = gameObject.GetComponent<Rigidbody>();
+                var collider = gameObject.GetComponent<Collider>();
+                if (rigidbody != null && rigidbody.Physics != null && collider != null && !collider.IsTrigger)
+                {
+                    var targetWorld = gameObject.Position;
+                    targetWorld.X += worldDelta.X;
+                    targetWorld.Y += worldDelta.Y;
+                    targetWorld.Z += worldDelta.Z;
+                    rigidbody.Physics.MoveRigidbody(rigidbody, collider, targetWorld, Math.Max(0.0001f, dt));
+                }
+                else
+                {
+                    gameObject.PosX += worldDelta.X;
+                    gameObject.PosY += worldDelta.Y;
+                    gameObject.PosZ += worldDelta.Z;
+                }
             }
 
             if (!settings.BakeRootRotationIntoPose)

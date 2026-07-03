@@ -854,7 +854,7 @@ namespace GrokoEngine
                 if (writePose)
                 {
                     if (skeletal != null)
-                        ApplySkeletalRootMotion(skeletal, previousTime, Time, wrapped);
+                        ApplySkeletalRootMotion(skeletal, previousTime, Time, wrapped, (float)dt);
                     SampleSkeletal(Time);
                     ApplySkeletalCrossFade((float)dt);   // funde desde la pose del estado anterior
                 }
