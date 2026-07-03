@@ -161,6 +161,72 @@ private void QueueTerrainTreeInstances(Terrain terrain, Matrix4 transform, Frust
         }
     }
 
+// Detalles/pasto (Terrain.Details): siempre billboard, nunca malla — Unity's clásico "Detail
+// Texture" tampoco tiene LOD de malla para pasto. Density Scale reduce cuántos de los plantados
+// se dibujan de verdad SIN borrar los datos pintados, usando un hash estable por índice (no un
+// módulo, para que el recorte no se vea como un patrón en grilla).
+private static float StableUnitHash(int i)
+    {
+        uint x = (uint)i * 2654435761u;
+        x ^= x >> 15;
+        return (x & 0xFFFFFF) / (float)0xFFFFFF;
+    }
+
+private void QueueTerrainDetailInstances(Terrain terrain, Matrix4 transform, Frustum frustum, Vector3 cameraPosition)
+    {
+        if (terrain.Details.Count == 0 || terrain.DetailPrototypes.Count == 0)
+            return;
+
+        float densityScale = Math.Clamp(terrain.DetailDensityScale, 0f, 1f);
+        if (densityScale <= 0f)
+            return;
+
+        float detailDistance = Math.Max(0.01f, terrain.DetailDistance);
+        float detailDistanceSq = detailDistance * detailDistance;
+
+        for (int i = 0; i < terrain.Details.Count; i++)
+        {
+            if (StableUnitHash(i) > densityScale)
+                continue;
+
+            var instance = terrain.Details[i];
+            if (instance.PrototypeIndex < 0 || instance.PrototypeIndex >= terrain.DetailPrototypes.Count)
+                continue;
+
+            var proto = terrain.DetailPrototypes[instance.PrototypeIndex];
+            if (string.IsNullOrWhiteSpace(proto.TexturePath))
+                continue;
+
+            float localHeight = terrain.GetHeightLocal(instance.LocalX, instance.LocalZ);
+            var localPos = new Vector3(instance.LocalX, localHeight, instance.LocalZ);
+            var worldPos = Vector3.TransformPosition(localPos, transform);
+
+            float dx = worldPos.X - cameraPosition.X, dy = worldPos.Y - cameraPosition.Y, dz = worldPos.Z - cameraPosition.Z;
+            float distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq > detailDistanceSq)
+                continue;
+
+            float scale = Math.Max(0.0001f, instance.Scale);
+            float halfWidth = Math.Max(0.02f, proto.Width * scale * 0.5f);
+            float height = Math.Max(0.02f, proto.Height * scale);
+            float boundRadius = MathF.Max(halfWidth, height * 0.5f) * 1.5f;
+            if (!frustum.ContainsSphere(worldPos, boundRadius))
+                continue;
+
+            string texturePath = NormalizeExistingAssetPath(proto.TexturePath) ?? proto.TexturePath;
+            float camDx = cameraPosition.X - worldPos.X;
+            float camDz = cameraPosition.Z - worldPos.Z;
+            float yaw = (MathF.Abs(camDx) > 1e-5f || MathF.Abs(camDz) > 1e-5f) ? MathF.Atan2(camDx, camDz) : 0f;
+
+            if (!_detailBillboardsByTexture.TryGetValue(texturePath, out var list))
+            {
+                list = new List<TreeBillboardInstance>();
+                _detailBillboardsByTexture[texturePath] = list;
+            }
+            list.Add(new TreeBillboardInstance(worldPos, halfWidth, height, yaw, new Vector4(1f, 1f, 1f, 1f)));
+        }
+    }
+
 // Encola un árbol como billboard: quad plano, ancho X/Z tomado del bounding box de la malla real
 // (escalado por Scale de la instancia), anclado al piso, que rota SOLO en Y para mirar siempre
 // a cámara (no billboard esférico como las partículas). Simplificación deliberada respecto a
@@ -188,11 +254,12 @@ private void QueueTreeBillboard(Vector3 worldPos, MiMotor.Mathematics.Vector3 ex
         list.Add(new TreeBillboardInstance(worldPos, halfWidth, height, yaw, new Vector4(1f, 1f, 1f, 1f)));
     }
 
-// Dibuja todos los billboards de árbol acumulados este frame (de todos los Terrain de la
-// escena), agrupados por textura — una llamada glDrawArraysInstanced por textura distinta.
-private void DrawTerrainTreeBillboards(ref Matrix4 mvp)
+// Dibuja los billboards acumulados este frame (árboles fuera de rango de malla, o detalles/
+// pasto — siempre billboard), agrupados por textura — una llamada glDrawArraysInstanced por
+// textura distinta. Método compartido: mismo shader/VAO para árboles-billboard y detalles.
+private void DrawTreeBillboardInstances(ref Matrix4 mvp, Dictionary<string, List<TreeBillboardInstance>> billboardsByTexture)
     {
-        if (_treeBillboardsByTexture.Count == 0 || _treeBillboardShader == 0)
+        if (billboardsByTexture.Count == 0 || _treeBillboardShader == 0)
             return;
 
         GL.Enable(EnableCap.CullFace);
@@ -202,7 +269,7 @@ private void DrawTerrainTreeBillboards(ref Matrix4 mvp)
         GL.BindVertexArray(_treeBillboardVao);
         GL.ActiveTexture(TextureUnit.Texture0);
 
-        foreach (var (texturePath, list) in _treeBillboardsByTexture)
+        foreach (var (texturePath, list) in billboardsByTexture)
         {
             if (list.Count == 0)
                 continue;

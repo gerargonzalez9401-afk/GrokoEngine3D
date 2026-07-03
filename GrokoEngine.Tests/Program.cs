@@ -77,6 +77,11 @@ internal static class Program
             ("TerrainTreeBrush paint fails without prototypes", TerrainTreeBrushPaintFailsWithoutPrototypes),
             ("TerrainTreeBrush erase removes trees within radius", TerrainTreeBrushEraseRemovesTreesWithinRadius),
             ("TerrainTreeBrush spacing holds with many existing trees", TerrainTreeBrushSpacingHoldsWithManyExistingTrees),
+            ("TerrainDetailBrush plants within radius", TerrainDetailBrushPlantsWithinRadius),
+            ("TerrainDetailBrush paint fails without prototypes", TerrainDetailBrushPaintFailsWithoutPrototypes),
+            ("TerrainDetailBrush erase removes details within radius", TerrainDetailBrushEraseRemovesDetailsWithinRadius),
+            ("TerrainDetailBrush respects MaxDetailInstances cap", TerrainDetailBrushRespectsMaxDetailInstancesCap),
+            ("SceneSerializer preserves terrain details", SceneSerializerPreservesTerrainDetails),
             ("SceneManager resolves scene path by name", SceneManagerResolveScenePathFindsSceneByName),
             ("SceneManager LoadScene swaps roots and preserves survivors", SceneManagerLoadSceneSwapsRootsAndPreservesSurvivors),
             ("EditorSceneGraph attach moves existing object", EditorSceneGraphAttachMovesExistingObject),
@@ -2480,6 +2485,98 @@ internal static class Program
                 radius: 0.05f, density: 1000f, deltaTime: 1f, rng, minSpacing: 5f);
 
         AssertEqual(countBefore, terrain.Trees.Count, "planting right on top of an existing tree is blocked by min spacing even with hundreds of unrelated trees in the grid");
+    }
+
+    private static void TerrainDetailBrushPlantsWithinRadius()
+    {
+        var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
+        terrain.DetailPrototypes.Add(new TerrainDetailPrototype { TexturePath = "grass.png", Width = 0.5f, Height = 0.5f });
+        var rng = new Random(1234);
+
+        bool changed = TerrainDetailBrush.Paint(terrain, prototypeIndex: 0, localX: 0f, localZ: 0f, radius: 2f,
+            density: 20f, deltaTime: 1f, rng);
+
+        AssertTrue(changed, "planting within radius reports a change");
+        AssertTrue(terrain.Details.Count > 0, "at least one detail got planted");
+        foreach (var detail in terrain.Details)
+        {
+            float dist = MathF.Sqrt(detail.LocalX * detail.LocalX + detail.LocalZ * detail.LocalZ);
+            AssertTrue(dist <= 2.01f, "every planted detail stays within the brush radius");
+            AssertEqual(0, detail.PrototypeIndex, "planted detail references the selected prototype");
+        }
+    }
+
+    private static void TerrainDetailBrushPaintFailsWithoutPrototypes()
+    {
+        var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
+        var rng = new Random(1);
+
+        bool changed = TerrainDetailBrush.Paint(terrain, prototypeIndex: 0, localX: 0f, localZ: 0f, radius: 2f,
+            density: 20f, deltaTime: 1f, rng);
+
+        AssertFalse(changed, "painting with no prototypes registered does nothing");
+        AssertEqual(0, terrain.Details.Count, "no details get planted without a prototype");
+    }
+
+    private static void TerrainDetailBrushEraseRemovesDetailsWithinRadius()
+    {
+        var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
+        terrain.Details.Add(new TerrainDetailInstance { LocalX = 0.5f, LocalZ = 0.5f, Scale = 1f });
+        terrain.Details.Add(new TerrainDetailInstance { LocalX = 10f, LocalZ = 10f, Scale = 1f }); // fuera del radio
+
+        bool changed = TerrainDetailBrush.Erase(terrain, localX: 0f, localZ: 0f, radius: 2f);
+
+        AssertTrue(changed, "erase brush reports a change");
+        AssertEqual(1, terrain.Details.Count, "only the detail within the erase radius gets removed");
+        AssertNear(10f, terrain.Details[0].LocalX, "the far-away detail survives");
+    }
+
+    private static void TerrainDetailBrushRespectsMaxDetailInstancesCap()
+    {
+        var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
+        terrain.DetailPrototypes.Add(new TerrainDetailPrototype { TexturePath = "grass.png", Width = 0.5f, Height = 0.5f });
+        for (int i = 0; i < Terrain.MaxDetailInstances; i++)
+            terrain.Details.Add(new TerrainDetailInstance { LocalX = 0f, LocalZ = 0f, Scale = 1f });
+
+        var rng = new Random(1);
+        bool changed = TerrainDetailBrush.Paint(terrain, prototypeIndex: 0, localX: 0f, localZ: 0f, radius: 2f,
+            density: 1000f, deltaTime: 1f, rng);
+
+        AssertFalse(changed, "painting once the terrain is already at the max detail cap does nothing");
+        AssertEqual(Terrain.MaxDetailInstances, terrain.Details.Count, "detail count never exceeds the documented cap");
+    }
+
+    private static void SceneSerializerPreservesTerrainDetails()
+    {
+        string assetsDir = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets");
+        Directory.CreateDirectory(assetsDir);
+        string grassPath = Path.Combine(assetsDir, "grass.png");
+        File.WriteAllText(grassPath, "stub");
+
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(assetsDir);
+        var obj = new GameObject { Name = "Ground" };
+        var terrain = obj.AddComponent<Terrain>();
+        terrain.DetailPrototypes.Add(new TerrainDetailPrototype { TexturePath = grassPath, Width = 0.6f, Height = 0.8f });
+        terrain.Details.Add(new TerrainDetailInstance { LocalX = 1.5f, LocalZ = -2f, RotationY = 45f, Scale = 1.1f, PrototypeIndex = 0 });
+        terrain.DetailDistance = 90f;
+        terrain.DetailDensityScale = 0.5f;
+
+        string json = SceneSerializer.Serialize(new[] { obj });
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts);
+        var loadedTerrain = loaded[0].GetComponent<Terrain>()!;
+
+        AssertEqual(1, loadedTerrain.DetailPrototypes.Count, "detail prototype list restored");
+        AssertNear(0.6f, loadedTerrain.DetailPrototypes[0].Width, "detail prototype width restored");
+        AssertNear(0.8f, loadedTerrain.DetailPrototypes[0].Height, "detail prototype height restored");
+        AssertEqual(1, loadedTerrain.Details.Count, "planted detail restored");
+        AssertNear(1.5f, loadedTerrain.Details[0].LocalX, "detail local X restored");
+        AssertNear(-2f, loadedTerrain.Details[0].LocalZ, "detail local Z restored");
+        AssertNear(45f, loadedTerrain.Details[0].RotationY, "detail rotation restored");
+        AssertNear(1.1f, loadedTerrain.Details[0].Scale, "detail scale restored");
+        AssertEqual(0, loadedTerrain.Details[0].PrototypeIndex, "detail prototype index restored");
+        AssertNear(90f, loadedTerrain.DetailDistance, "detail distance restored");
+        AssertNear(0.5f, loadedTerrain.DetailDensityScale, "detail density scale restored");
     }
 
     private static void SceneManagerResolveScenePathFindsSceneByName()

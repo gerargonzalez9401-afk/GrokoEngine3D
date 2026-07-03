@@ -327,6 +327,10 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private TreeBillboardInstance[] _treeBillboardUploadBuffer = new TreeBillboardInstance[64];
     private int _treeBillboardMvpLoc, _treeBillboardTexLoc, _treeBillboardHasTexLoc;
     private readonly Dictionary<string, List<TreeBillboardInstance>> _treeBillboardsByTexture = new(StringComparer.OrdinalIgnoreCase);
+    // Detalles/pasto de Terrain: reusan el MISMO shader/VAO de billboard que los árboles lejanos
+    // (misma idea: quad plano que rota en Y hacia cámara), pero un detalle SIEMPRE es billboard
+    // (nunca malla 3D), así que va en su propio diccionario en vez de mezclarse con árboles.
+    private readonly Dictionary<string, List<TreeBillboardInstance>> _detailBillboardsByTexture = new(StringComparer.OrdinalIgnoreCase);
 
     // ── Depth FBO para soft particles ─────────────────────────────
     private int _depthFbo, _depthTex;
@@ -649,6 +653,8 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         skinnedMeshDraws.Clear();
         foreach (var list in _treeBillboardsByTexture.Values)
             list.Clear();
+        foreach (var list in _detailBillboardsByTexture.Values)
+            list.Clear();
         refractiveSkinnedMeshDraws.Clear();
         shaderGraphDynamicMeshDraws.Clear();
         shaderGraphSkinnedMeshDraws.Clear();
@@ -819,7 +825,8 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             RenderTerrainRanges(_staticRanges, _staticVertexArray, ref mvp, objects);
         if (solidVertices.Count > 0)
             RenderTerrainRanges(solidRanges, solidVertexArray, ref mvp, objects);
-        DrawTerrainTreeBillboards(ref mvp);
+        DrawTreeBillboardInstances(ref mvp, _treeBillboardsByTexture);
+        DrawTreeBillboardInstances(ref mvp, _detailBillboardsByTexture);
         EndRenderPass(SceneRenderPass.Terrain, terrainPhaseStart);
 
         if (refractiveMeshDraws.Count > 0 || refractiveSkinnedMeshDraws.Count > 0)

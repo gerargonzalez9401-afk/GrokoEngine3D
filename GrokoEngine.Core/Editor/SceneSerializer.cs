@@ -463,6 +463,16 @@ namespace GrokoEngine
                     data.Fields["TreeDistance"] = terrain.TreeDistance.ToString(CultureInfo.InvariantCulture);
                     data.Fields["BillboardStart"] = terrain.BillboardStart.ToString(CultureInfo.InvariantCulture);
                     data.Fields["MaxMeshTrees"] = terrain.MaxMeshTrees.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["DetailPrototypes"] = JsonSerializer.Serialize(
+                        terrain.DetailPrototypes.Select(p => new TerrainDetailPrototype
+                        {
+                            TexturePath = SerializeAssetPath(p.TexturePath, baseAssetsPath),
+                            Width = p.Width,
+                            Height = p.Height
+                        }).ToArray(), JsonOptions);
+                    data.Fields["Details"] = JsonSerializer.Serialize(terrain.Details, JsonOptions);
+                    data.Fields["DetailDistance"] = terrain.DetailDistance.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["DetailDensityScale"] = terrain.DetailDensityScale.ToString(CultureInfo.InvariantCulture);
                     return data;
                 case Animator animator:
                     data.Fields["ControllerPath"] = SerializeAssetPath(animator.ControllerPath, baseAssetsPath);
@@ -727,6 +737,25 @@ namespace GrokoEngine
                 terrain.TreeDistance = GetFloat(fields, "TreeDistance", terrain.TreeDistance);
                 terrain.BillboardStart = GetFloat(fields, "BillboardStart", terrain.BillboardStart);
                 terrain.MaxMeshTrees = GetInt(fields, "MaxMeshTrees", terrain.MaxMeshTrees);
+                if (fields.TryGetValue("DetailPrototypes", out var detailProtosJson) && !string.IsNullOrWhiteSpace(detailProtosJson))
+                {
+                    var protos = JsonSerializer.Deserialize<TerrainDetailPrototype[]>(detailProtosJson, JsonOptions);
+                    if (protos != null)
+                        terrain.DetailPrototypes = protos.Select(p => new TerrainDetailPrototype
+                        {
+                            TexturePath = ResolveAssetPath(p.TexturePath, baseAssetsPath) ?? "",
+                            Width = p.Width,
+                            Height = p.Height
+                        }).ToList();
+                }
+                if (fields.TryGetValue("Details", out var detailsJson) && !string.IsNullOrWhiteSpace(detailsJson))
+                {
+                    var details = JsonSerializer.Deserialize<List<TerrainDetailInstance>>(detailsJson, JsonOptions);
+                    if (details != null)
+                        terrain.Details = details;
+                }
+                terrain.DetailDistance = GetFloat(fields, "DetailDistance", terrain.DetailDistance);
+                terrain.DetailDensityScale = GetFloat(fields, "DetailDensityScale", terrain.DetailDensityScale);
                 terrain.Version++;
                 terrain.SplatVersion++;
             }

@@ -18,7 +18,8 @@ internal sealed partial class ImGuiEditorApp
     {
         Sculpt,
         Paint,
-        Trees
+        Trees,
+        Details
     }
 
     private static string SculptToolTooltip(TerrainBrushTool tool) => tool switch
@@ -47,6 +48,11 @@ internal sealed partial class ImGuiEditorApp
     private int terrainTreePrototypeIndex;
     private float terrainTreeDensity = 2f;
     private readonly Random terrainTreeRng = new();
+
+    // ── Details/pasto ──────────────────────────────────────────────
+    private int terrainDetailPrototypeIndex;
+    private float terrainDetailDensity = 40f;
+    private readonly Random terrainDetailRng = new();
 
     private void HandleTerrainSculpting(float deltaTime)
     {
@@ -99,6 +105,8 @@ internal sealed partial class ImGuiEditorApp
             ApplyTerrainPaintBrush(terrain, localX, localZ, deltaTime);
         else if (terrainEditMode == TerrainEditMode.Trees)
             ApplyTerrainTreeBrush(terrain, localX, localZ, deltaTime);
+        else if (terrainEditMode == TerrainEditMode.Details)
+            ApplyTerrainDetailBrush(terrain, localX, localZ, deltaTime);
         else
             ApplyTerrainSculptBrush(terrain, localX, localZ, deltaTime);
     }
@@ -137,6 +145,7 @@ internal sealed partial class ImGuiEditorApp
             {
                 TerrainEditMode.Paint => "Paint Terrain ",
                 TerrainEditMode.Trees => "Plant Trees ",
+                TerrainEditMode.Details => "Paint Details ",
                 _ => "Sculpt Terrain "
             };
             PushSceneState(label + selected.Name, terrainSculptUndoStart.Value, CaptureSceneState());
@@ -237,6 +246,88 @@ internal sealed partial class ImGuiEditorApp
                 terrainTreeDensity, deltaTime, terrainTreeRng);
         if (changed)
             terrain.TreeVersion++;
+    }
+
+    // Lista de prototipos de detalle (textura + tamaño), estilo Unity "Detail Prototypes": a
+    // diferencia de los árboles no hay slot de malla, porque un detalle siempre se dibuja como
+    // billboard plano (nunca 3D). Width/Height son el tamaño del quad en unidades del mundo.
+    private void DrawTerrainDetailPrototypeList(Terrain terrain)
+    {
+        FieldRow("");
+        ImGui.Text($"{terrain.DetailPrototypes.Count} prototipo(s)  —  {terrain.Details.Count} detalle(s) plantado(s)");
+
+        int removeIndex = -1;
+        for (int i = 0; i < terrain.DetailPrototypes.Count; i++)
+        {
+            int idx = i;
+            var proto = terrain.DetailPrototypes[idx];
+            ImGui.PushID("detailProto" + idx);
+            DrawAssetSlot($"Detail {idx + 1}", proto.TexturePath, "Drop texture",
+                path =>
+                {
+                    var p = terrain.DetailPrototypes[idx];
+                    p.TexturePath = path;
+                    terrain.DetailPrototypes[idx] = p;
+                },
+                MaterialAsset.IsTexturePath);
+
+            DrawFloat("Width", proto.Width, v =>
+            {
+                var p = terrain.DetailPrototypes[idx];
+                p.Width = Math.Max(0.01f, v);
+                terrain.DetailPrototypes[idx] = p;
+            }, 0.05f, 0.01f, 20f);
+            DrawFloat("Height", proto.Height, v =>
+            {
+                var p = terrain.DetailPrototypes[idx];
+                p.Height = Math.Max(0.01f, v);
+                terrain.DetailPrototypes[idx] = p;
+            }, 0.05f, 0.01f, 20f);
+
+            FieldRow("");
+            if (DrawToggleButton("Plant this detail", terrainDetailPrototypeIndex == idx, new Vector2(-70f, 0f)))
+                terrainDetailPrototypeIndex = idx;
+            ImGui.SameLine();
+            if (ImGui.Button("Remove", new Vector2(-1f, 0f)))
+                removeIndex = idx;
+            ImGui.PopID();
+        }
+
+        if (removeIndex >= 0)
+        {
+            terrain.DetailPrototypes.RemoveAt(removeIndex);
+            terrain.Details.RemoveAll(d => d.PrototypeIndex == removeIndex);
+            for (int i = 0; i < terrain.Details.Count; i++)
+            {
+                var d = terrain.Details[i];
+                if (d.PrototypeIndex > removeIndex)
+                {
+                    d.PrototypeIndex--;
+                    terrain.Details[i] = d;
+                }
+            }
+            if (terrainDetailPrototypeIndex >= terrain.DetailPrototypes.Count)
+                terrainDetailPrototypeIndex = Math.Max(0, terrain.DetailPrototypes.Count - 1);
+            terrain.DetailVersion++;
+            if (terrain.gameObject.IsStatic)
+                sceneRenderer.InvalidateStaticBatch();
+        }
+
+        FieldRow("");
+        if (ImGui.Button("+ Add Detail Prototype", new Vector2(-1f, 0f)))
+            terrain.DetailPrototypes.Add(new TerrainDetailPrototype { TexturePath = "", Width = 0.5f, Height = 0.5f });
+    }
+
+    // Shift+click borra detalles en vez de plantar (mismo atajo que árboles/Unity).
+    private void ApplyTerrainDetailBrush(Terrain terrain, float localX, float localZ, float deltaTime)
+    {
+        bool erasing = KeyboardState.IsKeyDown(GlfwKeys.LeftShift) || KeyboardState.IsKeyDown(GlfwKeys.RightShift);
+        bool changed = erasing
+            ? TerrainDetailBrush.Erase(terrain, localX, localZ, terrainBrushRadius)
+            : TerrainDetailBrush.Paint(terrain, terrainDetailPrototypeIndex, localX, localZ, terrainBrushRadius,
+                terrainDetailDensity, deltaTime, terrainDetailRng);
+        if (changed)
+            terrain.DetailVersion++;
     }
 
     // ── Import Heightmap desde imagen (estilo Unity "Import Raw/Heightmap") ──────

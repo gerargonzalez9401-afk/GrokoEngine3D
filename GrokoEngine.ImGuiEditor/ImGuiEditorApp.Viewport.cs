@@ -1309,6 +1309,12 @@ internal sealed partial class ImGuiEditorApp
                 drawList.AddTriangleFilled(min + new Vector2(size * .50f, size * .30f), min + new Vector2(size * .22f, size * .66f), min + new Vector2(size * .78f, size * .66f), color);
                 drawList.AddRectFilled(min + new Vector2(size * .44f, size * .66f), min + new Vector2(size * .56f, size * .86f), color, 1f);
                 break;
+            case EditorIcon.TerrainDetails:
+                // Mechones de pasto: tres "brizhas" curvas que abren en abanico desde la base.
+                drawList.AddBezierCubic(min + new Vector2(size * .50f, size * .82f), min + new Vector2(size * .48f, size * .50f), min + new Vector2(size * .40f, size * .34f), min + new Vector2(size * .32f, size * .18f), color, 1.8f);
+                drawList.AddBezierCubic(min + new Vector2(size * .50f, size * .82f), min + new Vector2(size * .50f, size * .48f), min + new Vector2(size * .50f, size * .28f), min + new Vector2(size * .50f, size * .10f), color, 1.8f);
+                drawList.AddBezierCubic(min + new Vector2(size * .50f, size * .82f), min + new Vector2(size * .52f, size * .50f), min + new Vector2(size * .60f, size * .34f), min + new Vector2(size * .68f, size * .18f), color, 1.8f);
+                break;
         }
     }
 

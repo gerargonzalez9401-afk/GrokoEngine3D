@@ -16,6 +16,27 @@ namespace GrokoEngine
         public int PrototypeIndex;
     }
 
+    // Un mechón de pasto/detalle plantado sobre el terreno (estilo Unity "Detail Instance").
+    // A diferencia de los árboles, siempre se dibuja como billboard plano (nunca malla 3D) — el
+    // pasto de Unity clásico ("Detail Texture") funciona igual, sin LOD de malla.
+    public struct TerrainDetailInstance
+    {
+        public float LocalX;
+        public float LocalZ;
+        public float RotationY;
+        public float Scale;
+        public int PrototypeIndex;
+    }
+
+    // Textura + tamaño de un tipo de detalle plantable (estilo Unity "Detail Prototype": Width/
+    // Height en vez de un mesh, porque el detalle siempre se renderiza como quad plano).
+    public struct TerrainDetailPrototype
+    {
+        public string TexturePath;
+        public float Width;
+        public float Height;
+    }
+
     // =====================================================
     // TERRAIN
     // =====================================================
@@ -67,6 +88,21 @@ namespace GrokoEngine
         public float BillboardStart = 80f;
         public int MaxMeshTrees = 1500;
 
+        // Detalles/pasto plantables (estilo Unity "Detail Prototypes"). Sin límite de cantidad
+        // "malla vs billboard" como los árboles porque SIEMPRE son billboard; en cambio Unity
+        // limita con "Detail Distance" (no se dibujan más allá de esa distancia) y "Density Scale"
+        // (reduce cuántos de los plantados se dibujan sin borrar los datos pintados).
+        public List<TerrainDetailPrototype> DetailPrototypes = new();
+        public List<TerrainDetailInstance> Details = new();
+        public float DetailDistance = 60f;
+        public float DetailDensityScale = 1f;
+
+        // Tope duro de instancias de detalle por Terrain: pintar pasto es "denso" por diseño
+        // (miles de mechones), pero sin límite un solo trazo de pincel con densidad alta podría
+        // generar una lista de tamaño no acotado. Unity acota esto con una grilla de densidad de
+        // resolución fija; acá, más simple, directamente se deja de agregar más allá de este tope.
+        public const int MaxDetailInstances = 60000;
+
         // Se incrementa cada vez que cambia algo que afecta al mesh generado
         // (Resolution, SizeX/Z, HeightScale o el propio Heightmap).
         // El renderer usa esto para saber cuándo regenerar/reasubir el mesh a la GPU.
@@ -79,6 +115,9 @@ namespace GrokoEngine
         // Se incrementa cada vez que cambia la lista de árboles (plantar/borrar) o los prototipos.
         // El renderer lo usa para saber cuándo reconstruir el batch de instancias.
         public int TreeVersion;
+
+        // Igual que TreeVersion pero para Details/pasto.
+        public int DetailVersion;
 
         public Terrain()
         {

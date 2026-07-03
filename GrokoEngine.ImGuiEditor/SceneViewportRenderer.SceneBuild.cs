@@ -115,6 +115,12 @@ internal sealed partial class SceneViewportRenderer
         if (!_buildingStatic && layerVisible && terrainComponent != null)
             QueueTerrainTreeInstances(terrainComponent, world, frustum, cameraPosition);
 
+        // Detalles/pasto: mismo razonamiento que los árboles (siempre pase dinámico), pero
+        // siempre billboard — se encolan directo al diccionario de billboards de detalle en vez
+        // de pasar por TryQueueDynamicMeshDraw.
+        if (!_buildingStatic && layerVisible && terrainComponent != null)
+            QueueTerrainDetailInstances(terrainComponent, world, frustum, cameraPosition);
+
         // Iconos solo en pase dinámico (se dibujan siempre, no en batch estático)
         if (!_buildingStatic && layerVisible && sel)
         {
@@ -188,6 +194,7 @@ internal sealed partial class SceneViewportRenderer
                 hash.Add(terrain.Version);
                 hash.Add(terrain.SplatVersion);
                 hash.Add(terrain.TreeVersion);
+                hash.Add(terrain.DetailVersion);
             }
 
             if (obj.GetComponent<Material>() is { } material)

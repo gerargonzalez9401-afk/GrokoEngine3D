@@ -1175,12 +1175,16 @@ internal sealed partial class ImGuiEditorApp
                         ImGui.SameLine();
                         if (DrawIconButton(EditorIcon.TerrainTrees, "Paint Trees", terrainEditMode == TerrainEditMode.Trees, iconSize))
                             terrainEditMode = TerrainEditMode.Trees;
+                        ImGui.SameLine();
+                        if (DrawIconButton(EditorIcon.TerrainDetails, "Paint Details", terrainEditMode == TerrainEditMode.Details, iconSize))
+                            terrainEditMode = TerrainEditMode.Details;
                     }
                     ImGui.TextDisabled(terrainEditMode switch
                     {
                         TerrainEditMode.Sculpt => SculptToolTooltip(terrainBrushTool),
                         TerrainEditMode.Paint => "Pintar capas de textura.",
-                        _ => "Click para plantar árboles. Shift+Click para borrarlos."
+                        TerrainEditMode.Trees => "Click para plantar árboles. Shift+Click para borrarlos.",
+                        _ => "Click para pintar pasto/detalles. Shift+Click para borrarlos."
                     });
 
                     if (terrainEditMode == TerrainEditMode.Sculpt)
@@ -1212,7 +1216,7 @@ internal sealed partial class ImGuiEditorApp
                                 v => terrain.LayerTiling[layerIndex] = v, 0.1f, 0.01f, 100f);
                         }
                     }
-                    else // Trees
+                    else if (terrainEditMode == TerrainEditMode.Trees)
                     {
                         DrawTerrainTreePrototypeList(terrain);
                         DrawFloat("Tree Distance", terrain.TreeDistance, v => terrain.TreeDistance = Math.Max(1f, v), 1f, 1f, 20000f);
@@ -1229,10 +1233,21 @@ internal sealed partial class ImGuiEditorApp
                         }
                         ImGui.TextDisabled("Si hay más árboles dentro de rango que este número, los que sobran (los más lejos de cámara) también se dibujan como billboard.");
                     }
+                    else // Details
+                    {
+                        DrawTerrainDetailPrototypeList(terrain);
+                        DrawFloat("Detail Distance", terrain.DetailDistance, v => terrain.DetailDistance = Math.Max(1f, v), 1f, 1f, 5000f);
+                        ImGui.TextDisabled("Más allá de esta distancia, el pasto no se dibuja.");
+                        DrawFloat("Density Scale", terrain.DetailDensityScale, v => terrain.DetailDensityScale = Math.Clamp(v, 0f, 1f), 0.05f, 0f, 1f);
+                        ImGui.TextDisabled("Reduce cuánto del pasto plantado se dibuja de verdad (sin borrar lo pintado) — útil para bajar carga sin repintar todo.");
+                        ImGui.TextDisabled($"Tope: {Terrain.MaxDetailInstances} detalles por Terrain.");
+                    }
 
                     DrawFloat("Brush Radius", terrainBrushRadius, v => terrainBrushRadius = v, 0.1f, 0.5f, 100f);
                     if (terrainEditMode == TerrainEditMode.Trees)
                         DrawFloat("Tree Density", terrainTreeDensity, v => terrainTreeDensity = Math.Max(0.01f, v), 0.05f, 0.05f, 50f);
+                    else if (terrainEditMode == TerrainEditMode.Details)
+                        DrawFloat("Detail Density", terrainDetailDensity, v => terrainDetailDensity = Math.Max(0.01f, v), 1f, 0.1f, 500f);
                     else
                         DrawFloat("Brush Strength", terrainBrushStrength, v => terrainBrushStrength = v, 0.01f, 0.05f, 5f);
 
