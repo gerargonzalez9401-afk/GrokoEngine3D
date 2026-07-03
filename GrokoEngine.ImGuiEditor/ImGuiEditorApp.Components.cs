@@ -1114,6 +1114,27 @@ internal sealed partial class ImGuiEditorApp
                     DrawFloat("Size Z", terrain.SizeZ, v => { terrain.SizeZ = v; terrain.Version++; }, 0.1f, 1f, 10000f);
                     DrawFloat("Height Scale", terrain.HeightScale, v => { terrain.HeightScale = v; terrain.Version++; }, 0.1f, 0f, 1000f);
 
+                    FieldRow("");
+                    ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.10f, 0.10f, 0.11f, 1f));
+                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new System.Numerics.Vector4(0.17f, 0.20f, 0.24f, 1f));
+                    if (ImGui.Button("Import Heightmap from Image...##terrainHeightmap", new Vector2(-1f, 0f)))
+                    {
+                        string? picked = BrowseForHeightmapImage();
+                        if (picked != null) ImportTerrainHeightmapFromFile(terrain, picked);
+                    }
+                    ImGui.PopStyleColor(2);
+                    if (ImGui.BeginDragDropTarget())
+                    {
+                        bool delivered = AcceptDragDropOnRelease("GROKO_ASSET");
+                        if (delivered && draggingAssetPath != null && File.Exists(draggingAssetPath) && MaterialAsset.IsTexturePath(draggingAssetPath))
+                        {
+                            ImportTerrainHeightmapFromFile(terrain, draggingAssetPath);
+                            draggingAssetPath = null;
+                        }
+                        ImGui.EndDragDropTarget();
+                    }
+                    ImGui.TextDisabled("Reemplaza todo el heightmap: negro = más bajo, blanco = más alto. Arrastrá una imagen en escala de grises acá, o hacé clic para elegir un archivo.");
+
                     FieldRow("Edit Mode");
                     {
                         var modeSize = new Vector2(90f, 0f);

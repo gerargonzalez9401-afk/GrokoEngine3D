@@ -69,6 +69,8 @@ internal static class Program
             ("TerrainBrush raise increases height with falloff", TerrainBrushRaiseIncreasesHeightWithFalloff),
             ("TerrainBrush flatten converges toward captured height", TerrainBrushFlattenConvergesTowardCapturedHeight),
             ("TerrainBrush paint increases active layer and reduces others", TerrainBrushPaintIncreasesActiveLayerAndReducesOthers),
+            ("TerrainHeightmapImport maps black to low and white to high", TerrainHeightmapImportMapsBlackToLowAndWhiteToHigh),
+            ("TerrainHeightmapImport resamples to current resolution, not source size", TerrainHeightmapImportResamplesToCurrentResolutionNotSourceSize),
             ("SceneManager resolves scene path by name", SceneManagerResolveScenePathFindsSceneByName),
             ("SceneManager LoadScene swaps roots and preserves survivors", SceneManagerLoadSceneSwapsRootsAndPreservesSurvivors),
             ("EditorSceneGraph attach moves existing object", EditorSceneGraphAttachMovesExistingObject),
@@ -2321,6 +2323,32 @@ internal static class Program
         AssertTrue(terrain.SplatMap[pixel + 0] < 255, "other layer channel reduced proportionally");
         int sum = terrain.SplatMap[pixel + 0] + terrain.SplatMap[pixel + 1] + terrain.SplatMap[pixel + 2] + terrain.SplatMap[pixel + 3];
         AssertTrue(sum >= 250 && sum <= 260, "layer weights stay close to the original ~255 sum");
+    }
+
+    private static void TerrainHeightmapImportMapsBlackToLowAndWhiteToHigh()
+    {
+        var terrain = new Terrain { Resolution = 3, SizeX = 4f, SizeZ = 4f };
+        // Imagen 2x2: negro arriba, blanco abajo (row-major, como una Bitmap).
+        byte[] gray = { 0, 0, 255, 255 };
+
+        TerrainHeightmapImport.Apply(terrain, gray, srcWidth: 2, srcHeight: 2);
+
+        AssertNear(-1f, terrain.Heightmap[0], "black maps to the low end of the range");
+        AssertNear(1f, terrain.Heightmap[2 * 3], "white maps to the high end of the range");
+        AssertTrue(terrain.Heightmap[1 * 3] > terrain.Heightmap[0] && terrain.Heightmap[1 * 3] < terrain.Heightmap[2 * 3],
+            "middle row interpolates between black and white");
+    }
+
+    private static void TerrainHeightmapImportResamplesToCurrentResolutionNotSourceSize()
+    {
+        var terrain = new Terrain { Resolution = 5, SizeX = 4f, SizeZ = 4f };
+        byte[] gray = new byte[64 * 64];
+        for (int i = 0; i < gray.Length; i++) gray[i] = 200;
+
+        TerrainHeightmapImport.Apply(terrain, gray, srcWidth: 64, srcHeight: 64);
+
+        AssertEqual(5 * 5, terrain.Heightmap.Length, "heightmap keeps the terrain's own resolution, not the source image size");
+        AssertNear(-1f + (200f / 255f) * 2f, terrain.Heightmap[0], "uniform source image produces a uniform heightmap");
     }
 
     private static void SceneManagerResolveScenePathFindsSceneByName()

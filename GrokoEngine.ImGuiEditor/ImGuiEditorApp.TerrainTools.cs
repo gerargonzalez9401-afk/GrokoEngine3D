@@ -1,5 +1,9 @@
 using GrokoEngine;
 using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Runtime.InteropServices;
 using Vector2 = System.Numerics.Vector2;
 using Vector3 = MiMotor.Mathematics.Vector3;
 using GlfwMouseButton = OpenTK.Windowing.GraphicsLibraryFramework.MouseButton;
@@ -132,5 +136,91 @@ internal sealed partial class ImGuiEditorApp
             terrainBrushRadius, terrainBrushStrength, deltaTime);
         if (changed)
             terrain.SplatVersion++;
+    }
+
+    // ── Import Heightmap desde imagen (estilo Unity "Import Raw/Heightmap") ──────
+
+    private static string? BrowseForHeightmapImage()
+    {
+        try
+        {
+            using var dlg = new System.Windows.Forms.OpenFileDialog
+            {
+                Title = "Select Heightmap Image",
+                Filter = "Images (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp|All files (*.*)|*.*",
+                CheckFileExists = true
+            };
+            return dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK ? dlg.FileName : null;
+        }
+        catch (Exception ex)
+        {
+            GrokoEngine.Debug.LogWarning("No se pudo abrir el diálogo de archivos: " + ex.Message);
+            return null;
+        }
+    }
+
+    // Igual que un pincel de sculpt, pero de una sola pasada sobre todo el heightmap: se
+    // captura el estado antes/después como un solo paso de Undo.
+    private void ImportTerrainHeightmapFromFile(Terrain terrain, string imagePath)
+    {
+        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+            return;
+
+        byte[]? gray;
+        int width, height;
+        try
+        {
+            using var bitmap = new Bitmap(imagePath);
+            width = bitmap.Width;
+            height = bitmap.Height;
+            gray = ExtractGrayscale(bitmap);
+        }
+        catch (Exception ex)
+        {
+            statusMessage = "No se pudo leer la imagen: " + ex.Message;
+            GrokoEngine.Debug.LogWarning($"[Terrain] Import Heightmap falló para '{imagePath}': {ex.Message}");
+            return;
+        }
+
+        var before = CaptureSceneState();
+        TerrainHeightmapImport.Apply(terrain, gray, width, height);
+        terrain.Version++;
+        PushSceneState("Import Heightmap " + (selected?.Name ?? terrain.gameObject.Name), before, CaptureSceneState());
+        statusMessage = $"Heightmap importado desde {Path.GetFileName(imagePath)}";
+    }
+
+    // Luminancia (BT.601) por pixel, row-major, 0..255. Mismo patrón de LockBits que usa
+    // SceneViewportRenderer.Textures.cs para subir texturas a la GPU.
+    private static byte[] ExtractGrayscale(Bitmap original)
+    {
+        using var bitmap = original.PixelFormat == PixelFormat.Format32bppArgb
+            ? new Bitmap(original)
+            : original.Clone(new Rectangle(0, 0, original.Width, original.Height), PixelFormat.Format32bppArgb);
+
+        int w = bitmap.Width, h = bitmap.Height;
+        var gray = new byte[w * h];
+        var rect = new Rectangle(0, 0, w, h);
+        var data = bitmap.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            int stride = data.Stride;
+            byte[] row = new byte[Math.Abs(stride)];
+            for (int y = 0; y < h; y++)
+            {
+                Marshal.Copy(data.Scan0 + y * stride, row, 0, row.Length);
+                for (int x = 0; x < w; x++)
+                {
+                    int i = x * 4; // BGRA
+                    byte b = row[i], g = row[i + 1], r = row[i + 2];
+                    gray[y * w + x] = (byte)Math.Clamp((r * 299 + g * 587 + b * 114) / 1000, 0, 255);
+                }
+            }
+        }
+        finally
+        {
+            bitmap.UnlockBits(data);
+        }
+
+        return gray;
     }
 }
