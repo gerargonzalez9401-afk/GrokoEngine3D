@@ -53,26 +53,66 @@ private void BuildTerrainGeometry(GameObject obj, Terrain terrain, ParsedMesh me
         }
     }
 
-// Arboles plantados (Terrain.Trees), horneados al mismo batch sólido que el propio suelo del
-// terreno (ActiveSolidVertices/ActiveSolidRanges ya redirige sola a static o dynamic según
-// corresponda) — así funcionan igual esté el Terrain marcado Static o no, sin pasar por el
-// camino de instancing de mallas dinámicas (que rechaza objetos estáticos por diseño). La altura
-// de cada árbol se resamplea del heightmap actual en cada build, así que si esculpís el terreno
-// después de plantar, los árboles ya plantados "flotan" solos hasta la nueva altura.
-private void BuildTerrainTrees(Terrain terrain, Matrix4 transform, Frustum frustum, bool skipFrustumCulling)
+// Arboles plantados (Terrain.Trees): SIEMPRE por el pase dinámico (ver BuildObjectRecursive),
+// nunca horneados en el batch estático — se encolan vía TryQueueDynamicMeshDraw, la misma cola
+// que usa cualquier malla dinámica. Eso los hace elegibles para el instancing por GPU que ya
+// existe ahí (CanInstanceTogether agrupa por mesh+textura+color+material; todos los árboles del
+// mismo prototipo comparten esos cuatro, así que terminan en una sola llamada
+// glDrawArraysInstanced por prototipo en vez de un draw/triángulos sueltos por árbol).
+// La altura de cada árbol se resamplea del heightmap actual en cada frame, así que si esculpís
+// el terreno después de plantar, los árboles ya plantados "flotan" solos hasta la nueva altura.
+private readonly List<(int Index, float DistanceSq)> _terrainTreeSortScratch = new(256);
+
+private void QueueTerrainTreeInstances(Terrain terrain, Matrix4 transform, Frustum frustum, Vector3 cameraPosition)
     {
         if (terrain.Trees.Count == 0 || terrain.TreePrototypes.Count == 0)
             return;
 
-        var tint = new Vector4(1f, 1f, 1f, 1f);
-        var material = new Vector4(0f, 0.5f, 1f, 1f); // metallic 0, roughness 0.5 por defecto
+        int maxMeshTrees = Math.Max(0, terrain.MaxMeshTrees);
+        if (maxMeshTrees == 0)
+            return;
 
+        // Estilo Unity "Tree Distance"/"Max Mesh Trees": más allá de TreeDistance un árbol ni se
+        // procesa; de los que quedan, si hay más plantados que maxMeshTrees solo se dibujan los
+        // más cercanos a la cámara (evita que un bosque entero de miles de árboles intente
+        // encolarse cada frame). Unity, más allá del límite, cae a billboards en vez de ocultarlos
+        // — este motor todavía no tiene esa parte (ver nota en Terrain.cs), así que acá el
+        // excedente directamente no se dibuja.
+        float treeDistance = Math.Max(0.01f, terrain.TreeDistance);
+        float treeDistanceSq = treeDistance * treeDistance;
+
+        _terrainTreeSortScratch.Clear();
         for (int i = 0; i < terrain.Trees.Count; i++)
         {
             var instance = terrain.Trees[i];
             if (instance.PrototypeIndex < 0 || instance.PrototypeIndex >= terrain.TreePrototypes.Count)
                 continue;
 
+            float localHeight = terrain.GetHeightLocal(instance.LocalX, instance.LocalZ);
+            var worldPos = Vector3.TransformPosition(new Vector3(instance.LocalX, localHeight, instance.LocalZ), transform);
+            float dx = worldPos.X - cameraPosition.X, dy = worldPos.Y - cameraPosition.Y, dz = worldPos.Z - cameraPosition.Z;
+            float distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq > treeDistanceSq)
+                continue;
+
+            _terrainTreeSortScratch.Add((i, distSq));
+        }
+
+        if (_terrainTreeSortScratch.Count == 0)
+            return;
+
+        if (_terrainTreeSortScratch.Count > maxMeshTrees)
+        {
+            _terrainTreeSortScratch.Sort((a, b) => a.DistanceSq.CompareTo(b.DistanceSq));
+            _terrainTreeSortScratch.RemoveRange(maxMeshTrees, _terrainTreeSortScratch.Count - maxMeshTrees);
+        }
+
+        var tint = new Vector4(1f, 1f, 1f, 1f);
+        var material = new Vector4(0f, 0.5f, 1f, 1f); // metallic 0, roughness 0.5 por defecto
+
+        foreach (var (treeIndex, _) in _terrainTreeSortScratch)
+        {
+            var instance = terrain.Trees[treeIndex];
             string protoPath = terrain.TreePrototypes[instance.PrototypeIndex];
             protoPath = NormalizeExistingAssetPath(protoPath) ?? protoPath;
             if (string.IsNullOrWhiteSpace(protoPath) || !ObjLoader.IsSupportedMesh(protoPath))
@@ -85,20 +125,11 @@ private void BuildTerrainTrees(Terrain terrain, Matrix4 transform, Frustum frust
             float localHeight = terrain.GetHeightLocal(instance.LocalX, instance.LocalZ);
             var localPos = new Vector3(instance.LocalX, localHeight, instance.LocalZ);
 
-            // Frustum culling por árbol: salteado durante el pase de static batch (igual que el
-            // resto de BuildObjectRecursive) porque ese batch se reconstruye solo de vez en
-            // cuando — si cullearamos ahí, un árbol fuera de cámara en ese momento no volvería a
-            // aparecer nunca al mover la cámara. En el pase dinámico sí filtra: con cientos/miles
-            // de árboles plantados, generar y subir los triángulos de los que no se ven es
-            // trabajo tirado (CPU armando vértices + más ancho de banda a la GPU sin motivo).
-            if (!skipFrustumCulling)
-            {
-                var worldPos = Vector3.TransformPosition(localPos, transform);
-                var extent = (mesh.BoundsMax - mesh.BoundsMin) * Math.Max(0.0001f, instance.Scale);
-                float boundRadius = Math.Max(0.1f, extent.Length * 0.5f);
-                if (!frustum.ContainsSphere(worldPos, boundRadius))
-                    continue;
-            }
+            var worldPos = Vector3.TransformPosition(localPos, transform);
+            var extent = (mesh.BoundsMax - mesh.BoundsMin) * Math.Max(0.0001f, instance.Scale);
+            float boundRadius = Math.Max(0.1f, extent.Length * 0.5f);
+            if (!frustum.ContainsSphere(worldPos, boundRadius))
+                continue;
 
             Matrix4 instanceWorld =
                 Matrix4.CreateScale(Math.Max(0.0001f, instance.Scale)) *
@@ -110,23 +141,15 @@ private void BuildTerrainTrees(Terrain terrain, Matrix4 transform, Frustum frust
             {
                 foreach (var sub in mesh.Submeshes)
                 {
-                    int start = ActiveSolidVertices.Count;
-                    AddMeshTriangles(mesh, instanceWorld, 1f, tint, protoPath, material, Vector4.Zero, sub.VertexStart, sub.VertexCount);
-                    int count = ActiveSolidVertices.Count - start;
-                    if (count > 0)
-                        ActiveSolidRanges.Add(new SolidRange(start, count, sub.TexturePath, null, null, null, null, null, null, null));
+                    TryQueueDynamicMeshDraw(mesh, instanceWorld, 1f, tint, protoPath, material, Vector4.Zero,
+                        sub.VertexStart, sub.VertexCount, sub.TexturePath, null, null, null, null, null, null);
                 }
             }
             else
             {
-                int start = ActiveSolidVertices.Count;
-                AddMeshTriangles(mesh, instanceWorld, 1f, tint, protoPath, material, Vector4.Zero, 0, mesh.Positions.Length / 3);
-                int count = ActiveSolidVertices.Count - start;
-                if (count > 0)
-                {
-                    string? texturePath = mesh.Submeshes.Count > 0 ? mesh.Submeshes[0].TexturePath : null;
-                    ActiveSolidRanges.Add(new SolidRange(start, count, texturePath, null, null, null, null, null, null, null));
-                }
+                string? texturePath = mesh.Submeshes.Count > 0 ? mesh.Submeshes[0].TexturePath : null;
+                TryQueueDynamicMeshDraw(mesh, instanceWorld, 1f, tint, protoPath, material, Vector4.Zero,
+                    0, mesh.Positions.Length / 3, texturePath, null, null, null, null, null, null);
             }
         }
     }

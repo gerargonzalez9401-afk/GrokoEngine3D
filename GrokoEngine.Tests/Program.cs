@@ -2207,6 +2207,8 @@ internal static class Program
         var terrain = obj.AddComponent<Terrain>();
         terrain.TreePrototypes.Add(treePath);
         terrain.Trees.Add(new TerrainTreeInstance { LocalX = 1.5f, LocalZ = -2f, RotationY = 90f, Scale = 1.2f, PrototypeIndex = 0 });
+        terrain.TreeDistance = 300f;
+        terrain.MaxMeshTrees = 750;
 
         string json = SceneSerializer.Serialize(new[] { obj });
         var loaded = SceneSerializer.Deserialize(json, physics, scripts);
@@ -2219,6 +2221,8 @@ internal static class Program
         AssertNear(90f, loadedTerrain.Trees[0].RotationY, "tree rotation restored");
         AssertNear(1.2f, loadedTerrain.Trees[0].Scale, "tree scale restored");
         AssertEqual(0, loadedTerrain.Trees[0].PrototypeIndex, "tree prototype index restored");
+        AssertNear(300f, loadedTerrain.TreeDistance, "tree distance restored");
+        AssertEqual(750, loadedTerrain.MaxMeshTrees, "max mesh trees restored");
     }
 
     private static void PhysicsEngineFiresTriggerExitWhenOtherObjectDestroyed()

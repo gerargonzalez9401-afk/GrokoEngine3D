@@ -609,7 +609,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             {
                 foreach (var obj in objects)
                     if (obj.Parent == null)
-                        BuildObjectRecursive(obj, selected, frustum, Matrix4.Identity);
+                        BuildObjectRecursive(obj, selected, frustum, Matrix4.Identity, ToTk(camera.Position));
             }
             finally
             {
@@ -640,10 +640,11 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         _pendingOcclusionObjects.Clear();   // reset occlusion gather list each frame
         if (showGrid)
             BuildGrid();
+        var cameraPositionTk = ToTk(camera.Position);
         foreach (var obj in objects)
             if (obj.Parent == null)
-                BuildObjectRecursive(obj, selected, frustum, Matrix4.Identity);
-        CollectParticleMeshDraws(objects, ToTk(camera.Position));
+                BuildObjectRecursive(obj, selected, frustum, Matrix4.Identity, cameraPositionTk);
+        CollectParticleMeshDraws(objects, cameraPositionTk);
 
         if (vertices.Count == 0 && solidVertices.Count == 0 && dynamicMeshDraws.Count == 0 && refractiveMeshDraws.Count == 0 && skinnedMeshDraws.Count == 0 && refractiveSkinnedMeshDraws.Count == 0 &&
             shaderGraphDynamicMeshDraws.Count == 0 && shaderGraphSkinnedMeshDraws.Count == 0 && _staticVertexCount == 0)

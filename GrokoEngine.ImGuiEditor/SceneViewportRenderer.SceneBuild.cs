@@ -8,7 +8,7 @@ namespace GrokoEngine.ImGuiEditor;
 
 internal sealed partial class SceneViewportRenderer
 {
-    private void BuildObjectRecursive(GameObject obj, GameObject? selected, in Frustum frustum, Matrix4 parentWorld)
+    private void BuildObjectRecursive(GameObject obj, GameObject? selected, in Frustum frustum, Matrix4 parentWorld, Vector3 cameraPosition)
     {
         if (!obj.IsActive)
             return;
@@ -102,12 +102,18 @@ internal sealed partial class SceneViewportRenderer
                 var terrainFilter = new MeshFilter { MeshPath = meshPath, ImportScale = 1f };
                 bool frustumVisible = skipFrustumCullingForStaticBatch || FrustumContainsMesh(frustum, obj, terrainFilter, mesh, world);
                 if (frustumVisible)
-                {
                     BuildTerrainGeometry(obj, terrain, mesh, meshPath, sel, world);
-                    BuildTerrainTrees(terrain, world, frustum, skipFrustumCullingForStaticBatch);
-                }
             }
         }
+
+        // Árboles del terreno: SIEMPRE por el pase dinámico, sin importar si el Terrain (que es
+        // Static por defecto) está horneado en el batch estático o no. Se encolan vía
+        // TryQueueDynamicMeshDraw como cualquier malla dinámica más — eso los hace elegibles para
+        // el instancing por GPU que ya existe para mallas dinámicas repetidas (CanInstanceTogether
+        // agrupa por mesh+textura+color+material, y todos los árboles del mismo prototipo
+        // comparten esos cuatro), en vez de subir triángulos sueltos por árbol como antes.
+        if (!_buildingStatic && layerVisible && terrainComponent != null)
+            QueueTerrainTreeInstances(terrainComponent, world, frustum, cameraPosition);
 
         // Iconos solo en pase dinámico (se dibujan siempre, no en batch estático)
         if (!_buildingStatic && layerVisible && sel)
@@ -131,7 +137,7 @@ internal sealed partial class SceneViewportRenderer
         }
 
         foreach (var child in obj.Children)
-            BuildObjectRecursive(child, selected, frustum, world);
+            BuildObjectRecursive(child, selected, frustum, world, cameraPosition);
     }
 
     private int ComputeStaticBatchSignature(IReadOnlyList<GameObject> objects)

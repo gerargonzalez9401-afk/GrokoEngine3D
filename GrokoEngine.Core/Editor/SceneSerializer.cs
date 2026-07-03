@@ -460,6 +460,8 @@ namespace GrokoEngine
                     data.Fields["TreePrototypes"] = JsonSerializer.Serialize(
                         terrain.TreePrototypes.Select(p => SerializeAssetPath(p, baseAssetsPath)).ToArray());
                     data.Fields["Trees"] = JsonSerializer.Serialize(terrain.Trees, JsonOptions);
+                    data.Fields["TreeDistance"] = terrain.TreeDistance.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["MaxMeshTrees"] = terrain.MaxMeshTrees.ToString(CultureInfo.InvariantCulture);
                     return data;
                 case Animator animator:
                     data.Fields["ControllerPath"] = SerializeAssetPath(animator.ControllerPath, baseAssetsPath);
@@ -721,6 +723,8 @@ namespace GrokoEngine
                     if (trees != null)
                         terrain.Trees = trees;
                 }
+                terrain.TreeDistance = GetFloat(fields, "TreeDistance", terrain.TreeDistance);
+                terrain.MaxMeshTrees = GetInt(fields, "MaxMeshTrees", terrain.MaxMeshTrees);
                 terrain.Version++;
                 terrain.SplatVersion++;
             }

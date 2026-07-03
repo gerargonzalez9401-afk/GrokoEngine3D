@@ -1215,6 +1215,17 @@ internal sealed partial class ImGuiEditorApp
                     else // Trees
                     {
                         DrawTerrainTreePrototypeList(terrain);
+                        DrawFloat("Tree Distance", terrain.TreeDistance, v => terrain.TreeDistance = Math.Max(1f, v), 1f, 1f, 20000f);
+                        ImGui.TextDisabled("Más allá de esta distancia los árboles no se dibujan.");
+                        {
+                            int maxMeshTrees = terrain.MaxMeshTrees;
+                            FieldRow("Max Mesh Trees");
+                            ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(4f, 2f));
+                            if (ImGui.DragInt("##MaxMeshTrees", ref maxMeshTrees, 1f, 0, 100000))
+                                terrain.MaxMeshTrees = Math.Max(0, maxMeshTrees);
+                            ImGui.PopStyleVar();
+                        }
+                        ImGui.TextDisabled("Si hay más árboles plantados que este número, solo se dibujan los más cercanos a cámara (a diferencia de Unity, los que exceden el límite no caen a billboard: no se dibujan).");
                     }
 
                     DrawFloat("Brush Radius", terrainBrushRadius, v => terrainBrushRadius = v, 0.1f, 0.5f, 100f);
