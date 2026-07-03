@@ -40,17 +40,29 @@ namespace GrokoEngine
                 }
             }
 
-            // Normales por diferencias finitas con vecinos (cae bien al borde gracias al clamp de GetHeight)
+            // Normales por diferencias finitas con vecinos. Las alturas vecinas ya se calcularon
+            // (y quedaron escaladas por HeightScale) en el paso de posiciones de arriba, así que
+            // se leen directo de 'positions' en vez de volver a llamar Terrain.GetHeight — evita
+            // ~4 llamadas redundantes (clamp + indexado) por vértice, que en un terreno de
+            // resolución alta (256x256 = 65536 vértices) suman cientos de miles de llamadas de más
+            // en cada regeneración de malla (cada trazo de sculpt en un terreno sin cachear).
+            float HeightAt(int hx, int hz)
+            {
+                hx = hx < 0 ? 0 : hx >= res ? res - 1 : hx;
+                hz = hz < 0 ? 0 : hz >= res ? res - 1 : hz;
+                return positions[(hz * res + hx) * 3 + 1];
+            }
+
             for (int z = 0; z < res; z++)
             {
                 for (int x = 0; x < res; x++)
                 {
                     int i = z * res + x;
 
-                    float hL = terrain.GetHeight(x - 1, z) * terrain.HeightScale;
-                    float hR = terrain.GetHeight(x + 1, z) * terrain.HeightScale;
-                    float hD = terrain.GetHeight(x, z - 1) * terrain.HeightScale;
-                    float hU = terrain.GetHeight(x, z + 1) * terrain.HeightScale;
+                    float hL = HeightAt(x - 1, z);
+                    float hR = HeightAt(x + 1, z);
+                    float hD = HeightAt(x, z - 1);
+                    float hU = HeightAt(x, z + 1);
 
                     var tangentX = new Vector3(2f * stepX, hR - hL, 0f);
                     var tangentZ = new Vector3(0f, hU - hD, 2f * stepZ);

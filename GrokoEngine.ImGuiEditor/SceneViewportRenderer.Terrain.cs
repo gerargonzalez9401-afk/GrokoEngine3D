@@ -59,7 +59,7 @@ private void BuildTerrainGeometry(GameObject obj, Terrain terrain, ParsedMesh me
 // camino de instancing de mallas dinámicas (que rechaza objetos estáticos por diseño). La altura
 // de cada árbol se resamplea del heightmap actual en cada build, así que si esculpís el terreno
 // después de plantar, los árboles ya plantados "flotan" solos hasta la nueva altura.
-private void BuildTerrainTrees(Terrain terrain, Matrix4 transform)
+private void BuildTerrainTrees(Terrain terrain, Matrix4 transform, Frustum frustum, bool skipFrustumCulling)
     {
         if (terrain.Trees.Count == 0 || terrain.TreePrototypes.Count == 0)
             return;
@@ -83,10 +83,27 @@ private void BuildTerrainTrees(Terrain terrain, Matrix4 transform)
                 continue;
 
             float localHeight = terrain.GetHeightLocal(instance.LocalX, instance.LocalZ);
+            var localPos = new Vector3(instance.LocalX, localHeight, instance.LocalZ);
+
+            // Frustum culling por árbol: salteado durante el pase de static batch (igual que el
+            // resto de BuildObjectRecursive) porque ese batch se reconstruye solo de vez en
+            // cuando — si cullearamos ahí, un árbol fuera de cámara en ese momento no volvería a
+            // aparecer nunca al mover la cámara. En el pase dinámico sí filtra: con cientos/miles
+            // de árboles plantados, generar y subir los triángulos de los que no se ven es
+            // trabajo tirado (CPU armando vértices + más ancho de banda a la GPU sin motivo).
+            if (!skipFrustumCulling)
+            {
+                var worldPos = Vector3.TransformPosition(localPos, transform);
+                var extent = (mesh.BoundsMax - mesh.BoundsMin) * Math.Max(0.0001f, instance.Scale);
+                float boundRadius = Math.Max(0.1f, extent.Length * 0.5f);
+                if (!frustum.ContainsSphere(worldPos, boundRadius))
+                    continue;
+            }
+
             Matrix4 instanceWorld =
                 Matrix4.CreateScale(Math.Max(0.0001f, instance.Scale)) *
                 Matrix4.CreateRotationY(MathHelper.DegreesToRadians(instance.RotationY)) *
-                Matrix4.CreateTranslation(instance.LocalX, localHeight, instance.LocalZ) *
+                Matrix4.CreateTranslation(localPos.X, localPos.Y, localPos.Z) *
                 transform;
 
             if (mesh.Submeshes.Count > 1)

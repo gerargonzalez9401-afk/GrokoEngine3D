@@ -104,7 +104,7 @@ internal sealed partial class SceneViewportRenderer
                 if (frustumVisible)
                 {
                     BuildTerrainGeometry(obj, terrain, mesh, meshPath, sel, world);
-                    BuildTerrainTrees(terrain, world);
+                    BuildTerrainTrees(terrain, world, frustum, skipFrustumCullingForStaticBatch);
                 }
             }
         }

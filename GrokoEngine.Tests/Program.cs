@@ -76,6 +76,7 @@ internal static class Program
             ("TerrainTreeBrush plants within radius and respects min spacing", TerrainTreeBrushPlantsWithinRadiusAndRespectsMinSpacing),
             ("TerrainTreeBrush paint fails without prototypes", TerrainTreeBrushPaintFailsWithoutPrototypes),
             ("TerrainTreeBrush erase removes trees within radius", TerrainTreeBrushEraseRemovesTreesWithinRadius),
+            ("TerrainTreeBrush spacing holds with many existing trees", TerrainTreeBrushSpacingHoldsWithManyExistingTrees),
             ("SceneManager resolves scene path by name", SceneManagerResolveScenePathFindsSceneByName),
             ("SceneManager LoadScene swaps roots and preserves survivors", SceneManagerLoadSceneSwapsRootsAndPreservesSurvivors),
             ("EditorSceneGraph attach moves existing object", EditorSceneGraphAttachMovesExistingObject),
@@ -2442,6 +2443,37 @@ internal static class Program
         AssertTrue(changed, "erase brush reports a change");
         AssertEqual(1, terrain.Trees.Count, "only the tree within the erase radius gets removed");
         AssertNear(10f, terrain.Trees[0].LocalX, "the far-away tree survives");
+    }
+
+    // Regresion del pincel de arboles usando la grilla espacial en vez de un escaneo O(n) contra
+    // todos los arboles ya plantados (ver TerrainTreeBrush.cs) — con muchos arboles preexistentes,
+    // confirma que el spacing sigue respetandose correctamente (no solo que "es rapido", que no
+    // es lo que testea un test unitario, sino que la grilla no rompe la logica de distancia).
+    private static void TerrainTreeBrushSpacingHoldsWithManyExistingTrees()
+    {
+        var terrain = new Terrain { Resolution = 33, SizeX = 200f, SizeZ = 200f };
+        terrain.TreePrototypes.Add("tree.fbx");
+        var seedRng = new Random(42);
+        for (int i = 0; i < 500; i++)
+        {
+            terrain.Trees.Add(new TerrainTreeInstance
+            {
+                LocalX = (float)(seedRng.NextDouble() * 200.0 - 100.0),
+                LocalZ = (float)(seedRng.NextDouble() * 200.0 - 100.0),
+                Scale = 1f
+            });
+        }
+
+        // Intenta plantar justo pegado a un arbol ya existente que quedo lejos del resto: no
+        // deberia poder, aunque los otros 499 esten en cualquier otra celda de la grilla.
+        var target = terrain.Trees[250];
+        int countBefore = terrain.Trees.Count;
+        var rng = new Random(7);
+        for (int i = 0; i < 20; i++)
+            TerrainTreeBrush.Paint(terrain, prototypeIndex: 0, localX: target.LocalX, localZ: target.LocalZ,
+                radius: 0.05f, density: 1000f, deltaTime: 1f, rng, minSpacing: 5f);
+
+        AssertEqual(countBefore, terrain.Trees.Count, "planting right on top of an existing tree is blocked by min spacing even with hundreds of unrelated trees in the grid");
     }
 
     private static void SceneManagerResolveScenePathFindsSceneByName()
