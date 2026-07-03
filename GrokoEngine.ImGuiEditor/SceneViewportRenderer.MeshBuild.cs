@@ -79,7 +79,7 @@ internal sealed partial class SceneViewportRenderer
                 if (!string.IsNullOrWhiteSpace(PreviewMaterialAssetPath) && PreviewMaterialObjectId == obj.EditorId && PreviewMaterialSubmeshIndex == i)
                     slotPath = PreviewMaterialAssetPath;
                 var surf = GetSubmeshSurface(slotPath, sub, fallbackColor);
-                if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength))
+                if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
                 {
                     // GPU skinning path.
                 }
@@ -104,7 +104,7 @@ internal sealed partial class SceneViewportRenderer
             string? shaderGraphPath = GetObjectShaderGraphPath(obj);
             var shaderGraphProperties = GetObjectShaderGraphProperties(obj);
             var shaderGraphTextures = GetObjectShaderGraphTextures(obj);
-            if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength))
+            if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
             {
                 // GPU skinning path.
             }
@@ -414,7 +414,11 @@ internal sealed partial class SceneViewportRenderer
         bool transparent = false,
         float alpha = 1f,
         float refractionStrength = 0f,
-        float distortionStrength = 0f)
+        float distortionStrength = 0f,
+        bool castShadows = true,
+        bool receiveShadows = true,
+        bool twoSidedShadows = false,
+        bool shadowsOnly = false)
     {
         if (_buildingStatic || skin.Length > MaxGpuBones)
             return false;
@@ -459,7 +463,11 @@ internal sealed partial class SceneViewportRenderer
             emission,
             Math.Clamp(alpha, 0f, 1f),
             Math.Clamp(refractionStrength, 0f, 1f),
-            Math.Clamp(distortionStrength, 0f, 1f)));
+            Math.Clamp(distortionStrength, 0f, 1f),
+            transparent ? false : castShadows,
+            transparent ? false : receiveShadows,
+            transparent ? false : twoSidedShadows,
+            transparent ? false : shadowsOnly));
         return true;
     }
 }

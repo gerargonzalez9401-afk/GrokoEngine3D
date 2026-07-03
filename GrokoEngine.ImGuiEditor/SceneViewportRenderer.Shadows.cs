@@ -476,6 +476,9 @@ private void DrawDepthGeometry(int modelLocation)
 
         foreach (var draw in skinnedMeshDraws)
         {
+            if (!draw.CastShadows)
+                continue;
+
             var world = draw.World;
             SetMatrixUniform(modelLocation, ref world);
             SetDepthInstancing(modelLocation, false);
@@ -483,7 +486,11 @@ private void DrawDepthGeometry(int modelLocation)
             UploadBoneMatrices(GetDepthBoneLocations(modelLocation), draw.Skin);
             GL.BindVertexArray(draw.Mesh.Vao);
             TrackShadowDraw();
+            if (draw.TwoSidedShadows)
+                GL.Disable(EnableCap.CullFace);
             GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
+            if (draw.TwoSidedShadows)
+                GL.Enable(EnableCap.CullFace);
         }
 
         foreach (var draw in shaderGraphSkinnedMeshDraws)

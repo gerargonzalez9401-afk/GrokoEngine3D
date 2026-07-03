@@ -148,7 +148,11 @@ internal sealed partial class SceneViewportRenderer
         Vector4 Emission,
         float Alpha = 1f,
         float RefractionStrength = 0f,
-        float DistortionStrength = 0f);
+        float DistortionStrength = 0f,
+        bool CastShadows = true,
+        bool ReceiveShadows = true,
+        bool TwoSidedShadows = false,
+        bool ShadowsOnly = false);
 
     private readonly record struct SurfaceMaps(string? NormalMapPath, string? RoughnessMapPath, string? MetallicMapPath);
 

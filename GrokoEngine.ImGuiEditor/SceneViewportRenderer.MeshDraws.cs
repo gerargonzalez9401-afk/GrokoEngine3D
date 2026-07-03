@@ -211,9 +211,24 @@ internal sealed partial class SceneViewportRenderer
         System.Numerics.Matrix4x4[]? boundSkin = null;
         Matrix4 boundWorld = default;
         bool hasBoundWorld = false;
+        bool? boundSkinnedReceiveShadows = null;
 
         foreach (var draw in skinnedMeshDraws)
         {
+            // "Shadows Only": el objeto sigue proyectando sombra en el pase de depth, pero acá en
+            // el pase de color no se dibuja.
+            if (draw.ShadowsOnly)
+                continue;
+
+            if (boundSkinnedReceiveShadows != draw.ReceiveShadows)
+            {
+                ApplyShadowUniforms(
+                    draw.ReceiveShadows ? shadowInfo : ShadowInfo.Disabled,
+                    draw.ReceiveShadows ? spotShadowInfo : new ShadowInfo(false, Matrix4.Identity, 0f),
+                    draw.ReceiveShadows ? pointShadowInfo : new PointShadowInfo(false, Vector3.Zero, 1f, 0f));
+                boundSkinnedReceiveShadows = draw.ReceiveShadows;
+            }
+
             var world = draw.World;
             if (!hasBoundWorld || boundWorld != world)
             {
