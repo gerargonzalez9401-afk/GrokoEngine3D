@@ -66,6 +66,7 @@ internal static class Program
             ("PhysicsEngine fires trigger exit when collider disabled mid play", PhysicsEngineFiresTriggerExitWhenColliderDisabledMidPlay),
             ("Terrain samples height bilinear", TerrainSamplesHeightBilinear),
             ("Terrain resolution resize preserves splat and bumps version", TerrainResolutionResizePreservesSplatAndBumpsVersion),
+            ("Terrain resolution clamps to documented range", TerrainResolutionClampsToDocumentedRange),
             ("TerrainCollider samples height and bounds", TerrainColliderSamplesHeightAndBounds),
             ("TerrainBrush raise increases height with falloff", TerrainBrushRaiseIncreasesHeightWithFalloff),
             ("TerrainBrush flatten converges toward captured height", TerrainBrushFlattenConvergesTowardCapturedHeight),
@@ -2303,6 +2304,17 @@ internal static class Program
         AssertTrue(terrain.Version > v0, "resolution change bumps Version");
         AssertTrue(terrain.SplatVersion > sv0, "resolution change bumps SplatVersion");
         AssertEqual(255, terrain.SplatMap[0], "default splat still layer0=255 after resize");
+    }
+
+    private static void TerrainResolutionClampsToDocumentedRange()
+    {
+        var terrain = new Terrain();
+
+        terrain.Resolution = 1;
+        AssertEqual(2, terrain.Resolution, "resolution clamps up to the minimum of 2");
+
+        terrain.Resolution = 5000;
+        AssertEqual(512, terrain.Resolution, "resolution clamps down to the documented max of 512");
     }
 
     private static void TerrainColliderSamplesHeightAndBounds()

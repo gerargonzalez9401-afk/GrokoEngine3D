@@ -1115,10 +1115,12 @@ internal sealed partial class ImGuiEditorApp
                     {
                         int resolution = terrain.Resolution;
                         ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(4f, 2f));
-                        if (ImGui.DragInt("##Resolution", ref resolution, 1f, 2, 256))
+                        if (ImGui.DragInt("##Resolution", ref resolution, 1f, 2, 512))
                             terrain.Resolution = resolution;
                         ImGui.PopStyleVar();
                     }
+                    if (terrain.Resolution > 256)
+                        ImGui.TextDisabled("Por encima de 256, cada trazo de sculpt/paint reconstruye un mesh más grande — puede notarse más lento mientras se edita en vivo (el terreno no tiene chunking/LOD todavía).");
                     DrawFloat("Size X", terrain.SizeX, v => { terrain.SizeX = v; terrain.Version++; }, 0.1f, 1f, 10000f);
                     DrawFloat("Size Z", terrain.SizeZ, v => { terrain.SizeZ = v; terrain.Version++; }, 0.1f, 1f, 10000f);
                     DrawFloat("Height Scale", terrain.HeightScale, v => { terrain.HeightScale = v; terrain.Version++; }, 0.1f, 0f, 1000f);

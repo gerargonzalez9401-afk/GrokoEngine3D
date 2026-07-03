@@ -44,12 +44,19 @@ namespace GrokoEngine
     {
         private int _resolution = 33;
 
+        // Tope subido de 256 a 512 (256x256 -> 512x512 celdas). Por qué no más: el mesh se
+        // regenera ENTERO (formato no indexado, 2 triángulos por celda) en cada trazo de sculpt/
+        // paint, así que la resolución máxima está limitada por cuánto aguanta reconstruirse a
+        // 60fps mientras se edita en vivo, no por memoria. A 512 ya es notablemente más pesado
+        // que el viejo tope de 256; ir más alto (1024+, donde Unity realmente empieza a partir el
+        // terreno en patches/chunks con LOD) necesitaría ese chunking — reconstruir solo la
+        // región tocada por el pincel, no el terreno completo — que todavía no existe acá.
         public int Resolution
         {
             get => _resolution;
             set
             {
-                int v = Math.Clamp(value, 2, 256);
+                int v = Math.Clamp(value, 2, 512);
                 if (v == _resolution)
                     return;
                 _resolution = v;
