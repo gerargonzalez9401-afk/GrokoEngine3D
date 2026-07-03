@@ -1,8 +1,21 @@
 using System;
+using System.Collections.Generic;
 using MiMotor.Mathematics;
 
 namespace GrokoEngine
 {
+    // Un árbol/prop plantado sobre el terreno (estilo Unity "Tree Instance"). La altura NO se
+    // guarda: se resamplea del heightmap en cada uso (render, colisión), así que si esculpís
+    // el terreno después de plantar, los árboles "flotan" hasta la nueva altura solos.
+    public struct TerrainTreeInstance
+    {
+        public float LocalX;
+        public float LocalZ;
+        public float RotationY;   // grados
+        public float Scale;
+        public int PrototypeIndex;
+    }
+
     // =====================================================
     // TERRAIN
     // =====================================================
@@ -39,6 +52,11 @@ namespace GrokoEngine
         // Mapa de pesos por capa (RGBA, uno por celda del heightmap, row-major). Por defecto 100% capa 0.
         public byte[] SplatMap = Array.Empty<byte>();
 
+        // Mallas/prefabs plantables (estilo Unity "Tree Prototypes"). El índice en esta lista es
+        // el que referencia TerrainTreeInstance.PrototypeIndex.
+        public List<string> TreePrototypes = new();
+        public List<TerrainTreeInstance> Trees = new();
+
         // Se incrementa cada vez que cambia algo que afecta al mesh generado
         // (Resolution, SizeX/Z, HeightScale o el propio Heightmap).
         // El renderer usa esto para saber cuándo regenerar/reasubir el mesh a la GPU.
@@ -47,6 +65,10 @@ namespace GrokoEngine
         // Se incrementa cada vez que cambia el SplatMap (pintura) o el Resolution.
         // El renderer usa esto para saber cuándo re-subir la textura splat a la GPU.
         public int SplatVersion;
+
+        // Se incrementa cada vez que cambia la lista de árboles (plantar/borrar) o los prototipos.
+        // El renderer lo usa para saber cuándo reconstruir el batch de instancias.
+        public int TreeVersion;
 
         public Terrain()
         {

@@ -53,6 +53,67 @@ private void BuildTerrainGeometry(GameObject obj, Terrain terrain, ParsedMesh me
         }
     }
 
+// Arboles plantados (Terrain.Trees), horneados al mismo batch sólido que el propio suelo del
+// terreno (ActiveSolidVertices/ActiveSolidRanges ya redirige sola a static o dynamic según
+// corresponda) — así funcionan igual esté el Terrain marcado Static o no, sin pasar por el
+// camino de instancing de mallas dinámicas (que rechaza objetos estáticos por diseño). La altura
+// de cada árbol se resamplea del heightmap actual en cada build, así que si esculpís el terreno
+// después de plantar, los árboles ya plantados "flotan" solos hasta la nueva altura.
+private void BuildTerrainTrees(Terrain terrain, Matrix4 transform)
+    {
+        if (terrain.Trees.Count == 0 || terrain.TreePrototypes.Count == 0)
+            return;
+
+        var tint = new Vector4(1f, 1f, 1f, 1f);
+        var material = new Vector4(0f, 0.5f, 1f, 1f); // metallic 0, roughness 0.5 por defecto
+
+        for (int i = 0; i < terrain.Trees.Count; i++)
+        {
+            var instance = terrain.Trees[i];
+            if (instance.PrototypeIndex < 0 || instance.PrototypeIndex >= terrain.TreePrototypes.Count)
+                continue;
+
+            string protoPath = terrain.TreePrototypes[instance.PrototypeIndex];
+            protoPath = NormalizeExistingAssetPath(protoPath) ?? protoPath;
+            if (string.IsNullOrWhiteSpace(protoPath) || !ObjLoader.IsSupportedMesh(protoPath))
+                continue;
+
+            var mesh = GetParsedMesh(protoPath);
+            if (mesh == null || mesh.Positions.Length == 0)
+                continue;
+
+            float localHeight = terrain.GetHeightLocal(instance.LocalX, instance.LocalZ);
+            Matrix4 instanceWorld =
+                Matrix4.CreateScale(Math.Max(0.0001f, instance.Scale)) *
+                Matrix4.CreateRotationY(MathHelper.DegreesToRadians(instance.RotationY)) *
+                Matrix4.CreateTranslation(instance.LocalX, localHeight, instance.LocalZ) *
+                transform;
+
+            if (mesh.Submeshes.Count > 1)
+            {
+                foreach (var sub in mesh.Submeshes)
+                {
+                    int start = ActiveSolidVertices.Count;
+                    AddMeshTriangles(mesh, instanceWorld, 1f, tint, protoPath, material, Vector4.Zero, sub.VertexStart, sub.VertexCount);
+                    int count = ActiveSolidVertices.Count - start;
+                    if (count > 0)
+                        ActiveSolidRanges.Add(new SolidRange(start, count, sub.TexturePath, null, null, null, null, null, null, null));
+                }
+            }
+            else
+            {
+                int start = ActiveSolidVertices.Count;
+                AddMeshTriangles(mesh, instanceWorld, 1f, tint, protoPath, material, Vector4.Zero, 0, mesh.Positions.Length / 3);
+                int count = ActiveSolidVertices.Count - start;
+                if (count > 0)
+                {
+                    string? texturePath = mesh.Submeshes.Count > 0 ? mesh.Submeshes[0].TexturePath : null;
+                    ActiveSolidRanges.Add(new SolidRange(start, count, texturePath, null, null, null, null, null, null, null));
+                }
+            }
+        }
+    }
+
 private (ParsedMesh Mesh, string MeshPath) GetTerrainMesh(GameObject obj, Terrain terrain)
     {
         if (terrainMeshCache.TryGetValue(obj.EditorId, out var cached) && cached.Version == terrain.Version)

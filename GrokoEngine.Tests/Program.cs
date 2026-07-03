@@ -57,6 +57,7 @@ internal static class Program
             ("Animator interruption does not self-retrigger while condition stays true", AnimatorInterruptionDoesNotSelfRetriggerWhileConditionStaysTrue),
             ("Animator interruption respects exit time from abandoned state", AnimatorInterruptionRespectsExitTimeFromAbandonedState),
             ("SceneSerializer preserves contact shadow settings", SceneSerializerPreservesContactShadowSettings),
+            ("SceneSerializer preserves terrain trees", SceneSerializerPreservesTerrainTrees),
             ("SceneSerializer preserves procedural sky settings", SceneSerializerPreservesProceduralSkySettings),
             ("SceneSerializer preserves light cookie and IES paths", SceneSerializerPreservesLightCookieAndIesPaths),
             ("IesProfile parses minimal LM-63 file and normalizes peak", IesProfileParsesMinimalLm63FileAndNormalizesPeak),
@@ -72,6 +73,9 @@ internal static class Program
             ("TerrainBrush hard falloff pushes uniformly within radius", TerrainBrushHardFalloffPushesUniformlyWithinRadius),
             ("TerrainHeightmapImport maps black to low and white to high", TerrainHeightmapImportMapsBlackToLowAndWhiteToHigh),
             ("TerrainHeightmapImport resamples to current resolution, not source size", TerrainHeightmapImportResamplesToCurrentResolutionNotSourceSize),
+            ("TerrainTreeBrush plants within radius and respects min spacing", TerrainTreeBrushPlantsWithinRadiusAndRespectsMinSpacing),
+            ("TerrainTreeBrush paint fails without prototypes", TerrainTreeBrushPaintFailsWithoutPrototypes),
+            ("TerrainTreeBrush erase removes trees within radius", TerrainTreeBrushEraseRemovesTreesWithinRadius),
             ("SceneManager resolves scene path by name", SceneManagerResolveScenePathFindsSceneByName),
             ("SceneManager LoadScene swaps roots and preserves survivors", SceneManagerLoadSceneSwapsRootsAndPreservesSurvivors),
             ("EditorSceneGraph attach moves existing object", EditorSceneGraphAttachMovesExistingObject),
@@ -2189,6 +2193,33 @@ internal static class Program
         AssertNear(2.2f, loadedDl.SkyExposure, "sky exposure restored");
     }
 
+    private static void SceneSerializerPreservesTerrainTrees()
+    {
+        string assetsDir = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets");
+        Directory.CreateDirectory(assetsDir);
+        string treePath = Path.Combine(assetsDir, "pine.obj");
+        File.WriteAllText(treePath, "# stub");
+
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(assetsDir);
+        var obj = new GameObject { Name = "Ground" };
+        var terrain = obj.AddComponent<Terrain>();
+        terrain.TreePrototypes.Add(treePath);
+        terrain.Trees.Add(new TerrainTreeInstance { LocalX = 1.5f, LocalZ = -2f, RotationY = 90f, Scale = 1.2f, PrototypeIndex = 0 });
+
+        string json = SceneSerializer.Serialize(new[] { obj });
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts);
+        var loadedTerrain = loaded[0].GetComponent<Terrain>()!;
+
+        AssertEqual(1, loadedTerrain.TreePrototypes.Count, "tree prototype list restored");
+        AssertEqual(1, loadedTerrain.Trees.Count, "planted tree restored");
+        AssertNear(1.5f, loadedTerrain.Trees[0].LocalX, "tree local X restored");
+        AssertNear(-2f, loadedTerrain.Trees[0].LocalZ, "tree local Z restored");
+        AssertNear(90f, loadedTerrain.Trees[0].RotationY, "tree rotation restored");
+        AssertNear(1.2f, loadedTerrain.Trees[0].Scale, "tree scale restored");
+        AssertEqual(0, loadedTerrain.Trees[0].PrototypeIndex, "tree prototype index restored");
+    }
+
     private static void PhysicsEngineFiresTriggerExitWhenOtherObjectDestroyed()
     {
         var physics = new PhysicsEngine();
@@ -2367,6 +2398,50 @@ internal static class Program
 
         AssertEqual(5 * 5, terrain.Heightmap.Length, "heightmap keeps the terrain's own resolution, not the source image size");
         AssertNear(-1f + (200f / 255f) * 2f, terrain.Heightmap[0], "uniform source image produces a uniform heightmap");
+    }
+
+    private static void TerrainTreeBrushPlantsWithinRadiusAndRespectsMinSpacing()
+    {
+        var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
+        terrain.TreePrototypes.Add("tree.fbx");
+        var rng = new Random(1234);
+
+        bool changed = TerrainTreeBrush.Paint(terrain, prototypeIndex: 0, localX: 0f, localZ: 0f, radius: 2f,
+            density: 5f, deltaTime: 1f, rng, minSpacing: 0.3f);
+
+        AssertTrue(changed, "planting within radius reports a change");
+        AssertTrue(terrain.Trees.Count > 0, "at least one tree got planted");
+        foreach (var tree in terrain.Trees)
+        {
+            float dist = MathF.Sqrt(tree.LocalX * tree.LocalX + tree.LocalZ * tree.LocalZ);
+            AssertTrue(dist <= 2.01f, "every planted tree stays within the brush radius");
+            AssertEqual(0, tree.PrototypeIndex, "planted tree references the selected prototype");
+        }
+    }
+
+    private static void TerrainTreeBrushPaintFailsWithoutPrototypes()
+    {
+        var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
+        var rng = new Random(1);
+
+        bool changed = TerrainTreeBrush.Paint(terrain, prototypeIndex: 0, localX: 0f, localZ: 0f, radius: 2f,
+            density: 5f, deltaTime: 1f, rng);
+
+        AssertFalse(changed, "painting with no prototypes registered does nothing");
+        AssertEqual(0, terrain.Trees.Count, "no trees get planted without a prototype");
+    }
+
+    private static void TerrainTreeBrushEraseRemovesTreesWithinRadius()
+    {
+        var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
+        terrain.Trees.Add(new TerrainTreeInstance { LocalX = 0.5f, LocalZ = 0.5f, Scale = 1f });
+        terrain.Trees.Add(new TerrainTreeInstance { LocalX = 10f, LocalZ = 10f, Scale = 1f }); // fuera del radio
+
+        bool changed = TerrainTreeBrush.Erase(terrain, localX: 0f, localZ: 0f, radius: 2f);
+
+        AssertTrue(changed, "erase brush reports a change");
+        AssertEqual(1, terrain.Trees.Count, "only the tree within the erase radius gets removed");
+        AssertNear(10f, terrain.Trees[0].LocalX, "the far-away tree survives");
     }
 
     private static void SceneManagerResolveScenePathFindsSceneByName()

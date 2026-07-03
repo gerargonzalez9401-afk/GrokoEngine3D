@@ -1303,6 +1303,12 @@ internal sealed partial class ImGuiEditorApp
                 drawList.AddTriangleFilled(min + new Vector2(size * .42f, size * .52f), min + new Vector2(size * .30f, size * .58f), min + new Vector2(size * .46f, size * .68f), color);
                 drawList.AddCircleFilled(min + new Vector2(size * .26f, size * .78f), size * .10f, color);
                 break;
+            case EditorIcon.TerrainTrees:
+                // Pino: dos triángulos apilados de copa + tronco.
+                drawList.AddTriangleFilled(min + new Vector2(size * .50f, size * .12f), min + new Vector2(size * .28f, size * .46f), min + new Vector2(size * .72f, size * .46f), color);
+                drawList.AddTriangleFilled(min + new Vector2(size * .50f, size * .30f), min + new Vector2(size * .22f, size * .66f), min + new Vector2(size * .78f, size * .66f), color);
+                drawList.AddRectFilled(min + new Vector2(size * .44f, size * .66f), min + new Vector2(size * .56f, size * .86f), color, 1f);
+                break;
         }
     }
 

@@ -145,7 +145,8 @@ internal sealed partial class ImGuiEditorApp
         TerrainFlatten,
         TerrainNoise,
         TerrainExtrude,
-        TerrainPaint
+        TerrainPaint,
+        TerrainTrees
     }
 
     private readonly struct DisabledScope : IDisposable

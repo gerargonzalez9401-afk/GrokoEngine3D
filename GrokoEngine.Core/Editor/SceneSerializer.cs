@@ -457,6 +457,9 @@ namespace GrokoEngine
                         terrain.LayerTextures.Select(p => SerializeAssetPath(p, baseAssetsPath)).ToArray());
                     data.Fields["LayerTiling"] = JsonSerializer.Serialize(terrain.LayerTiling);
                     data.Fields["SplatMap"] = Convert.ToBase64String(terrain.SplatMap);
+                    data.Fields["TreePrototypes"] = JsonSerializer.Serialize(
+                        terrain.TreePrototypes.Select(p => SerializeAssetPath(p, baseAssetsPath)).ToArray());
+                    data.Fields["Trees"] = JsonSerializer.Serialize(terrain.Trees, JsonOptions);
                     return data;
                 case Animator animator:
                     data.Fields["ControllerPath"] = SerializeAssetPath(animator.ControllerPath, baseAssetsPath);
@@ -706,6 +709,18 @@ namespace GrokoEngine
                         terrain.SplatMap = splatMap;
                 }
                 terrain.EnsureSplatMapSize();
+                if (fields.TryGetValue("TreePrototypes", out var treeProtosJson) && !string.IsNullOrWhiteSpace(treeProtosJson))
+                {
+                    var protos = JsonSerializer.Deserialize<string[]>(treeProtosJson);
+                    if (protos != null)
+                        terrain.TreePrototypes = protos.Select(p => ResolveAssetPath(p, baseAssetsPath) ?? "").ToList();
+                }
+                if (fields.TryGetValue("Trees", out var treesJson) && !string.IsNullOrWhiteSpace(treesJson))
+                {
+                    var trees = JsonSerializer.Deserialize<List<TerrainTreeInstance>>(treesJson, JsonOptions);
+                    if (trees != null)
+                        terrain.Trees = trees;
+                }
                 terrain.Version++;
                 terrain.SplatVersion++;
             }

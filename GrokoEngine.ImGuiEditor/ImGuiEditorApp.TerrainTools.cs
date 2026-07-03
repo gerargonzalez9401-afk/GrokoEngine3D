@@ -1,4 +1,5 @@
 using GrokoEngine;
+using ImGuiNET;
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -7,6 +8,7 @@ using System.Runtime.InteropServices;
 using Vector2 = System.Numerics.Vector2;
 using Vector3 = MiMotor.Mathematics.Vector3;
 using GlfwMouseButton = OpenTK.Windowing.GraphicsLibraryFramework.MouseButton;
+using GlfwKeys = OpenTK.Windowing.GraphicsLibraryFramework.Keys;
 
 namespace GrokoEngine.ImGuiEditor;
 
@@ -15,7 +17,8 @@ internal sealed partial class ImGuiEditorApp
     public enum TerrainEditMode
     {
         Sculpt,
-        Paint
+        Paint,
+        Trees
     }
 
     private static string SculptToolTooltip(TerrainBrushTool tool) => tool switch
@@ -39,6 +42,11 @@ internal sealed partial class ImGuiEditorApp
     private bool previousTerrainSculptMouseDown;
     private SceneStateSnapshot? terrainSculptUndoStart;
     private float? terrainFlattenHeight;
+
+    // ── Trees ──────────────────────────────────────────────────────
+    private int terrainTreePrototypeIndex;
+    private float terrainTreeDensity = 2f;
+    private readonly Random terrainTreeRng = new();
 
     private void HandleTerrainSculpting(float deltaTime)
     {
@@ -89,6 +97,8 @@ internal sealed partial class ImGuiEditorApp
 
         if (terrainEditMode == TerrainEditMode.Paint)
             ApplyTerrainPaintBrush(terrain, localX, localZ, deltaTime);
+        else if (terrainEditMode == TerrainEditMode.Trees)
+            ApplyTerrainTreeBrush(terrain, localX, localZ, deltaTime);
         else
             ApplyTerrainSculptBrush(terrain, localX, localZ, deltaTime);
     }
@@ -123,7 +133,12 @@ internal sealed partial class ImGuiEditorApp
     {
         if (terrainSculptUndoStart.HasValue && selected != null)
         {
-            string label = terrainEditMode == TerrainEditMode.Paint ? "Paint Terrain " : "Sculpt Terrain ";
+            string label = terrainEditMode switch
+            {
+                TerrainEditMode.Paint => "Paint Terrain ",
+                TerrainEditMode.Trees => "Plant Trees ",
+                _ => "Sculpt Terrain "
+            };
             PushSceneState(label + selected.Name, terrainSculptUndoStart.Value, CaptureSceneState());
         }
 
@@ -149,6 +164,67 @@ internal sealed partial class ImGuiEditorApp
             terrainBrushRadius, terrainBrushStrength, deltaTime);
         if (changed)
             terrain.SplatVersion++;
+    }
+
+    // Lista de prototipos de árbol (mesh/prefab), estilo Unity "Tree Prototypes": un slot de
+    // asset por prototipo, con un toggle para elegir cuál planta el pincel y un botón para
+    // sacarlo de la lista (reindexando los árboles ya plantados con ese prototipo).
+    private void DrawTerrainTreePrototypeList(Terrain terrain)
+    {
+        FieldRow("");
+        ImGui.Text($"{terrain.TreePrototypes.Count} prototipo(s)  —  {terrain.Trees.Count} árbol(es) plantado(s)");
+
+        int removeIndex = -1;
+        for (int i = 0; i < terrain.TreePrototypes.Count; i++)
+        {
+            int idx = i;
+            ImGui.PushID("treeProto" + idx);
+            DrawAssetSlot($"Tree {idx + 1}", terrain.TreePrototypes[idx], "Drop mesh",
+                path => terrain.TreePrototypes[idx] = path,
+                path => ObjLoader.IsSupportedMesh(path) || path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase));
+
+            FieldRow("");
+            if (DrawToggleButton("Plant this tree", terrainTreePrototypeIndex == idx, new Vector2(-70f, 0f)))
+                terrainTreePrototypeIndex = idx;
+            ImGui.SameLine();
+            if (ImGui.Button("Remove", new Vector2(-1f, 0f)))
+                removeIndex = idx;
+            ImGui.PopID();
+        }
+
+        if (removeIndex >= 0)
+        {
+            terrain.TreePrototypes.RemoveAt(removeIndex);
+            terrain.Trees.RemoveAll(t => t.PrototypeIndex == removeIndex);
+            for (int i = 0; i < terrain.Trees.Count; i++)
+            {
+                var t = terrain.Trees[i];
+                if (t.PrototypeIndex > removeIndex)
+                {
+                    t.PrototypeIndex--;
+                    terrain.Trees[i] = t;
+                }
+            }
+            if (terrainTreePrototypeIndex >= terrain.TreePrototypes.Count)
+                terrainTreePrototypeIndex = Math.Max(0, terrain.TreePrototypes.Count - 1);
+            terrain.TreeVersion++;
+        }
+
+        FieldRow("");
+        if (ImGui.Button("+ Add Tree Prototype", new Vector2(-1f, 0f)))
+            terrain.TreePrototypes.Add("");
+    }
+
+    // Shift+click borra árboles en vez de plantar (mismo atajo que Unity).
+    private void ApplyTerrainTreeBrush(Terrain terrain, float localX, float localZ, float deltaTime)
+    {
+        bool erasing = KeyboardState.IsKeyDown(GlfwKeys.LeftShift) || KeyboardState.IsKeyDown(GlfwKeys.RightShift);
+        bool changed = erasing
+            ? TerrainTreeBrush.Erase(terrain, localX, localZ, terrainBrushRadius)
+            : TerrainTreeBrush.Paint(terrain, terrainTreePrototypeIndex, localX, localZ, terrainBrushRadius,
+                terrainTreeDensity, deltaTime, terrainTreeRng);
+        if (changed)
+            terrain.TreeVersion++;
     }
 
     // ── Import Heightmap desde imagen (estilo Unity "Import Raw/Heightmap") ──────

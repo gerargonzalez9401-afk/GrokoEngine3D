@@ -102,7 +102,10 @@ internal sealed partial class SceneViewportRenderer
                 var terrainFilter = new MeshFilter { MeshPath = meshPath, ImportScale = 1f };
                 bool frustumVisible = skipFrustumCullingForStaticBatch || FrustumContainsMesh(frustum, obj, terrainFilter, mesh, world);
                 if (frustumVisible)
+                {
                     BuildTerrainGeometry(obj, terrain, mesh, meshPath, sel, world);
+                    BuildTerrainTrees(terrain, world);
+                }
             }
         }
 

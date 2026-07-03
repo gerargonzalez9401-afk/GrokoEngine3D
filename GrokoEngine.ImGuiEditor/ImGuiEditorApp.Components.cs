@@ -1166,8 +1166,16 @@ internal sealed partial class ImGuiEditorApp
                         ImGui.SameLine();
                         if (DrawIconButton(EditorIcon.TerrainPaint, "Paint Texture", terrainEditMode == TerrainEditMode.Paint, iconSize))
                             terrainEditMode = TerrainEditMode.Paint;
+                        ImGui.SameLine();
+                        if (DrawIconButton(EditorIcon.TerrainTrees, "Paint Trees", terrainEditMode == TerrainEditMode.Trees, iconSize))
+                            terrainEditMode = TerrainEditMode.Trees;
                     }
-                    ImGui.TextDisabled(terrainEditMode == TerrainEditMode.Sculpt ? SculptToolTooltip(terrainBrushTool) : "Pintar capas de textura.");
+                    ImGui.TextDisabled(terrainEditMode switch
+                    {
+                        TerrainEditMode.Sculpt => SculptToolTooltip(terrainBrushTool),
+                        TerrainEditMode.Paint => "Pintar capas de textura.",
+                        _ => "Click para plantar árboles. Shift+Click para borrarlos."
+                    });
 
                     if (terrainEditMode == TerrainEditMode.Sculpt)
                     {
@@ -1183,7 +1191,7 @@ internal sealed partial class ImGuiEditorApp
                         if (terrainBrushFalloff == TerrainBrushFalloff.Hard)
                             ImGui.TextDisabled("Empuja parejo en todo el radio, sin degradar hacia el borde. Ideal para mesetas: Raise repetido da una zona plana de arriba con borde filoso, en vez de una colina redondeada.");
                     }
-                    else
+                    else if (terrainEditMode == TerrainEditMode.Paint)
                     {
                         for (int i = 0; i < 4; i++)
                         {
@@ -1198,9 +1206,16 @@ internal sealed partial class ImGuiEditorApp
                                 v => terrain.LayerTiling[layerIndex] = v, 0.1f, 0.01f, 100f);
                         }
                     }
+                    else // Trees
+                    {
+                        DrawTerrainTreePrototypeList(terrain);
+                    }
 
                     DrawFloat("Brush Radius", terrainBrushRadius, v => terrainBrushRadius = v, 0.1f, 0.5f, 100f);
-                    DrawFloat("Brush Strength", terrainBrushStrength, v => terrainBrushStrength = v, 0.01f, 0.05f, 5f);
+                    if (terrainEditMode == TerrainEditMode.Trees)
+                        DrawFloat("Tree Density", terrainTreeDensity, v => terrainTreeDensity = Math.Max(0.01f, v), 0.05f, 0.05f, 50f);
+                    else
+                        DrawFloat("Brush Strength", terrainBrushStrength, v => terrainBrushStrength = v, 0.01f, 0.05f, 5f);
 
                     if (terrainEditMode == TerrainEditMode.Sculpt && terrainBrushTool == TerrainBrushTool.Noise)
                     {
