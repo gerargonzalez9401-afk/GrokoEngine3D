@@ -7,7 +7,7 @@ namespace GrokoEngine
     // en el mismo formato que usa ObjLoader para mallas importadas.
     public static class TerrainMeshGenerator
     {
-        public static ParsedMesh Generate(Terrain terrain)
+        public static ParsedMesh Generate(Terrain terrain, Terrain? left = null, Terrain? right = null, Terrain? top = null, Terrain? bottom = null)
         {
             int res = Math.Max(2, terrain.Resolution);
             terrain.EnsureHeightmapSize();
@@ -46,8 +46,21 @@ namespace GrokoEngine
             // ~4 llamadas redundantes (clamp + indexado) por vértice, que en un terreno de
             // resolución alta (256x256 = 65536 vértices) suman cientos de miles de llamadas de más
             // en cada regeneración de malla (cada trazo de sculpt en un terreno sin cachear).
+            // En el borde, si hay un vecino de la MISMA Resolution conectado, se lee su altura
+            // real más allá del borde en vez de clampear contra la propia (que duplicaba el
+            // valor del borde y producía una costura de iluminación visible entre dos Terrain
+            // pegados, aunque las alturas coincidieran exactamente en la unión).
             float HeightAt(int hx, int hz)
             {
+                if (hx < 0 && left != null && left.Resolution == res)
+                    return left.GetHeight(left.Resolution - 1, ClampIndex(hz, res)) * left.HeightScale;
+                if (hx >= res && right != null && right.Resolution == res)
+                    return right.GetHeight(0, ClampIndex(hz, res)) * right.HeightScale;
+                if (hz < 0 && bottom != null && bottom.Resolution == res)
+                    return bottom.GetHeight(ClampIndex(hx, res), bottom.Resolution - 1) * bottom.HeightScale;
+                if (hz >= res && top != null && top.Resolution == res)
+                    return top.GetHeight(ClampIndex(hx, res), 0) * top.HeightScale;
+
                 hx = hx < 0 ? 0 : hx >= res ? res - 1 : hx;
                 hz = hz < 0 ? 0 : hz >= res ? res - 1 : hz;
                 return positions[(hz * res + hx) * 3 + 1];
@@ -118,6 +131,8 @@ namespace GrokoEngine
 
             return mesh;
         }
+
+        private static int ClampIndex(int v, int res) => v < 0 ? 0 : v >= res ? res - 1 : v;
 
         private static void WriteTriangle(float[] outPositions, float[] outNormals, float[] outUvs, ref int triIndex,
             float[] positions, float[] normals, float[] uvs, int a, int b, int c)

@@ -1125,6 +1125,16 @@ internal sealed partial class ImGuiEditorApp
                     DrawFloat("Size Z", terrain.SizeZ, v => { terrain.SizeZ = v; terrain.Version++; }, 0.1f, 1f, 10000f);
                     DrawFloat("Height Scale", terrain.HeightScale, v => { terrain.HeightScale = v; terrain.Version++; }, 0.1f, 0f, 1000f);
 
+                    FieldRow("Neighbors");
+                    {
+                        string NeighborLabel(string? id) => string.IsNullOrEmpty(id) ? "None" : (sceneGraph.FindById(id)?.Name ?? "(missing)");
+                        ImGui.TextDisabled($"L: {NeighborLabel(terrain.LeftNeighborId)}   R: {NeighborLabel(terrain.RightNeighborId)}   T: {NeighborLabel(terrain.TopNeighborId)}   B: {NeighborLabel(terrain.BottomNeighborId)}");
+                    }
+                    FieldRow("");
+                    if (ImGui.Button("Auto-Connect Neighbors##terrainNeighbors", new Vector2(-1f, 0f)))
+                        AutoConnectTerrainNeighbors(terrain.gameObject, terrain);
+                    ImGui.TextDisabled("Busca otros Terrain del mismo tamaño pegados exactamente a cada lado (misma Size X/Z) y los conecta como vecinos, para eliminar la costura de iluminación en el borde compartido.");
+
                     FieldRow("");
                     ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.10f, 0.10f, 0.11f, 1f));
                     ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new System.Numerics.Vector4(0.17f, 0.20f, 0.24f, 1f));

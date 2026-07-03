@@ -330,6 +330,66 @@ internal sealed partial class ImGuiEditorApp
             terrain.DetailVersion++;
     }
 
+    // Busca, entre TODOS los GameObject de la escena, otros Terrain del mismo tamaño (Size X/Z)
+    // cuyo centro quede exactamente a un SizeX/SizeZ de distancia en alguna de las 4 direcciones
+    // (es decir, pegados borde con borde sin hueco ni superposición) y los conecta como vecinos
+    // en AMBOS sentidos (si A queda a la izquierda de B, B pasa a ser el vecino derecho de A).
+    // Estilo Unity "Create Neighbor Terrains", pero sin crear tiles nuevos: solo conecta los que
+    // ya existen en la escena.
+    private void AutoConnectTerrainNeighbors(GameObject obj, Terrain terrain)
+    {
+        const float epsilon = 0.05f;
+        var pos = obj.GlobalPosition;
+
+        string? leftId = null, rightId = null, topId = null, bottomId = null;
+        Terrain? leftT = null, rightT = null, topT = null, bottomT = null;
+
+        foreach (var other in objects)
+        {
+            if (ReferenceEquals(other, obj))
+                continue;
+            var otherTerrain = other.GetComponent<Terrain>();
+            if (otherTerrain == null)
+                continue;
+            if (MathF.Abs(otherTerrain.SizeX - terrain.SizeX) > epsilon || MathF.Abs(otherTerrain.SizeZ - terrain.SizeZ) > epsilon)
+                continue;
+
+            var otherPos = other.GlobalPosition;
+            float dx = otherPos.X - pos.X;
+            float dz = otherPos.Z - pos.Z;
+
+            if (MathF.Abs(dz) < epsilon && MathF.Abs(dx + terrain.SizeX) < epsilon)
+            { leftId = other.EditorId; leftT = otherTerrain; }
+            else if (MathF.Abs(dz) < epsilon && MathF.Abs(dx - terrain.SizeX) < epsilon)
+            { rightId = other.EditorId; rightT = otherTerrain; }
+            else if (MathF.Abs(dx) < epsilon && MathF.Abs(dz - terrain.SizeZ) < epsilon)
+            { topId = other.EditorId; topT = otherTerrain; }
+            else if (MathF.Abs(dx) < epsilon && MathF.Abs(dz + terrain.SizeZ) < epsilon)
+            { bottomId = other.EditorId; bottomT = otherTerrain; }
+        }
+
+        terrain.LeftNeighborId = leftId;
+        terrain.RightNeighborId = rightId;
+        terrain.TopNeighborId = topId;
+        terrain.BottomNeighborId = bottomId;
+
+        if (leftT != null) leftT.RightNeighborId = obj.EditorId;
+        if (rightT != null) rightT.LeftNeighborId = obj.EditorId;
+        if (topT != null) topT.BottomNeighborId = obj.EditorId;
+        if (bottomT != null) bottomT.TopNeighborId = obj.EditorId;
+
+        terrain.Version++;
+        if (leftT != null) leftT.Version++;
+        if (rightT != null) rightT.Version++;
+        if (topT != null) topT.Version++;
+        if (bottomT != null) bottomT.Version++;
+
+        int found = (leftId != null ? 1 : 0) + (rightId != null ? 1 : 0) + (topId != null ? 1 : 0) + (bottomId != null ? 1 : 0);
+        statusMessage = found > 0
+            ? $"Conectados {found} vecino(s) para {obj.Name}"
+            : $"No se encontraron Terrain pegados a {obj.Name}";
+    }
+
     // ── Import Heightmap desde imagen (estilo Unity "Import Raw/Heightmap") ──────
 
     private static string? BrowseForHeightmapImage()

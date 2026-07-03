@@ -80,6 +80,18 @@ namespace GrokoEngine
         // Mapa de pesos por capa (RGBA, uno por celda del heightmap, row-major). Por defecto 100% capa 0.
         public byte[] SplatMap = Array.Empty<byte>();
 
+        // Vecinos, estilo Unity "SetNeighbors": para pegar varios Terrain en mosaico sin costura
+        // de iluminación en el borde compartido. Se guarda el EditorId del GameObject vecino (no
+        // una referencia C# directa) porque así sobrevive guardar/cargar la escena — el editor
+        // resuelve el ID al Terrain real al generar la malla. Left = -X, Right = +X, Bottom = -Z,
+        // Top = +Z. La costura solo se elimina si el vecino tiene la MISMA Resolution (si no,
+        // las filas/columnas del borde no alinean 1 a 1 y se cae de nuevo al comportamiento
+        // anterior de clampear contra el propio borde).
+        public string? LeftNeighborId;
+        public string? RightNeighborId;
+        public string? TopNeighborId;
+        public string? BottomNeighborId;
+
         // Mallas/prefabs plantables (estilo Unity "Tree Prototypes"). El índice en esta lista es
         // el que referencia TerrainTreeInstance.PrototypeIndex.
         public List<string> TreePrototypes = new();

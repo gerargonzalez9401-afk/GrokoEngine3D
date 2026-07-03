@@ -473,6 +473,13 @@ namespace GrokoEngine
                     data.Fields["Details"] = JsonSerializer.Serialize(terrain.Details, JsonOptions);
                     data.Fields["DetailDistance"] = terrain.DetailDistance.ToString(CultureInfo.InvariantCulture);
                     data.Fields["DetailDensityScale"] = terrain.DetailDensityScale.ToString(CultureInfo.InvariantCulture);
+                    // Vecinos: se guarda el EditorId crudo (no una asset path ni un @@ref: genérico
+                    // — Terrain no pasa por el resolvedor de referencias reflexivo, así que se
+                    // guarda/lee como un string plano, igual que BoneAttachment.TargetObjectId).
+                    data.Fields["LeftNeighborId"] = terrain.LeftNeighborId ?? "";
+                    data.Fields["RightNeighborId"] = terrain.RightNeighborId ?? "";
+                    data.Fields["TopNeighborId"] = terrain.TopNeighborId ?? "";
+                    data.Fields["BottomNeighborId"] = terrain.BottomNeighborId ?? "";
                     return data;
                 case Animator animator:
                     data.Fields["ControllerPath"] = SerializeAssetPath(animator.ControllerPath, baseAssetsPath);
@@ -756,6 +763,10 @@ namespace GrokoEngine
                 }
                 terrain.DetailDistance = GetFloat(fields, "DetailDistance", terrain.DetailDistance);
                 terrain.DetailDensityScale = GetFloat(fields, "DetailDensityScale", terrain.DetailDensityScale);
+                if (fields.TryGetValue("LeftNeighborId", out var leftNId)) terrain.LeftNeighborId = string.IsNullOrEmpty(leftNId) ? null : leftNId;
+                if (fields.TryGetValue("RightNeighborId", out var rightNId)) terrain.RightNeighborId = string.IsNullOrEmpty(rightNId) ? null : rightNId;
+                if (fields.TryGetValue("TopNeighborId", out var topNId)) terrain.TopNeighborId = string.IsNullOrEmpty(topNId) ? null : topNId;
+                if (fields.TryGetValue("BottomNeighborId", out var bottomNId)) terrain.BottomNeighborId = string.IsNullOrEmpty(bottomNId) ? null : bottomNId;
                 terrain.Version++;
                 terrain.SplatVersion++;
             }

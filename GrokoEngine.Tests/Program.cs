@@ -83,6 +83,9 @@ internal static class Program
             ("TerrainDetailBrush erase removes details within radius", TerrainDetailBrushEraseRemovesDetailsWithinRadius),
             ("TerrainDetailBrush respects MaxDetailInstances cap", TerrainDetailBrushRespectsMaxDetailInstancesCap),
             ("SceneSerializer preserves terrain details", SceneSerializerPreservesTerrainDetails),
+            ("TerrainMeshGenerator stitches normals with a connected neighbor", TerrainMeshGeneratorStitchesNormalsWithNeighbor),
+            ("TerrainMeshGenerator skips stitching when neighbor resolution differs", TerrainMeshGeneratorSkipsStitchingWhenNeighborResolutionDiffers),
+            ("SceneSerializer preserves terrain neighbor ids", SceneSerializerPreservesTerrainNeighborIds),
             ("SceneManager resolves scene path by name", SceneManagerResolveScenePathFindsSceneByName),
             ("SceneManager LoadScene swaps roots and preserves survivors", SceneManagerLoadSceneSwapsRootsAndPreservesSurvivors),
             ("EditorSceneGraph attach moves existing object", EditorSceneGraphAttachMovesExistingObject),
@@ -2589,6 +2592,74 @@ internal static class Program
         AssertEqual(0, loadedTerrain.Details[0].PrototypeIndex, "detail prototype index restored");
         AssertNear(90f, loadedTerrain.DetailDistance, "detail distance restored");
         AssertNear(0.5f, loadedTerrain.DetailDensityScale, "detail density scale restored");
+    }
+
+    private static void TerrainMeshGeneratorStitchesNormalsWithNeighbor()
+    {
+        var a = new Terrain { Resolution = 3, SizeX = 4f, SizeZ = 4f, HeightScale = 1f };
+        for (int i = 0; i < a.Heightmap.Length; i++) a.Heightmap[i] = 0f; // A completamente plano
+
+        var b = new Terrain { Resolution = 3, SizeX = 4f, SizeZ = 4f, HeightScale = 1f };
+        for (int i = 0; i < b.Heightmap.Length; i++) b.Heightmap[i] = 0f;
+        // La columna izquierda de B (x=0) es la que queda pegada al borde derecho de A.
+        for (int z = 0; z < b.Resolution; z++) b.Heightmap[z * b.Resolution + 0] = 1f;
+
+        var meshAlone = TerrainMeshGenerator.Generate(a);
+        var meshStitched = TerrainMeshGenerator.Generate(a, right: b);
+
+        bool foundDifference = false;
+        float halfX = a.SizeX * 0.5f;
+        for (int i = 0; i < meshAlone.Positions.Length / 3; i++)
+        {
+            float px = meshAlone.Positions[i * 3 + 0];
+            if (MathF.Abs(px - halfX) > 0.001f)
+                continue; // solo vértices del borde derecho (donde se conectó el vecino)
+
+            float nyAlone = meshAlone.Normals[i * 3 + 1];
+            float nyStitched = meshStitched.Normals[i * 3 + 1];
+            if (MathF.Abs(nyAlone - nyStitched) > 0.001f)
+            {
+                foundDifference = true;
+                break;
+            }
+        }
+
+        AssertTrue(foundDifference, "edge normal changes once a neighbor with a different border height is connected");
+    }
+
+    private static void TerrainMeshGeneratorSkipsStitchingWhenNeighborResolutionDiffers()
+    {
+        var a = new Terrain { Resolution = 3, SizeX = 4f, SizeZ = 4f };
+        var b = new Terrain { Resolution = 5, SizeX = 4f, SizeZ = 4f }; // resolución distinta: no debe alinear
+        for (int i = 0; i < b.Heightmap.Length; i++) b.Heightmap[i] = 1f;
+
+        var meshAlone = TerrainMeshGenerator.Generate(a);
+        var meshWithMismatchedNeighbor = TerrainMeshGenerator.Generate(a, right: b);
+
+        for (int i = 0; i < meshAlone.Normals.Length; i++)
+            AssertNear(meshAlone.Normals[i], meshWithMismatchedNeighbor.Normals[i],
+                "a neighbor with a different resolution is ignored, falling back to the clamped self-edge");
+    }
+
+    private static void SceneSerializerPreservesTerrainNeighborIds()
+    {
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets"));
+        var obj = new GameObject { Name = "TileA" };
+        var terrain = obj.AddComponent<Terrain>();
+        terrain.LeftNeighborId = "neighbor-left";
+        terrain.RightNeighborId = "neighbor-right";
+        terrain.TopNeighborId = "neighbor-top";
+        terrain.BottomNeighborId = "neighbor-bottom";
+
+        string json = SceneSerializer.Serialize(new[] { obj });
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts);
+        var loadedTerrain = loaded[0].GetComponent<Terrain>()!;
+
+        AssertEqual("neighbor-left", loadedTerrain.LeftNeighborId ?? "", "left neighbor id restored");
+        AssertEqual("neighbor-right", loadedTerrain.RightNeighborId ?? "", "right neighbor id restored");
+        AssertEqual("neighbor-top", loadedTerrain.TopNeighborId ?? "", "top neighbor id restored");
+        AssertEqual("neighbor-bottom", loadedTerrain.BottomNeighborId ?? "", "bottom neighbor id restored");
     }
 
     private static void SceneManagerResolveScenePathFindsSceneByName()

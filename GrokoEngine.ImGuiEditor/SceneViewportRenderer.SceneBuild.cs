@@ -195,6 +195,13 @@ internal sealed partial class SceneViewportRenderer
                 hash.Add(terrain.SplatVersion);
                 hash.Add(terrain.TreeVersion);
                 hash.Add(terrain.DetailVersion);
+                // Las normales del borde de este terreno dependen del heightmap del vecino (ver
+                // GetTerrainMesh/TerrainMeshGenerator): si el vecino cambió, este Terrain Static
+                // también necesita reconstruirse aunque su propio Version no haya cambiado.
+                hash.Add(ResolveTerrainNeighbor(terrain.LeftNeighborId)?.Version ?? -1);
+                hash.Add(ResolveTerrainNeighbor(terrain.RightNeighborId)?.Version ?? -1);
+                hash.Add(ResolveTerrainNeighbor(terrain.TopNeighborId)?.Version ?? -1);
+                hash.Add(ResolveTerrainNeighbor(terrain.BottomNeighborId)?.Version ?? -1);
             }
 
             if (obj.GetComponent<Material>() is { } material)

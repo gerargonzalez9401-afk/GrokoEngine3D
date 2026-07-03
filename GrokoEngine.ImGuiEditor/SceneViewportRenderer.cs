@@ -98,6 +98,10 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly Dictionary<string, CachedSkinnedGpuMesh> skinnedGpuMeshCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CachedSkinnedRange> skinnedRangeCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (ParsedMesh Mesh, int Version)> terrainMeshCache = new(StringComparer.OrdinalIgnoreCase);
+    // Índice EditorId -> Terrain, reconstruido una vez por frame (ver Render()), para que
+    // GetTerrainMesh pueda resolver los vecinos de un Terrain (Left/Right/Top/BottomNeighborId)
+    // sin tener que recorrer la escena entera por cada terreno.
+    private readonly Dictionary<string, Terrain> _terrainsByEditorId = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> assetWarningLog = new(StringComparer.OrdinalIgnoreCase);
     private LineVertex[] lineUploadBuffer = Array.Empty<LineVertex>();
     private SolidVertex[] solidUploadBuffer = Array.Empty<SolidVertex>();
@@ -576,6 +580,14 @@ internal sealed partial class SceneViewportRenderer : IDisposable
 
         if (_envDirty)
             EnsureEnvironment();
+
+        // Índice de Terrains por EditorId, refrescado antes que nada este frame: tanto el chequeo
+        // periódico de firma del batch estático como GetTerrainMesh (malla dinámica) necesitan
+        // poder resolver LeftNeighborId/RightNeighborId/etc. a un Terrain real.
+        _terrainsByEditorId.Clear();
+        foreach (var obj in objects)
+            if (obj.GetComponent<Terrain>() is { } terrainForIndex)
+                _terrainsByEditorId[obj.EditorId] = terrainForIndex;
 
         float nearClip = Math.Max(0.001f, camera.NearClip);
         float farClip = Math.Max(nearClip + 0.001f, camera.FarClip);

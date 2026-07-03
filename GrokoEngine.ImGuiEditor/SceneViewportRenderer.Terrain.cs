@@ -303,14 +303,29 @@ private void DrawTreeBillboardInstances(ref Matrix4 mvp, Dictionary<string, List
         GL.UseProgram(0);
     }
 
+// Resuelve un vecino por EditorId contra el índice armado una vez por frame en Render(). Null si
+// no hay ID configurado o si el GameObject referenciado ya no existe/no tiene Terrain.
+private Terrain? ResolveTerrainNeighbor(string? neighborId) =>
+    !string.IsNullOrEmpty(neighborId) && _terrainsByEditorId.TryGetValue(neighborId, out var neighbor) ? neighbor : null;
+
 private (ParsedMesh Mesh, string MeshPath) GetTerrainMesh(GameObject obj, Terrain terrain)
     {
-        if (terrainMeshCache.TryGetValue(obj.EditorId, out var cached) && cached.Version == terrain.Version)
+        var left = ResolveTerrainNeighbor(terrain.LeftNeighborId);
+        var right = ResolveTerrainNeighbor(terrain.RightNeighborId);
+        var top = ResolveTerrainNeighbor(terrain.TopNeighborId);
+        var bottom = ResolveTerrainNeighbor(terrain.BottomNeighborId);
+
+        // Las normales del borde de ESTE terreno dependen de la altura del vecino, así que si el
+        // vecino cambió su Heightmap (su propio Version subió) hay que regenerar esta malla
+        // también, no solo cuando cambia el propio Version.
+        int combinedVersion = HashCode.Combine(terrain.Version, left?.Version ?? -1, right?.Version ?? -1, top?.Version ?? -1, bottom?.Version ?? -1);
+
+        if (terrainMeshCache.TryGetValue(obj.EditorId, out var cached) && cached.Version == combinedVersion)
             return (cached.Mesh, $"terrain://{obj.EditorId}/v{cached.Version}");
 
-        var mesh = TerrainMeshGenerator.Generate(terrain);
-        terrainMeshCache[obj.EditorId] = (mesh, terrain.Version);
-        return (mesh, $"terrain://{obj.EditorId}/v{terrain.Version}");
+        var mesh = TerrainMeshGenerator.Generate(terrain, left, right, top, bottom);
+        terrainMeshCache[obj.EditorId] = (mesh, combinedVersion);
+        return (mesh, $"terrain://{obj.EditorId}/v{combinedVersion}");
     }
 
 private void ApplyTerrainLighting(IReadOnlyList<GameObject> objects)
