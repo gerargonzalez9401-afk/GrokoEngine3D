@@ -271,11 +271,9 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     }
 
     // ── Particle Renderer ──────────────────────────────────────────
-    // Shader billboard + VBO dinámico para todas las partículas de la escena.
-    // Cada partícula = quad billboard (6 vértices) orientado hacia la cámara.
+    // Shader billboard compartido por los trails (los quads de partículas van por GPU instancing,
+    // ver "Particle GPU instancing" más abajo). Center/Offset/Uv/Absolute vía _trailVao/_trailVbo.
     private int _particleShader;
-    private int _particleVao, _particleVbo;
-    private int _particleBufferCapacity;
     private int _particleMvpLoc, _particleRightLoc, _particleUpLoc;
     private int _particleTexLoc, _particleHasTexLoc;
     private int _particleSoftLoc, _particleDepthTexLoc, _particleScreenSizeLoc;
@@ -283,12 +281,10 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int _particleOpaqueTexLoc, _particleDistortionLoc, _particleDistortionStrengthLoc, _particleRefractionStrengthLoc;
 
     // ── Particle GPU instancing ─────────────────────────────────────
-    // Partículas billboard "normales" (no stretched, no mesh): en vez de escribir 6 vértices
-    // por partícula desde la CPU cada frame, se sube 1 registro pequeño por partícula (instancia)
-    // y la GPU repite un quad unitario compartido via glDrawArraysInstanced. Mismo patrón que
-    // ya usa el motor para instanciar mallas (ver UploadInstanceMatrices en MeshDraws.cs).
-    // Los quads "stretched" (StretchedBillboard) siguen el camino viejo por vértice, porque su
-    // forma depende de la dirección de velocidad de cada partícula, no solo de centro+tamaño+rot.
+    // Partículas billboard "normales" (no mesh): en vez de escribir 6 vértices por partícula
+    // desde la CPU cada frame, se sube 1 registro pequeño por partícula (instancia) y la GPU
+    // repite un quad unitario compartido via glDrawArraysInstanced. Mismo patrón que ya usa el
+    // motor para instanciar mallas (ver UploadInstanceMatrices en MeshDraws.cs).
     private int _particleInstancedShader;
     private int _particleInstancedVao, _particleUnitQuadVbo, _particleInstanceVbo;
     private int _particleInstanceBufferCapacity;
@@ -301,6 +297,24 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly List<ParticleInstance> _particleInstances = new(4096);
     private readonly List<ParticleInstance> _particleSortedInstances = new(4096);
 
+    // ── Stretched billboard GPU instancing ───────────────────────────
+    // Partículas "StretchedBillboard" (lluvia, chispas rápidas): el quad no es un simple
+    // centro+tamaño+rotación, su forma depende de la dirección de velocidad de cada partícula.
+    // El eje perpendicular a cámara se recalcula en el vertex shader (depende de uCamRight, que
+    // cambia cada frame), así que el registro por-instancia guarda velocidad + medio-ancho/alto
+    // en vez de un ángulo de rotación.
+    private int _particleStretchedShader;
+    private int _particleStretchedVao, _particleStretchedUnitQuadVbo, _particleStretchedInstanceVbo;
+    private int _particleStretchedInstanceBufferCapacity;
+    private ParticleStretchedInstance[] _particleStretchedInstanceUploadBuffer = new ParticleStretchedInstance[256];
+    private int _particleStrMvpLoc, _particleStrRightLoc;
+    private int _particleStrTexLoc, _particleStrHasTexLoc;
+    private int _particleStrSoftLoc, _particleStrDepthTexLoc, _particleStrScreenSizeLoc;
+    private int _particleStrSoftRangeLoc;
+    private int _particleStrOpaqueTexLoc, _particleStrDistortionLoc, _particleStrDistortionStrengthLoc, _particleStrRefractionStrengthLoc;
+    private readonly List<ParticleStretchedInstance> _particleStretchedInstances = new(2048);
+    private readonly List<ParticleStretchedInstance> _particleSortedStretchedInstances = new(2048);
+
     // ── Depth FBO para soft particles ─────────────────────────────
     private int _depthFbo, _depthTex;
     private int _depthFboWidth, _depthFboHeight;
@@ -312,8 +326,6 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int _trailVbo, _trailVao;
     private int _trailBufferCap;
     private readonly List<ParticleVertex> _trailVerts = new(2048);
-    private readonly List<ParticleVertex> _particleVerts = new(4096);
-    private readonly List<ParticleVertex> _particleSortedVerts = new(4096);
     private readonly List<ParticleSortSlice> _particleSortSlices = new(4096);
     private readonly Dictionary<string, (DateTime FileTime, MaterialAssetData Data)> _particleMaterialCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -869,66 +881,6 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         ps._birthPositions.Clear();
 
         foreach (var child in obj.Children) ProcessSubEmitters(child, allObjects);
-    }
-
-    /// <summary>Quad estirado en la dirección de la velocidad (lluvia, chispas rápidas).</summary>
-    private void AddStretchedQuad(Particle p, MiMotor.Mathematics.Vector3 worldPos, Vector3 right, Vector3 up,
-                                    Vector4 color, float speedScale, float lengthScale,
-                                    int sheetCols, int sheetRows, float sheetFps, float sizeMultiplier = 1f,
-                                    bool allowRoll = true, bool flipU = false, bool flipV = false,
-                                    float pivotX = 0f, float pivotY = 0f)
-    {
-        float speed = MathF.Sqrt(p.Velocity.X * p.Velocity.X + p.Velocity.Y * p.Velocity.Y + p.Velocity.Z * p.Velocity.Z);
-        if (speed < 0.001f)
-        {
-            AddParticleQuad(p, worldPos, right, up, sheetCols, sheetRows, sheetFps, color, sizeMultiplier,
-                            allowRoll, flipU, flipV, pivotX, pivotY);
-            return;
-        }
-
-        // Dirección de movimiento → eje del estiramiento (OpenTK Vector3)
-        var vel = new Vector3(p.Velocity.X / speed, p.Velocity.Y / speed, p.Velocity.Z / speed);
-        var wpos = new Vector3(worldPos.X, worldPos.Y, worldPos.Z);
-        float halfW = p.CurrentSize * sizeMultiplier * 0.5f;
-        float halfH = halfW + speed * speedScale * lengthScale;
-
-        // Eje perpendicular al movimiento en el plano de la cámara
-        float cx = vel.Y * right.Z - vel.Z * right.Y;
-        float cy = vel.Z * right.X - vel.X * right.Z;
-        float cz = vel.X * right.Y - vel.Y * right.X;
-        float cl = MathF.Sqrt(cx * cx + cy * cy + cz * cz);
-        if (cl < 0.001f) { AddParticleQuad(p, worldPos, right, up, sheetCols, sheetRows, sheetFps, color, sizeMultiplier); return; }
-        var perp = new Vector3(cx / cl * halfW, cy / cl * halfW, cz / cl * halfW);
-        var fwd = new Vector3(vel.X * halfH, vel.Y * halfH, vel.Z * halfH);
-
-        // Calcular UVs de sheet
-        float u0 = 0f, v0 = 0f, u1 = 1f, v1 = 1f;
-        if (sheetCols > 1 || sheetRows > 1)
-        {
-            int tf = sheetCols * sheetRows, frame = (int)(p.Age * sheetFps) % Math.Max(1, tf);
-            int col = frame % sheetCols, row = frame / sheetCols;
-            float fw = 1f / sheetCols, fh = 1f / sheetRows;
-            u0 = col * fw; u1 = u0 + fw; v0 = row * fh; v1 = v0 + fh;
-        }
-        if (flipU) (u0, u1) = (u1, u0);
-        if (flipV) (v0, v1) = (v1, v0);
-
-        float px = Math.Clamp(pivotX, -1f, 1f);
-        float py = Math.Clamp(pivotY, -1f, 1f);
-        var pivotOffset = new Vector3(perp.X * px + fwd.X * py, perp.Y * px + fwd.Y * py, perp.Z * px + fwd.Z * py);
-        wpos -= pivotOffset;
-
-        var a2 = new Vector3(wpos.X - perp.X + fwd.X, wpos.Y - perp.Y + fwd.Y, wpos.Z - perp.Z + fwd.Z);
-        var b2 = new Vector3(wpos.X + perp.X + fwd.X, wpos.Y + perp.Y + fwd.Y, wpos.Z + perp.Z + fwd.Z);
-        var c2 = new Vector3(wpos.X + perp.X - fwd.X, wpos.Y + perp.Y - fwd.Y, wpos.Z + perp.Z - fwd.Z);
-        var d2 = new Vector3(wpos.X - perp.X - fwd.X, wpos.Y - perp.Y - fwd.Y, wpos.Z - perp.Z - fwd.Z);
-
-        _particleVerts.Add(new ParticleVertex(a2, Vector2.Zero, color, 0f, new Vector2(u0, v1), 1f));
-        _particleVerts.Add(new ParticleVertex(b2, Vector2.Zero, color, 0f, new Vector2(u1, v1), 1f));
-        _particleVerts.Add(new ParticleVertex(c2, Vector2.Zero, color, 0f, new Vector2(u1, v0), 1f));
-        _particleVerts.Add(new ParticleVertex(a2, Vector2.Zero, color, 0f, new Vector2(u0, v1), 1f));
-        _particleVerts.Add(new ParticleVertex(c2, Vector2.Zero, color, 0f, new Vector2(u1, v0), 1f));
-        _particleVerts.Add(new ParticleVertex(d2, Vector2.Zero, color, 0f, new Vector2(u0, v0), 1f));
     }
 
     // Depth/shadow batching helpers kept close to renderer type definitions.

@@ -366,17 +366,63 @@ internal sealed partial class SceneViewportRenderer
             _pointShadowBoneMatrixLocations[i] = GL.GetUniformLocation(_pointShadowShader, $"uBones[{i}]");
         EnsureShadowResources();
 
-        _particleVao = GL.GenVertexArray();
-        _particleVbo = GL.GenBuffer();
-        GL.BindVertexArray(_particleVao);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _particleVbo);
-        int ps = Unsafe.SizeOf<ParticleVertex>();
-        GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, ps, 0);   // center
-        GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, ps, 12);  // offset
-        GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, ps, 20);  // color
-        GL.EnableVertexAttribArray(3); GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, ps, 36);  // rotation
-        GL.EnableVertexAttribArray(4); GL.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, ps, 40);  // uv
-        GL.EnableVertexAttribArray(5); GL.VertexAttribPointer(5, 1, VertexAttribPointerType.Float, false, ps, 48);  // absolute vertices
+        // ── Stretched billboard GPU instancing: shader + quad unitario + VBO de instancias ──
+        _particleStretchedShader = CreateParticleStretchedShader();
+        _particleStrMvpLoc = GL.GetUniformLocation(_particleStretchedShader, "uMvp");
+        _particleStrRightLoc = GL.GetUniformLocation(_particleStretchedShader, "uCamRight");
+        _particleStrTexLoc = GL.GetUniformLocation(_particleStretchedShader, "uTexture");
+        _particleStrHasTexLoc = GL.GetUniformLocation(_particleStretchedShader, "uHasTexture");
+        _particleStrSoftLoc = GL.GetUniformLocation(_particleStretchedShader, "uSoftParticles");
+        _particleStrDepthTexLoc = GL.GetUniformLocation(_particleStretchedShader, "uDepthTex");
+        _particleStrScreenSizeLoc = GL.GetUniformLocation(_particleStretchedShader, "uScreenSize");
+        _particleStrSoftRangeLoc = GL.GetUniformLocation(_particleStretchedShader, "uSoftRange");
+        _particleStrOpaqueTexLoc = GL.GetUniformLocation(_particleStretchedShader, "uOpaqueTexture");
+        _particleStrDistortionLoc = GL.GetUniformLocation(_particleStretchedShader, "uDistortionEnabled");
+        _particleStrDistortionStrengthLoc = GL.GetUniformLocation(_particleStretchedShader, "uDistortionStrength");
+        _particleStrRefractionStrengthLoc = GL.GetUniformLocation(_particleStretchedShader, "uRefractionStrength");
+
+        // Quad unitario en espacio (perp, fwd): offset.x=eje perpendicular, offset.y=eje de
+        // velocidad. Mismo orden de triángulos/UV que el AddStretchedQuad original en CPU.
+        float[] particleStretchedUnitQuad =
+        {
+            -1f,  1f, 0f, 1f,
+             1f,  1f, 1f, 1f,
+             1f, -1f, 1f, 0f,
+            -1f,  1f, 0f, 1f,
+             1f, -1f, 1f, 0f,
+            -1f, -1f, 0f, 0f,
+        };
+        _particleStretchedUnitQuadVbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _particleStretchedUnitQuadVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, particleStretchedUnitQuad.Length * sizeof(float), particleStretchedUnitQuad, BufferUsageHint.StaticDraw);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+
+        _particleStretchedInstanceVbo = GL.GenBuffer();
+
+        _particleStretchedVao = GL.GenVertexArray();
+        GL.BindVertexArray(_particleStretchedVao);
+
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _particleStretchedUnitQuadVbo);
+        GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 16, 0);
+        GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 16, 8);
+
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _particleStretchedInstanceVbo);
+        int psi = Unsafe.SizeOf<ParticleStretchedInstance>();
+        GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, psi, 0);   // center
+        GL.VertexAttribDivisor(2, 1);
+        GL.EnableVertexAttribArray(3); GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, psi, 12);  // halfWidth
+        GL.VertexAttribDivisor(3, 1);
+        GL.EnableVertexAttribArray(4); GL.VertexAttribPointer(4, 3, VertexAttribPointerType.Float, false, psi, 16);  // velocityDir
+        GL.VertexAttribDivisor(4, 1);
+        GL.EnableVertexAttribArray(5); GL.VertexAttribPointer(5, 1, VertexAttribPointerType.Float, false, psi, 28);  // halfHeight
+        GL.VertexAttribDivisor(5, 1);
+        GL.EnableVertexAttribArray(6); GL.VertexAttribPointer(6, 4, VertexAttribPointerType.Float, false, psi, 32);  // color
+        GL.VertexAttribDivisor(6, 1);
+        GL.EnableVertexAttribArray(7); GL.VertexAttribPointer(7, 4, VertexAttribPointerType.Float, false, psi, 48);  // uvRect
+        GL.VertexAttribDivisor(7, 1);
+        GL.EnableVertexAttribArray(8); GL.VertexAttribPointer(8, 2, VertexAttribPointerType.Float, false, psi, 64);  // pivot
+        GL.VertexAttribDivisor(8, 1);
+
         GL.BindVertexArray(0);
         GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
     }
