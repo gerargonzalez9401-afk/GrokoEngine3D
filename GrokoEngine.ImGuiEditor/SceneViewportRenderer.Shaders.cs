@@ -155,6 +155,8 @@ internal sealed partial class SceneViewportRenderer
             uniform vec2      uScreenTexel;
             uniform float     uRefractionStrength;
             uniform float     uDistortionStrength;
+            uniform int       uAlphaClipEnabled;
+            uniform float     uAlphaClipThreshold;
             uniform sampler2DArray uShadowMap;
             uniform int       uShadowEnabled;
             uniform float     uShadowStrength;
@@ -248,6 +250,13 @@ internal sealed partial class SceneViewportRenderer
             uniform samplerCube uEnvPrefilterMap;
             uniform int       uHasEnvPrefilterMap;
             uniform float     uEnvPrefilterMaxLod;
+            uniform samplerCube uActiveReflectionProbeMap;
+            uniform int       uHasActiveReflectionProbeMap;
+            uniform float     uActiveReflectionProbeMaxLod;
+            uniform vec3      uActiveReflectionProbeCenter;
+            uniform vec3      uActiveReflectionProbeHalfSize;
+            uniform float     uActiveReflectionProbeBlendDistance;
+            uniform float     uActiveReflectionProbeIntensity;
             uniform sampler2D uBrdfLut;
             uniform int       uHasBrdfLut;
             uniform float     uIblDiffuseStrength;
@@ -652,6 +661,26 @@ internal sealed partial class SceneViewportRenderer
                 return EnvBRDFApprox(specColor, roughness, NoV);
             }
 
+            float ReflectionProbeInfluence(vec3 worldPos)
+            {
+                if (uHasActiveReflectionProbeMap == 0)
+                    return 0.0;
+
+                vec3 halfSize = max(uActiveReflectionProbeHalfSize, vec3(0.001));
+                vec3 local = abs(worldPos - uActiveReflectionProbeCenter);
+                vec3 normalized = local / halfSize;
+                float boxDistance = max(normalized.x, max(normalized.y, normalized.z));
+                if (boxDistance >= 1.0)
+                    return 0.0;
+
+                float blend = max(uActiveReflectionProbeBlendDistance, 0.0001);
+                float minHalf = max(min(halfSize.x, min(halfSize.y, halfSize.z)), 0.001);
+                float blendWidth = clamp(blend / minHalf, 0.001, 0.95);
+                float edgeStart = max(0.0, 1.0 - blendWidth);
+                float fade = 1.0 - smoothstep(edgeStart, 1.0, boxDistance);
+                return clamp(fade * uActiveReflectionProbeIntensity, 0.0, 1.0);
+            }
+
             vec3 IrradianceFromSH(vec3 n)
             {
                 if (uUseEnvSh == 0)
@@ -684,6 +713,9 @@ internal sealed partial class SceneViewportRenderer
                 vec3  N    = ApplyNormalMap(normalize(vNormal));
                 vec3  V    = normalize(uCameraPos - vWorldPos);
                 vec4  tex  = uHasTexture ? texture(uTexture, vUv) : vec4(1.0);
+                float surfaceAlpha = clamp(vColor.a * tex.a, 0.0, 1.0);
+                if (uAlphaClipEnabled == 1 && surfaceAlpha < clamp(uAlphaClipThreshold, 0.0, 1.0))
+                    discard;
                 vec3  rawColor = max(vColor.rgb * tex.rgb, vec3(0.0));
                 // Espacio "Linear" (PRO/PBR): las texturas y colores de vértice
                 // llegan codificados en sRGB, así que se decodifican a lineal
@@ -795,7 +827,7 @@ internal sealed partial class SceneViewportRenderer
                     vec3 safeDiffuse = base * mix(ambientLight, irradiance, clamp(diffuseBlend, 0.0, 1.0));
                     ambientTerm = safeDiffuse * mix(1.0, 0.85, metallic);
 
-                    float specBlend = clamp(uIblSpecularStrength, 0.0, 0.35) * environmentReflections * specularHighlights;
+                    float specBlend = clamp(uIblSpecularStrength, 0.0, 1.0) * environmentReflections * specularHighlights;
                     if (specBlend > 0.001)
                     {
                         vec3 R = reflect(-V, N);
@@ -804,7 +836,7 @@ internal sealed partial class SceneViewportRenderer
 
                         // Reflections seguro estilo Unity: roughness minimo, mas blur
                         // cuando hay normal map, clamp HDR y fade en rasantes.
-                        float reflectionRoughness = max(roughness, uHasNormalMap ? 0.45 : 0.28);
+                        float reflectionRoughness = max(roughness, uHasNormalMap ? 0.12 : 0.05);
                         vec3 prefiltered;
                         if (uHasEnvPrefilterMap == 1)
                             prefiltered = textureLod(uEnvPrefilterMap, R, reflectionRoughness * uEnvPrefilterMaxLod).rgb;
@@ -812,6 +844,13 @@ internal sealed partial class SceneViewportRenderer
                             prefiltered = textureLod(uEnvMap, DirToEquirectUV(R), reflectionRoughness * uEnvMaxLod).rgb;
                         else
                             prefiltered = mix(SampleEnv(R), ambientLight, reflectionRoughness);
+
+                        float probeInfluence = ReflectionProbeInfluence(vWorldPos);
+                        if (probeInfluence > 0.001)
+                        {
+                            vec3 probeReflection = textureLod(uActiveReflectionProbeMap, R, reflectionRoughness * uActiveReflectionProbeMaxLod).rgb;
+                            prefiltered = mix(prefiltered, probeReflection, probeInfluence);
+                        }
 
                         prefiltered = min(prefiltered, vec3(4.0));
                         float grazingFade = smoothstep(0.05, 0.30, NoV);
@@ -828,7 +867,7 @@ internal sealed partial class SceneViewportRenderer
                 vec3 hdr = (ambientTerm + directLight) * ao;
                 hdr += vEmission.rgb * vEmission.a;
 
-                if (uDebugView == 1) { outColor = vec4(pow(base, vec3(1.0 / 2.2)), vColor.a * tex.a); return; }
+                if (uDebugView == 1) { outColor = vec4(pow(base, vec3(1.0 / 2.2)), surfaceAlpha); return; }
                 if (uDebugView == 2) { outColor = vec4(N * 0.5 + 0.5, 1.0); return; }
                 if (uDebugView == 3) { outColor = vec4(vec3(roughness), 1.0); return; }
                 if (uDebugView == 4) { outColor = vec4(vec3(metallic), 1.0); return; }
@@ -836,6 +875,19 @@ internal sealed partial class SceneViewportRenderer
                 if (uDebugView == 6) { outColor = vec4(CascadeDebugColor(viewDistance) * (0.45 + 0.55 * sunShadow), 1.0); return; }
                 if (uDebugView == 7) { outColor = vec4(debugIblSpecular / (debugIblSpecular + vec3(1.0)), 1.0); return; }
                 if (uDebugView == 8) { outColor = vec4(MaterialHealthDebug(base, metallic, roughness), 1.0); return; }
+                if (uDebugView == 9) { outColor = vec4(directLight / (directLight + vec3(1.0)), 1.0); return; }
+                if (uDebugView == 10) {
+                    float probeInfluence = ReflectionProbeInfluence(vWorldPos);
+                    vec3 probeDebug = vec3(probeInfluence);
+                    if (uHasActiveReflectionProbeMap == 1 && probeInfluence > 0.001 && environmentReflections > 0.5)
+                    {
+                        vec3 R = reflect(-V, N);
+                        vec3 probeReflection = textureLod(uActiveReflectionProbeMap, R, max(roughness, uHasNormalMap ? 0.12 : 0.05) * uActiveReflectionProbeMaxLod).rgb;
+                        probeDebug = probeReflection * clamp(uIblSpecularStrength, 0.0, 1.0) * probeInfluence;
+                    }
+                    outColor = vec4(probeDebug / (probeDebug + vec3(1.0)), 1.0);
+                    return;
+                }
 
                 float fogAmount = 1.0 - exp(-viewDistance * max(uFogDensity, 0.0));
                 float forwardFog = pow(max(dot(normalize(uCameraPos - vWorldPos), normalize(-uDirDir)), 0.0), 8.0);
@@ -849,7 +901,7 @@ internal sealed partial class SceneViewportRenderer
                     vec2 viewOffset = normalize(max(abs(V.z), 0.08) * V.xy) * 0.012;
                     vec2 refractUv = clamp(screenUv + (normalOffset + viewOffset) * uRefractionStrength, vec2(0.001), vec2(0.999));
                     vec3 opaqueScene = texture(uOpaqueTexture, refractUv).rgb;
-                    float alpha = clamp(vColor.a * tex.a, 0.0, 1.0);
+                    float alpha = surfaceAlpha;
                     vec3 glassTint = mix(opaqueScene, hdr, alpha);
                     vec3 edgeGlow = FresnelSchlick(max(dot(N, V), 0.0), vec3(0.04)) * 0.18 * alpha;
                     outColor = vec4(max(glassTint + edgeGlow, vec3(0.0)), 1.0);
@@ -865,7 +917,7 @@ internal sealed partial class SceneViewportRenderer
                 // (lavaba la imagen). Mantenerlo en HDR aquí también permite que
                 // el MSAA se resuelva en lineal y que las texturas de color del
                 // framebuffer (Rgba16f) conserven el rango dinámico para el bloom.
-                outColor = vec4(max(hdr, vec3(0.0)), vColor.a * tex.a);
+                outColor = vec4(max(hdr, vec3(0.0)), surfaceAlpha);
             }
             """;
 

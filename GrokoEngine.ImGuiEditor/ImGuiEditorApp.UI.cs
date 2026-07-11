@@ -714,7 +714,7 @@ internal sealed partial class ImGuiEditorApp
             return;
         }
 
-        if (!TryGetSelectedUiRect(canvasData, selectedUi, out var rect, out _, out var scale))
+        if (!TryGetSelectedUiRect(canvasData, selectedUi, out var rect, out var parentRect, out var scale))
             return;
 
         var io = ImGui.GetIO();
@@ -722,6 +722,12 @@ internal sealed partial class ImGuiEditorApp
         bool leftDown = MouseState.IsButtonDown(GlfwMouseButton.Left);
         bool leftClicked = ImGui.IsMouseClicked(ImGuiMouseButton.Left);
         bool leftReleased = ImGui.IsMouseReleased(ImGuiMouseButton.Left);
+        bool dragging = leftDown && activeUiRectToolObject != null && ReferenceEquals(activeUiRectToolObject, selected);
+
+        // Cursor estilo Unity: flechas de resize sobre los handles, mover dentro del rect.
+        int hoverHandle = dragging ? activeUiRectToolHandle : GetUiRectToolHandle(rect, mouse);
+        if (hoverHandle == 0 && Contains(rect, mouse)) hoverHandle = 1;
+        ApplyUiRectCursor(hoverHandle);
 
         if (leftReleased || !leftDown)
         {
@@ -754,6 +760,122 @@ internal sealed partial class ImGuiEditorApp
             delta = PreserveAspectDelta(delta, activeUiRectToolHandle, activeUiStartWidth, activeUiStartHeight);
 
         ApplyUiRectToolDelta(selectedUi, activeUiRectToolHandle, delta, io.KeyCtrl);
+
+        // Snapping magnético a bordes/centro del padre (Alt lo desactiva), con guías, + badge.
+        var fdl = ImGui.GetForegroundDrawList();
+        if (!io.KeyAlt && TryGetSelectedUiRect(canvasData, selectedUi, out var movedRect, out var pRect, out _))
+        {
+            SnapUiRectToParent(selectedUi, activeUiRectToolHandle, movedRect, pRect, scale, fdl);
+            TryGetSelectedUiRect(canvasData, selectedUi, out movedRect, out _, out _);
+        }
+        else
+        {
+            movedRect = rect;
+        }
+
+        // CLAVE: el pase de UI hace Snapshot→layouts→Restore para no corromper valores por layout.
+        // El rect-tool corre DESPUÉS del snapshot, así que sin esto el Restore final revertía la
+        // edición al soltar (crecía al arrastrar pero volvía al soltar). Se refresca el snapshot
+        // del elemento editado para que su nuevo tamaño/posición SÍ persista.
+        RefreshUiLayoutSnapshot(selectedUi);
+
+        DrawUiDragBadge(fdl, selectedUi, movedRect, activeUiRectToolHandle);
+    }
+
+    // Actualiza la instantánea de layout del elemento con sus valores actuales, para que
+    // RestoreUiLayout conserve la edición del rect-tool en vez de revertirla.
+    private void RefreshUiLayoutSnapshot(UIElement el)
+    {
+        for (int i = 0; i < uiLayoutSnapshots.Count; i++)
+            if (ReferenceEquals(uiLayoutSnapshots[i].Item1, el))
+            {
+                uiLayoutSnapshots[i] = (el, new UiLayoutSnapshot(el));
+                return;
+            }
+    }
+
+    // Flechas de resize / mover según el handle bajo el cursor (estilo Unity Rect Tool).
+    private static void ApplyUiRectCursor(int handle)
+    {
+        var cursor = handle switch
+        {
+            1 => ImGuiMouseCursor.ResizeAll,
+            2 or 3 => ImGuiMouseCursor.ResizeEW,
+            4 or 5 => ImGuiMouseCursor.ResizeNS,
+            6 or 9 => ImGuiMouseCursor.ResizeNWSE,
+            7 or 8 => ImGuiMouseCursor.ResizeNESW,
+            _ => ImGuiMouseCursor.Arrow,
+        };
+        if (cursor != ImGuiMouseCursor.Arrow)
+            ImGui.SetMouseCursor(cursor);
+    }
+
+    // Snapping proximidad a bordes y centro del RECT del padre. Ajusta el elemento cuando alguna
+    // de sus referencias (izq/centro/der · arriba/centro/abajo) cae cerca de una del padre, y dibuja
+    // una guía cian en esa línea, como Unity. Sin coste si nada está cerca.
+    private void SnapUiRectToParent(UIElement el, int handle, UiRect r, UiRect p, float scale, ImDrawListPtr dl)
+    {
+        const float threshold = 6f;
+        uint guideCol = ImGui.GetColorU32(new NumVector4(0.20f, 0.95f, 0.95f, 0.9f));
+        bool moving = handle == 1;
+
+        // Referencias horizontales del elemento según lo que se está moviendo.
+        var xFeat = moving ? new[] { r.Min.X, r.Center.X, r.Max.X }
+                  : handle is 2 or 6 or 8 ? new[] { r.Min.X }
+                  : handle is 3 or 7 or 9 ? new[] { r.Max.X }
+                  : System.Array.Empty<float>();
+        var yFeat = moving ? new[] { r.Min.Y, r.Center.Y, r.Max.Y }
+                  : handle is 4 or 6 or 7 ? new[] { r.Min.Y }
+                  : handle is 5 or 8 or 9 ? new[] { r.Max.Y }
+                  : System.Array.Empty<float>();
+
+        float dx = FindSnap1D(xFeat, new[] { p.Min.X, p.Center.X, p.Max.X }, threshold, out float gx);
+        float dy = FindSnap1D(yFeat, new[] { p.Min.Y, p.Center.Y, p.Max.Y }, threshold, out float gy);
+
+        if (!float.IsNaN(dx))
+        {
+            if (moving) el.PosX += dx / scale;
+            else if (handle is 2 or 6 or 8) { el.Width += -dx / scale; el.PosX += dx / scale * (1f - Math.Clamp(el.PivotX, 0f, 1f)); }
+            else { el.Width += dx / scale; el.PosX += dx / scale * Math.Clamp(el.PivotX, 0f, 1f); }
+            float y0 = Math.Min(p.Min.Y, r.Min.Y) - 12f, y1 = Math.Max(p.Max.Y, r.Max.Y) + 12f;
+            dl.AddLine(new NumVector2(gx, y0), new NumVector2(gx, y1), guideCol, 1.2f);
+        }
+        if (!float.IsNaN(dy))
+        {
+            if (moving) el.PosY += dy / scale;
+            else if (handle is 4 or 6 or 7) { el.Height += -dy / scale; el.PosY += dy / scale * (1f - Math.Clamp(el.PivotY, 0f, 1f)); }
+            else { el.Height += dy / scale; el.PosY += dy / scale * Math.Clamp(el.PivotY, 0f, 1f); }
+            float x0 = Math.Min(p.Min.X, r.Min.X) - 12f, x1 = Math.Max(p.Max.X, r.Max.X) + 12f;
+            dl.AddLine(new NumVector2(x0, gy), new NumVector2(x1, gy), guideCol, 1.2f);
+        }
+    }
+
+    // Devuelve la corrección (target - feature) del par más cercano dentro del umbral; NaN si ninguno.
+    private static float FindSnap1D(float[] features, float[] targets, float threshold, out float guide)
+    {
+        float best = float.NaN, bestAbs = threshold;
+        guide = 0f;
+        foreach (var f in features)
+            foreach (var t in targets)
+            {
+                float d = t - f;
+                if (MathF.Abs(d) < bestAbs) { bestAbs = MathF.Abs(d); best = d; guide = t; }
+            }
+        return best;
+    }
+
+    // Badge flotante con la posición (al mover) o el tamaño (al redimensionar), como Unity.
+    private void DrawUiDragBadge(ImDrawListPtr dl, UIElement el, UiRect r, int handle)
+    {
+        string text = handle == 1
+            ? $"X {el.PosX:0}  Y {el.PosY:0}"
+            : $"W {el.Width:0}  H {el.Height:0}";
+        var ts = ImGui.CalcTextSize(text);
+        var pad = new NumVector2(6f, 3f);
+        var pos = new NumVector2(r.Center.X - ts.X * 0.5f, r.Min.Y - ts.Y - 10f);
+        dl.AddRectFilled(pos - pad, pos + ts + pad, ImGui.GetColorU32(new NumVector4(0.06f, 0.07f, 0.09f, 0.92f)), 3f);
+        dl.AddRect(pos - pad, pos + ts + pad, ImGui.GetColorU32(new NumVector4(1f, 0.78f, 0.22f, 0.85f)), 3f);
+        dl.AddText(pos, ImGui.GetColorU32(new NumVector4(0.95f, 0.95f, 0.96f, 1f)), text);
     }
 
     private void HandleSelectedCanvasScenePreview(List<(Canvas Canvas, UiRect Rect, float Scale)> canvasData)
@@ -1700,10 +1822,9 @@ internal sealed partial class ImGuiEditorApp
         if (!File.Exists(path)) { uiTextureCache[path] = (0, 0, 0); return (0, 0, 0); }
         try
         {
-            using var original = new System.Drawing.Bitmap(path);
-            using var bitmap = original.PixelFormat == System.Drawing.Imaging.PixelFormat.Format32bppArgb
-                ? new System.Drawing.Bitmap(original)
-                : original.Clone(new System.Drawing.Rectangle(0, 0, original.Width, original.Height), System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            if (!EditorImageLoader.TryLoadRgba(path, out var image))
+                throw new InvalidDataException("Formato de textura no soportado o archivo corrupto.");
+
             int texture = GL.GenTexture();
             GL.BindTexture(TextureTarget.Texture2D, texture);
             GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
@@ -1711,16 +1832,10 @@ internal sealed partial class ImGuiEditorApp
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-            var rect = new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height);
-            var data = bitmap.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            try
-            {
-                GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, bitmap.Width, bitmap.Height, 0, OpenTK.Graphics.OpenGL4.PixelFormat.Bgra, PixelType.UnsignedByte, data.Scan0);
-            }
-            finally { bitmap.UnlockBits(data); }
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, image.Width, image.Height, 0, OpenTK.Graphics.OpenGL4.PixelFormat.Rgba, PixelType.UnsignedByte, image.Pixels);
             GL.GenerateMipmap(GenerateMipmapTarget.Texture2D);
             GL.BindTexture(TextureTarget.Texture2D, 0);
-            var info = (texture, bitmap.Width, bitmap.Height);
+            var info = (texture, image.Width, image.Height);
             uiTextureCache[path] = info;
             return info;
         }

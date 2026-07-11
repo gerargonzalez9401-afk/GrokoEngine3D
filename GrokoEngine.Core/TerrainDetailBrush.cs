@@ -13,7 +13,7 @@ namespace GrokoEngine
         // esto cada frame mientras se mantiene el click da una densidad estable sin importar el
         // framerate. Se corta si Terrain.Details ya llego a MaxDetailInstances.
         public static bool Paint(Terrain terrain, int prototypeIndex, float localX, float localZ, float radius,
-            float density, float deltaTime, Random rng,
+            float density, float deltaTime, System.Random rng,
             float minScale = 0.85f, float maxScale = 1.15f)
         {
             if (terrain == null || rng == null) return false;

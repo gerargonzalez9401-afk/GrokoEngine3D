@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
@@ -17,7 +18,10 @@ namespace GrokoEngine.ImGuiEditor;
 internal sealed partial class SceneViewportRenderer
 {
 private void ApplyRangeTextures(SolidRange range)
-        => ApplySurfaceTextures(range.TexturePath, range.NormalMapPath, range.RoughnessMapPath, range.MetallicMapPath);
+{
+        ApplyAlphaClipUniforms(range.AlphaClip, range.AlphaClipThreshold);
+        ApplySurfaceTextures(range.TexturePath, range.NormalMapPath, range.RoughnessMapPath, range.MetallicMapPath);
+}
 
 private void ApplySurfaceTexturesIfChanged(
         string? texturePath,
@@ -143,35 +147,24 @@ private int GetTexture(string path)
         try
         {
             var importSettings = TextureImportSettingsAsset.Load(fullPath);
-            using var original = new Bitmap(fullPath);
-            using var bitmap = original.PixelFormat == System.Drawing.Imaging.PixelFormat.Format32bppArgb
-                ? new Bitmap(original)
-                : original.Clone(new Rectangle(0, 0, original.Width, original.Height), System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            if (!EditorImageLoader.TryLoadRgba(fullPath, out var image))
+                throw new InvalidDataException("Formato de textura no soportado o archivo corrupto.");
 
             int texture = GL.GenTexture();
             GL.BindTexture(TextureTarget.Texture2D, texture);
             GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
             ApplyTextureImportParameters(importSettings);
 
-            var rect = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
-            var data = bitmap.LockBits(rect, ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            try
-            {
-                GL.TexImage2D(
-                    TextureTarget.Texture2D,
-                    0,
-                    PixelInternalFormat.Rgba,
-                    bitmap.Width,
-                    bitmap.Height,
-                    0,
-                    OpenTK.Graphics.OpenGL4.PixelFormat.Bgra,
-                    PixelType.UnsignedByte,
-                    data.Scan0);
-            }
-            finally
-            {
-                bitmap.UnlockBits(data);
-            }
+            GL.TexImage2D(
+                TextureTarget.Texture2D,
+                0,
+                PixelInternalFormat.Rgba,
+                image.Width,
+                image.Height,
+                0,
+                OpenTK.Graphics.OpenGL4.PixelFormat.Rgba,
+                PixelType.UnsignedByte,
+                image.Pixels);
 
             GL.GenerateMipmap(GenerateMipmapTarget.Texture2D);
             GL.BindTexture(TextureTarget.Texture2D, 0);
@@ -183,6 +176,116 @@ private int GetTexture(string path)
         {
             LogAssetWarning($"[SceneViewportRenderer] Error cargando textura '{fullPath}': {ex.Message}");
             return 0;
+        }
+    }
+
+private bool TryGetReflectionProbeCubeTexture(string? cubemapPath, out int textureId, out float maxLod)
+    {
+        textureId = 0;
+        maxLod = 0f;
+
+        string? fullPath = NormalizeExistingAssetPath(cubemapPath);
+        if (fullPath == null || !CubemapAsset.IsCubemapPath(fullPath))
+            return false;
+
+        CubemapAssetData data;
+        try
+        {
+            data = CubemapAsset.Load(fullPath);
+        }
+        catch (Exception ex)
+        {
+            LogAssetWarning($"[SceneViewportRenderer] Reflection Probe cubemap invalido '{fullPath}': {ex.Message}");
+            return false;
+        }
+
+        string[] faces =
+        {
+            data.PositiveXPath,
+            data.NegativeXPath,
+            data.PositiveYPath,
+            data.NegativeYPath,
+            data.PositiveZPath,
+            data.NegativeZPath
+        };
+
+        if (faces.Any(string.IsNullOrWhiteSpace) || faces.Any(p => !System.IO.File.Exists(p)))
+            return false;
+
+        DateTime cubemapTime = System.IO.File.GetLastWriteTimeUtc(fullPath);
+        DateTime faceTime = faces.Select(System.IO.File.GetLastWriteTimeUtc).DefaultIfEmpty(DateTime.MinValue).Max();
+        if (_reflectionProbeCubeCache.TryGetValue(fullPath, out var cached) &&
+            cached.TextureId != 0 &&
+            cached.CubemapWriteTime == cubemapTime &&
+            cached.FaceWriteTime == faceTime)
+        {
+            textureId = cached.TextureId;
+            maxLod = cached.MaxLod;
+            return true;
+        }
+
+        if (_reflectionProbeCubeCache.TryGetValue(fullPath, out var old) && old.TextureId != 0)
+            GL.DeleteTexture(old.TextureId);
+
+        try
+        {
+            var images = new RgbaImage[6];
+            for (int i = 0; i < faces.Length; i++)
+            {
+                if (!EditorImageLoader.TryLoadRgba(faces[i], out images[i]))
+                    throw new InvalidOperationException($"No se pudo cargar cara {i}: {faces[i]}");
+            }
+
+            int size = images[0].Width;
+            if (size <= 0 || images[0].Height != size)
+                throw new InvalidOperationException("La cara +X del cubemap no es cuadrada.");
+
+            for (int i = 1; i < images.Length; i++)
+            {
+                if (images[i].Width != size || images[i].Height != size)
+                    throw new InvalidOperationException("Todas las caras del cubemap deben tener la misma resolucion.");
+            }
+
+            int tex = GL.GenTexture();
+            GL.BindTexture(TextureTarget.TextureCubeMap, tex);
+            GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+            for (int i = 0; i < images.Length; i++)
+            {
+                GL.TexImage2D(
+                    TextureTarget.TextureCubeMapPositiveX + i,
+                    0,
+                    PixelInternalFormat.Rgba,
+                    size,
+                    size,
+                    0,
+                    OpenTK.Graphics.OpenGL4.PixelFormat.Rgba,
+                    PixelType.UnsignedByte,
+                    images[i].Pixels);
+            }
+
+            GL.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
+            GL.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+            // Mips de caja en la FUENTE: los usa el importance sampling GGX para evitar fireflies.
+            GL.GenerateMipmap(GenerateMipmapTarget.TextureCubeMap);
+            GL.BindTexture(TextureTarget.TextureCubeMap, 0);
+
+            // Prefiltrado GGX (mip0 nítido a 512 + cadena por rugosidad, split-sum) → reflejos
+            // lisos nítidos y rugosos con la forma correcta, al nivel del HDRI.
+            int prefiltered = PrefilterProbeCubemap(tex, size, out float prefMaxLod);
+            GL.DeleteTexture(tex);
+
+            _reflectionProbeCubeCache[fullPath] = new ReflectionProbeCubeCacheEntry(prefiltered, prefMaxLod, cubemapTime, faceTime);
+            textureId = prefiltered;
+            maxLod = prefMaxLod;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogAssetWarning($"[SceneViewportRenderer] Error cargando Reflection Probe cubemap '{fullPath}': {ex.Message}");
+            return false;
         }
     }
 
@@ -205,7 +308,7 @@ private void UpdateSpotCookieLayer(int slot, string path)
         {
             try
             {
-                using var original = new Bitmap(fullPath);
+                using var original = EditorImageLoader.LoadBitmap(fullPath) ?? throw new InvalidDataException("Formato de cookie no soportado.");
                 using var resized = new Bitmap(original, new Size(CookieArraySize, CookieArraySize));
                 using var bitmap = resized.PixelFormat == System.Drawing.Imaging.PixelFormat.Format32bppArgb
                     ? resized

@@ -8,11 +8,28 @@ namespace GrokoEngine
     {
         public string Name { get; set; } = "New Cubemap";
         public string SourceTexturePath { get; set; } = "";
+        public string PositiveXPath { get; set; } = "";
+        public string NegativeXPath { get; set; } = "";
+        public string PositiveYPath { get; set; } = "";
+        public string NegativeYPath { get; set; } = "";
+        public string PositiveZPath { get; set; } = "";
+        public string NegativeZPath { get; set; } = "";
+        public string PreviewTexturePath { get; set; } = "";
+        public int Resolution { get; set; } = 128;
+        public bool GeneratedByReflectionProbe { get; set; }
 
         public void Normalize()
         {
             Name ??= "New Cubemap";
             SourceTexturePath ??= "";
+            PositiveXPath ??= "";
+            NegativeXPath ??= "";
+            PositiveYPath ??= "";
+            NegativeYPath ??= "";
+            PositiveZPath ??= "";
+            NegativeZPath ??= "";
+            PreviewTexturePath ??= "";
+            Resolution = Math.Clamp(Resolution, 16, 4096);
         }
     }
 
@@ -69,12 +86,26 @@ namespace GrokoEngine
         {
             string? assetsRoot = InferAssetsRoot(cubemapPath);
             data.SourceTexturePath = AssetDatabase.SerializeReference(data.SourceTexturePath, assetsRoot);
+            data.PositiveXPath = AssetDatabase.SerializeReference(data.PositiveXPath, assetsRoot);
+            data.NegativeXPath = AssetDatabase.SerializeReference(data.NegativeXPath, assetsRoot);
+            data.PositiveYPath = AssetDatabase.SerializeReference(data.PositiveYPath, assetsRoot);
+            data.NegativeYPath = AssetDatabase.SerializeReference(data.NegativeYPath, assetsRoot);
+            data.PositiveZPath = AssetDatabase.SerializeReference(data.PositiveZPath, assetsRoot);
+            data.NegativeZPath = AssetDatabase.SerializeReference(data.NegativeZPath, assetsRoot);
+            data.PreviewTexturePath = AssetDatabase.SerializeReference(data.PreviewTexturePath, assetsRoot);
         }
 
         private static void ResolveAssetPaths(CubemapAssetData data, string cubemapPath)
         {
             string? assetsRoot = InferAssetsRoot(cubemapPath);
             data.SourceTexturePath = AssetDatabase.ResolveReference(data.SourceTexturePath, assetsRoot) ?? "";
+            data.PositiveXPath = AssetDatabase.ResolveReference(data.PositiveXPath, assetsRoot) ?? "";
+            data.NegativeXPath = AssetDatabase.ResolveReference(data.NegativeXPath, assetsRoot) ?? "";
+            data.PositiveYPath = AssetDatabase.ResolveReference(data.PositiveYPath, assetsRoot) ?? "";
+            data.NegativeYPath = AssetDatabase.ResolveReference(data.NegativeYPath, assetsRoot) ?? "";
+            data.PositiveZPath = AssetDatabase.ResolveReference(data.PositiveZPath, assetsRoot) ?? "";
+            data.NegativeZPath = AssetDatabase.ResolveReference(data.NegativeZPath, assetsRoot) ?? "";
+            data.PreviewTexturePath = AssetDatabase.ResolveReference(data.PreviewTexturePath, assetsRoot) ?? "";
         }
 
         private static string? InferAssetsRoot(string filePath)

@@ -1,4 +1,4 @@
-using GrokoEngine;
+﻿using GrokoEngine;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using System;
@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using GrokoEngine.Rendering;
 using GrokoShaderGraphPro.Models;
 using GrokoShaderGraphPro.Services;
 using MediaColor = System.Windows.Media.Color;
@@ -17,122 +18,170 @@ namespace GrokoEngine.ImGuiEditor;
 
 internal sealed partial class SceneViewportRenderer
 {
-private void BuildTerrainGeometry(GameObject obj, Terrain terrain, ParsedMesh mesh, string meshPath, bool selected, Matrix4 transform)
+private readonly record struct TerrainTreePrototypeRenderData(string Path, ParsedMesh? Mesh)
+{
+    public bool IsValid => !string.IsNullOrWhiteSpace(Path) && Mesh != null && Mesh.Positions.Length > 0;
+}
+
+// Arboles plantados (Terrain.Trees): SIEMPRE por el pase dinÃ¡mico (ver BuildObjectRecursive),
+// nunca horneados en el batch estÃ¡tico â€” se encolan vÃ­a TryQueueDynamicMeshDraw, la misma cola
+// que usa cualquier malla dinÃ¡mica. Eso los hace elegibles para el instancing por GPU que ya
+// existe ahÃ­ (CanInstanceTogether agrupa por mesh+textura+color+material; todos los Ã¡rboles del
+// mismo prototipo comparten esos cuatro, asÃ­ que terminan en una sola llamada
+// glDrawArraysInstanced por prototipo en vez de un draw/triÃ¡ngulos sueltos por Ã¡rbol).
+// La altura de cada Ã¡rbol se resamplea del heightmap actual en cada frame, asÃ­ que si esculpÃ­s
+// el terreno despuÃ©s de plantar, los Ã¡rboles ya plantados "flotan" solos hasta la nueva altura.
+// CachÃ© de alturas muestreadas por instancia (Ã¡rboles y pasto): GetHeightLocal hace una
+// interpolaciÃ³n bilineal por llamada, y hacerla por Ã¡rbol/mata POR FRAME era el costo CPU
+// dominante con miles de instancias. La cachÃ© se invalida sola cuando cambia el heightmap
+// (Version) o la lista de instancias (Tree/DetailVersion) â€” durante una pincelada se recalcula
+// una vez por frame, que es exactamente lo que hacÃ­a antes en el peor caso.
+private readonly Dictionary<string, (float[] Heights, int Version)> _terrainTreeHeightCache = new(StringComparer.OrdinalIgnoreCase);
+private readonly Dictionary<string, (float[] Heights, int Version)> _terrainDetailHeightCache = new(StringComparer.OrdinalIgnoreCase);
+
+private float[] GetTreeHeights(Terrain terrain)
+{
+    string id = terrain.gameObject?.EditorId ?? string.Empty;
+    int version = HashCode.Combine(terrain.Version, terrain.TreeVersion, terrain.Trees.Count);
+    if (_terrainTreeHeightCache.TryGetValue(id, out var cached) && cached.Version == version)
+        return cached.Heights;
+
+    var heights = cached.Heights != null && cached.Heights.Length == terrain.Trees.Count
+        ? cached.Heights
+        : new float[terrain.Trees.Count];
+    for (int i = 0; i < terrain.Trees.Count; i++)
+        heights[i] = terrain.GetHeightLocal(terrain.Trees[i].LocalX, terrain.Trees[i].LocalZ);
+    _terrainTreeHeightCache[id] = (heights, version);
+    return heights;
+}
+
+private float[] GetDetailHeights(Terrain terrain)
+{
+    string id = terrain.gameObject?.EditorId ?? string.Empty;
+    int version = HashCode.Combine(terrain.Version, terrain.DetailVersion, terrain.Details.Count);
+    if (_terrainDetailHeightCache.TryGetValue(id, out var cached) && cached.Version == version)
+        return cached.Heights;
+
+    var heights = cached.Heights != null && cached.Heights.Length == terrain.Details.Count
+        ? cached.Heights
+        : new float[terrain.Details.Count];
+    for (int i = 0; i < terrain.Details.Count; i++)
+        heights[i] = terrain.GetHeightLocal(terrain.Details[i].LocalX, terrain.Details[i].LocalZ);
+    _terrainDetailHeightCache[id] = (heights, version);
+    return heights;
+}
+
+private static bool TerrainTreeCellIntersectsFrustum(Terrain terrain, Matrix4 transform, Frustum frustum, int cellX, int cellZ)
+{
+    float cellSize = MathF.Max(1f, terrain.TreeCellSize);
+    var localCenter = TerrainTreeLod.ComputeCellCenter(cellX, cellZ, cellSize, terrain.HeightScale);
+    float localRadius = TerrainTreeLod.ComputeConservativeCellRadius(cellSize, terrain.HeightScale);
+    float sx = new Vector3(transform.M11, transform.M12, transform.M13).Length;
+    float sy = new Vector3(transform.M21, transform.M22, transform.M23).Length;
+    float sz = new Vector3(transform.M31, transform.M32, transform.M33).Length;
+    float worldRadius = localRadius * MathF.Max(0.0001f, MathF.Max(sx, MathF.Max(sy, sz)));
+
+    var worldCenter = Vector3.TransformPosition(new Vector3(localCenter.X, localCenter.Y, localCenter.Z), transform);
+    return frustum.ContainsSphere(worldCenter, worldRadius);
+}
+
+private void PrepareTerrainTreePrototypeScratch(Terrain terrain)
+{
+    int count = terrain.TreePrototypes.Count;
+    if (_terrainTreePrototypeScratch.Length < count)
+        Array.Resize(ref _terrainTreePrototypeScratch, count);
+
+    for (int i = 0; i < count; i++)
     {
-        Vector4 fallbackColor = new Vector4(0.62f, 0.72f, 1f, 1f);
-        Vector4 color = GetObjectColor(obj, fallbackColor);
-        Vector4 lineColor = selected ? new Vector4(1f, 0.78f, 0.12f, 1f) : color;
+        string protoPath = terrain.TreePrototypes[i];
+        protoPath = NormalizeExistingAssetPath(protoPath) ?? protoPath;
 
-        var min = mesh.BoundsMin;
-        var max = mesh.BoundsMax;
-
-        int start = ActiveSolidVertices.Count;
-        AddMeshTriangles(mesh, transform, 1f, color, meshPath, new Vector4(0f, 0.9f, 0f, 0f), Vector4.Zero, 0, mesh.Positions.Length / 3);
-        int count = ActiveSolidVertices.Count - start;
-        if (count > 0)
-            ActiveSolidRanges.Add(new SolidRange(start, count, null, null, null, null, null, null, null, obj));
-
-        Span<Vector3> corners = stackalloc Vector3[]
+        if (string.IsNullOrWhiteSpace(protoPath) || !ObjLoader.IsSupportedMesh(protoPath))
         {
-            new(min.X, min.Y, min.Z), new(max.X, min.Y, min.Z),
-            new(max.X, max.Y, min.Z), new(min.X, max.Y, min.Z),
-            new(min.X, min.Y, max.Z), new(max.X, min.Y, max.Z),
-            new(max.X, max.Y, max.Z), new(min.X, max.Y, max.Z)
-        };
-
-        for (int i = 0; i < corners.Length; i++)
-            corners[i] = Vector3.TransformPosition(corners[i], transform);
-
-        if (ShowObjectWireframes || selected)
-        {
-            AddLine(corners[0], corners[1], lineColor); AddLine(corners[1], corners[2], lineColor);
-            AddLine(corners[2], corners[3], lineColor); AddLine(corners[3], corners[0], lineColor);
-            AddLine(corners[4], corners[5], lineColor); AddLine(corners[5], corners[6], lineColor);
-            AddLine(corners[6], corners[7], lineColor); AddLine(corners[7], corners[4], lineColor);
-            AddLine(corners[0], corners[4], lineColor); AddLine(corners[1], corners[5], lineColor);
-            AddLine(corners[2], corners[6], lineColor); AddLine(corners[3], corners[7], lineColor);
+            _terrainTreePrototypeScratch[i] = default;
+            continue;
         }
-    }
 
-// Arboles plantados (Terrain.Trees): SIEMPRE por el pase dinámico (ver BuildObjectRecursive),
-// nunca horneados en el batch estático — se encolan vía TryQueueDynamicMeshDraw, la misma cola
-// que usa cualquier malla dinámica. Eso los hace elegibles para el instancing por GPU que ya
-// existe ahí (CanInstanceTogether agrupa por mesh+textura+color+material; todos los árboles del
-// mismo prototipo comparten esos cuatro, así que terminan en una sola llamada
-// glDrawArraysInstanced por prototipo en vez de un draw/triángulos sueltos por árbol).
-// La altura de cada árbol se resamplea del heightmap actual en cada frame, así que si esculpís
-// el terreno después de plantar, los árboles ya plantados "flotan" solos hasta la nueva altura.
-private readonly List<(int Index, float DistanceSq)> _terrainTreeSortScratch = new(256);
+        var mesh = GetParsedMesh(protoPath);
+        _terrainTreePrototypeScratch[i] = mesh != null && mesh.Positions.Length > 0
+            ? new TerrainTreePrototypeRenderData(protoPath, mesh)
+            : default;
+    }
+}
 
 private void QueueTerrainTreeInstances(Terrain terrain, Matrix4 transform, Frustum frustum, Vector3 cameraPosition)
     {
         if (terrain.Trees.Count == 0 || terrain.TreePrototypes.Count == 0)
             return;
 
-        int maxMeshTrees = Math.Max(0, terrain.MaxMeshTrees);
+        Matrix4.Invert(transform, out var inverseTransform);
+        var cameraLocalTk = Vector3.TransformPosition(cameraPosition, inverseTransform);
+        var lod = TerrainTreeLod.ClassifyInto(
+            terrain,
+            new MiMotor.Mathematics.Vector3(cameraLocalTk.X, cameraLocalTk.Y, cameraLocalTk.Z),
+            _terrainTreeLodScratch);
 
-        // Estilo Unity "Tree Distance"/"Billboard Start"/"Max Mesh Trees": más allá de
-        // TreeDistance un árbol ni se procesa. De los que quedan, un árbol es malla 3D solo si
-        // está más cerca que BillboardStart Y entra en el ranking de los maxMeshTrees más
-        // cercanos a cámara; el resto es billboard (quad plano que rota en Y hacia la cámara).
-        float treeDistance = Math.Max(0.01f, terrain.TreeDistance);
-        float treeDistanceSq = treeDistance * treeDistance;
-        float billboardStart = Math.Max(0f, terrain.BillboardStart);
-        float billboardStartSq = billboardStart * billboardStart;
+        _statsTerrainTreeCulled += lod.CulledCount;
+        _statsTerrainTreeCells = Math.Max(_statsTerrainTreeCells, lod.VisibleCellCount);
+        _terrainTreeCellVisibilityScratch.Clear();
 
-        _terrainTreeSortScratch.Clear();
-        for (int i = 0; i < terrain.Trees.Count; i++)
-        {
-            var instance = terrain.Trees[i];
-            if (instance.PrototypeIndex < 0 || instance.PrototypeIndex >= terrain.TreePrototypes.Count)
-                continue;
-
-            float localHeight = terrain.GetHeightLocal(instance.LocalX, instance.LocalZ);
-            var worldPos = Vector3.TransformPosition(new Vector3(instance.LocalX, localHeight, instance.LocalZ), transform);
-            float dx = worldPos.X - cameraPosition.X, dy = worldPos.Y - cameraPosition.Y, dz = worldPos.Z - cameraPosition.Z;
-            float distSq = dx * dx + dy * dy + dz * dz;
-            if (distSq > treeDistanceSq)
-                continue;
-
-            _terrainTreeSortScratch.Add((i, distSq));
-        }
-
-        if (_terrainTreeSortScratch.Count == 0)
+        if (lod.Decisions.Count == 0)
             return;
 
-        // El ranking por distancia decide qué entra como malla 3D (los maxMeshTrees más cercanos)
-        // — necesario aunque no hubiera límite de billboard, porque también define el orden.
-        _terrainTreeSortScratch.Sort((a, b) => a.DistanceSq.CompareTo(b.DistanceSq));
+        PrepareTerrainTreePrototypeScratch(terrain);
+        _terrainTreeCellVisibilityScratch.EnsureCapacity(Math.Max(1, lod.VisibleCellCount));
+        var treeHeights = GetTreeHeights(terrain);
 
         var tint = new Vector4(1f, 1f, 1f, 1f);
         var material = new Vector4(0f, 0.5f, 1f, 1f); // metallic 0, roughness 0.5 por defecto
 
-        for (int rank = 0; rank < _terrainTreeSortScratch.Count; rank++)
+        foreach (var decision in lod.Decisions)
         {
-            var (treeIndex, distSq) = _terrainTreeSortScratch[rank];
+            if (decision.Mode == TerrainTreeRenderMode.Culled)
+                continue;
+
+            var cellKey = (decision.CellX, decision.CellZ);
+            if (!_terrainTreeCellVisibilityScratch.TryGetValue(cellKey, out bool cellVisible))
+            {
+                cellVisible = TerrainTreeCellIntersectsFrustum(terrain, transform, frustum, decision.CellX, decision.CellZ);
+                _terrainTreeCellVisibilityScratch[cellKey] = cellVisible;
+            }
+
+            if (!cellVisible)
+            {
+                _statsTerrainTreeCulled++;
+                continue;
+            }
+
+            int treeIndex = decision.TreeIndex;
             var instance = terrain.Trees[treeIndex];
-            string protoPath = terrain.TreePrototypes[instance.PrototypeIndex];
-            protoPath = NormalizeExistingAssetPath(protoPath) ?? protoPath;
-            if (string.IsNullOrWhiteSpace(protoPath) || !ObjLoader.IsSupportedMesh(protoPath))
+            var proto = _terrainTreePrototypeScratch[instance.PrototypeIndex];
+            if (!proto.IsValid || proto.Mesh == null)
+            {
+                _statsTerrainTreeCulled++;
                 continue;
+            }
 
-            var mesh = GetParsedMesh(protoPath);
-            if (mesh == null || mesh.Positions.Length == 0)
-                continue;
+            string protoPath = proto.Path;
+            var mesh = proto.Mesh;
 
-            float localHeight = terrain.GetHeightLocal(instance.LocalX, instance.LocalZ);
+            float localHeight = treeHeights[treeIndex];
             var localPos = new Vector3(instance.LocalX, localHeight, instance.LocalZ);
 
             var worldPos = Vector3.TransformPosition(localPos, transform);
             var extent = (mesh.BoundsMax - mesh.BoundsMin) * Math.Max(0.0001f, instance.Scale);
             float boundRadius = Math.Max(0.1f, extent.Length * 0.5f);
             if (!frustum.ContainsSphere(worldPos, boundRadius))
+            {
+                _statsTerrainTreeCulled++;
                 continue;
+            }
 
-            bool isBillboard = rank >= maxMeshTrees || distSq > billboardStartSq;
+            bool isBillboard = decision.Mode == TerrainTreeRenderMode.Billboard;
 
             if (!isBillboard)
             {
+                _statsTerrainTreeMesh++;
                 Matrix4 instanceWorld =
                     Matrix4.CreateScale(Math.Max(0.0001f, instance.Scale)) *
                     Matrix4.CreateRotationY(MathHelper.DegreesToRadians(instance.RotationY)) *
@@ -156,15 +205,16 @@ private void QueueTerrainTreeInstances(Terrain terrain, Matrix4 transform, Frust
             }
             else
             {
+                _statsTerrainTreeBillboard++;
                 QueueTreeBillboard(worldPos, extent, cameraPosition, mesh);
             }
         }
     }
 
-// Detalles/pasto (Terrain.Details): siempre billboard, nunca malla — Unity's clásico "Detail
-// Texture" tampoco tiene LOD de malla para pasto. Density Scale reduce cuántos de los plantados
-// se dibujan de verdad SIN borrar los datos pintados, usando un hash estable por índice (no un
-// módulo, para que el recorte no se vea como un patrón en grilla).
+// Detalles/pasto (Terrain.Details): siempre billboard, nunca malla â€” Unity's clÃ¡sico "Detail
+// Texture" tampoco tiene LOD de malla para pasto. Density Scale reduce cuÃ¡ntos de los plantados
+// se dibujan de verdad SIN borrar los datos pintados, usando un hash estable por Ã­ndice (no un
+// mÃ³dulo, para que el recorte no se vea como un patrÃ³n en grilla).
 private static float StableUnitHash(int i)
     {
         uint x = (uint)i * 2654435761u;
@@ -184,6 +234,8 @@ private void QueueTerrainDetailInstances(Terrain terrain, Matrix4 transform, Fru
         float detailDistance = Math.Max(0.01f, terrain.DetailDistance);
         float detailDistanceSq = detailDistance * detailDistance;
 
+        var detailHeights = GetDetailHeights(terrain);
+
         for (int i = 0; i < terrain.Details.Count; i++)
         {
             if (StableUnitHash(i) > densityScale)
@@ -197,7 +249,7 @@ private void QueueTerrainDetailInstances(Terrain terrain, Matrix4 transform, Fru
             if (string.IsNullOrWhiteSpace(proto.TexturePath))
                 continue;
 
-            float localHeight = terrain.GetHeightLocal(instance.LocalX, instance.LocalZ);
+            float localHeight = detailHeights[i];
             var localPos = new Vector3(instance.LocalX, localHeight, instance.LocalZ);
             var worldPos = Vector3.TransformPosition(localPos, transform);
 
@@ -227,11 +279,11 @@ private void QueueTerrainDetailInstances(Terrain terrain, Matrix4 transform, Fru
         }
     }
 
-// Encola un árbol como billboard: quad plano, ancho X/Z tomado del bounding box de la malla real
+// Encola un Ã¡rbol como billboard: quad plano, ancho X/Z tomado del bounding box de la malla real
 // (escalado por Scale de la instancia), anclado al piso, que rota SOLO en Y para mirar siempre
-// a cámara (no billboard esférico como las partículas). Simplificación deliberada respecto a
+// a cÃ¡mara (no billboard esfÃ©rico como las partÃ­culas). SimplificaciÃ³n deliberada respecto a
 // Unity: usa la MISMA textura del prototipo 3D directo sobre el quad, en vez de un snapshot
-// recortado horneado — más barato de implementar, algo menos fiel visualmente de cerca (que es
+// recortado horneado â€” mÃ¡s barato de implementar, algo menos fiel visualmente de cerca (que es
 // justo donde no se usa: los billboards solo aparecen lejos o fuera del ranking de malla).
 private void QueueTreeBillboard(Vector3 worldPos, MiMotor.Mathematics.Vector3 extent, Vector3 cameraPosition, ParsedMesh mesh)
     {
@@ -254,10 +306,10 @@ private void QueueTreeBillboard(Vector3 worldPos, MiMotor.Mathematics.Vector3 ex
         list.Add(new TreeBillboardInstance(worldPos, halfWidth, height, yaw, new Vector4(1f, 1f, 1f, 1f)));
     }
 
-// Dibuja los billboards acumulados este frame (árboles fuera de rango de malla, o detalles/
-// pasto — siempre billboard), agrupados por textura — una llamada glDrawArraysInstanced por
-// textura distinta. Método compartido: mismo shader/VAO para árboles-billboard y detalles.
-private void DrawTreeBillboardInstances(ref Matrix4 mvp, Dictionary<string, List<TreeBillboardInstance>> billboardsByTexture)
+// Dibuja los billboards acumulados este frame (Ã¡rboles fuera de rango de malla, o detalles/
+// pasto â€” siempre billboard), agrupados por textura â€” una llamada glDrawArraysInstanced por
+// textura distinta. MÃ©todo compartido: mismo shader/VAO para Ã¡rboles-billboard y detalles.
+private void DrawTreeBillboardInstances(ref Matrix4 mvp, Dictionary<string, List<TreeBillboardInstance>> billboardsByTexture, float windStrength = 0f)
     {
         if (billboardsByTexture.Count == 0 || _treeBillboardShader == 0)
             return;
@@ -266,6 +318,10 @@ private void DrawTreeBillboardInstances(ref Matrix4 mvp, Dictionary<string, List
         GL.UseProgram(_treeBillboardShader);
         GL.UniformMatrix4(_treeBillboardMvpLoc, true, ref mvp);
         GL.Uniform1(_treeBillboardTexLoc, 0);
+        // Balanceo por viento (solo pasto): dobla la parte superior del quad con un seno
+        // desfasado por posiciÃ³n, para que no ondee todo el campo en fase.
+        GL.Uniform1(_treeBillboardWindLoc, windStrength);
+        GL.Uniform1(_treeBillboardTimeLoc, (float)(Environment.TickCount64 % 1000000L) / 1000f);
         GL.BindVertexArray(_treeBillboardVao);
         GL.ActiveTexture(TextureUnit.Texture0);
 
@@ -303,30 +359,10 @@ private void DrawTreeBillboardInstances(ref Matrix4 mvp, Dictionary<string, List
         GL.UseProgram(0);
     }
 
-// Resuelve un vecino por EditorId contra el índice armado una vez por frame en Render(). Null si
+// Resuelve un vecino por EditorId contra el Ã­ndice armado una vez por frame en Render(). Null si
 // no hay ID configurado o si el GameObject referenciado ya no existe/no tiene Terrain.
 private Terrain? ResolveTerrainNeighbor(string? neighborId) =>
     !string.IsNullOrEmpty(neighborId) && _terrainsByEditorId.TryGetValue(neighborId, out var neighbor) ? neighbor : null;
-
-private (ParsedMesh Mesh, string MeshPath) GetTerrainMesh(GameObject obj, Terrain terrain)
-    {
-        var left = ResolveTerrainNeighbor(terrain.LeftNeighborId);
-        var right = ResolveTerrainNeighbor(terrain.RightNeighborId);
-        var top = ResolveTerrainNeighbor(terrain.TopNeighborId);
-        var bottom = ResolveTerrainNeighbor(terrain.BottomNeighborId);
-
-        // Las normales del borde de ESTE terreno dependen de la altura del vecino, así que si el
-        // vecino cambió su Heightmap (su propio Version subió) hay que regenerar esta malla
-        // también, no solo cuando cambia el propio Version.
-        int combinedVersion = HashCode.Combine(terrain.Version, left?.Version ?? -1, right?.Version ?? -1, top?.Version ?? -1, bottom?.Version ?? -1);
-
-        if (terrainMeshCache.TryGetValue(obj.EditorId, out var cached) && cached.Version == combinedVersion)
-            return (cached.Mesh, $"terrain://{obj.EditorId}/v{cached.Version}");
-
-        var mesh = TerrainMeshGenerator.Generate(terrain, left, right, top, bottom);
-        terrainMeshCache[obj.EditorId] = (mesh, combinedVersion);
-        return (mesh, $"terrain://{obj.EditorId}/v{combinedVersion}");
-    }
 
 private void ApplyTerrainLighting(IReadOnlyList<GameObject> objects)
     {
@@ -354,214 +390,82 @@ private void ApplyTerrainLighting(IReadOnlyList<GameObject> objects)
         }
     }
 
+// Mismo contrato de dirty-rect que el heightmap: si SplatVersion cambiÃ³ y hay regiÃ³n pendiente,
+// se sube solo ese rect con glTexSubImage2D (pintar a resoluciÃ³n 2049 costarÃ­a ~16 MB por frame
+// si se re-subiera entera); sin regiÃ³n (undo, carga, cambio de Resolution) se re-sube completa.
 private int GetOrUpdateSplatTexture(GameObject obj, Terrain terrain)
     {
-        if (terrainSplatTextureCache.TryGetValue(obj.EditorId, out var cached) && cached.Version == terrain.SplatVersion)
+        int ownerHash = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(terrain);
+        if (terrainSplatTextureCache.TryGetValue(obj.EditorId, out var cached) &&
+            cached.Version == terrain.SplatVersion && cached.OwnerHash == ownerHash)
             return cached.TextureId;
 
         terrain.EnsureSplatMapSize();
+        int res = terrain.Resolution;
 
         int textureId = cached.TextureId;
-        if (textureId == 0)
-            textureId = GL.GenTexture();
+        bool hasRect = terrain.ConsumeSplatDirtyRegion(out int minX, out int minZ, out int maxX, out int maxZ);
 
-        GL.BindTexture(TextureTarget.Texture2D, textureId);
         GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-        GL.TexImage2D(
-            TextureTarget.Texture2D,
-            0,
-            PixelInternalFormat.Rgba,
-            terrain.Resolution,
-            terrain.Resolution,
-            0,
-            OpenTK.Graphics.OpenGL4.PixelFormat.Rgba,
-            PixelType.UnsignedByte,
-            terrain.SplatMap);
+        if (textureId != 0 && cached.Resolution == res && hasRect && cached.OwnerHash == ownerHash)
+        {
+            GL.BindTexture(TextureTarget.Texture2D, textureId);
+            GL.PixelStore(PixelStoreParameter.UnpackRowLength, res);
+            GL.PixelStore(PixelStoreParameter.UnpackSkipPixels, minX);
+            GL.PixelStore(PixelStoreParameter.UnpackSkipRows, minZ);
+            GL.TexSubImage2D(TextureTarget.Texture2D, 0, minX, minZ, maxX - minX + 1, maxZ - minZ + 1,
+                OpenTK.Graphics.OpenGL4.PixelFormat.Rgba, PixelType.UnsignedByte, terrain.SplatMap);
+            GL.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
+            GL.PixelStore(PixelStoreParameter.UnpackSkipPixels, 0);
+            GL.PixelStore(PixelStoreParameter.UnpackSkipRows, 0);
+        }
+        else
+        {
+            if (textureId == 0)
+                textureId = GL.GenTexture();
+
+            GL.BindTexture(TextureTarget.Texture2D, textureId);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            GL.TexImage2D(
+                TextureTarget.Texture2D,
+                0,
+                PixelInternalFormat.Rgba,
+                res,
+                res,
+                0,
+                OpenTK.Graphics.OpenGL4.PixelFormat.Rgba,
+                PixelType.UnsignedByte,
+                terrain.SplatMap);
+        }
+        GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
         GL.BindTexture(TextureTarget.Texture2D, 0);
 
-        terrainSplatTextureCache[obj.EditorId] = (textureId, terrain.SplatVersion);
+        terrainSplatTextureCache[obj.EditorId] = (textureId, terrain.SplatVersion, res, ownerHash);
         return textureId;
-    }
-
-private void RenderTerrainRanges(List<SolidRange> ranges, int vao, ref Matrix4 mvp, IReadOnlyList<GameObject> objects)
-    {
-        if (terrainShader == 0)
-            return;
-
-        bool used = false;
-        foreach (var range in ranges)
-        {
-            if (range.TerrainObject is not { } obj) continue;
-            var terrain = obj.GetComponent<Terrain>();
-            if (terrain == null) continue;
-
-            if (!used)
-            {
-                GL.UseProgram(terrainShader);
-                GL.UniformMatrix4(terrainMvpLocation, true, ref mvp);
-                var identity = Matrix4.Identity;
-                GL.UniformMatrix4(terrainModelLocation, true, ref identity);
-                ApplyTerrainLighting(objects);
-                GL.BindVertexArray(vao);
-                used = true;
-            }
-
-            int splatTexture = GetOrUpdateSplatTexture(obj, terrain);
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.BindTexture(TextureTarget.Texture2D, splatTexture);
-            GL.Uniform1(terrainSplatMapLocation, 0);
-
-            for (int i = 0; i < 4; i++)
-            {
-                string path = terrain.LayerTextures[i];
-                int texUnit = i + 1;
-                GL.ActiveTexture(TextureUnit.Texture0 + texUnit);
-                if (!string.IsNullOrWhiteSpace(path))
-                {
-                    int texId = GetTexture(path);
-                    GL.BindTexture(TextureTarget.Texture2D, texId);
-                    GL.Uniform1(terrainLayerLocations[i], texUnit);
-                    GL.Uniform1(terrainHasLayerLocations[i], texId != 0 ? 1 : 0);
-                }
-                else
-                {
-                    GL.BindTexture(TextureTarget.Texture2D, 0);
-                    GL.Uniform1(terrainLayerLocations[i], texUnit);
-                    GL.Uniform1(terrainHasLayerLocations[i], 0);
-                }
-                GL.Uniform1(terrainTilingLocations[i], terrain.LayerTiling[i]);
-            }
-
-            TrackMainDraw(range.Count);
-            GL.DrawArrays(PrimitiveType.Triangles, range.Start, range.Count);
-        }
-
-        if (used)
-        {
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.BindTexture(TextureTarget.Texture2D, 0);
-            GL.BindVertexArray(0);
-            GL.UseProgram(0);
-        }
-    }
-
-private static int CreateTerrainShader()
-    {
-        const string vertexSource = """
-            #version 330 core
-            layout (location = 0) in vec3 aPosition;
-            layout (location = 1) in vec3 aNormal;
-            layout (location = 3) in vec2 aUv;
-            uniform mat4 uMvp;
-            uniform mat4 uModel;
-            out vec3 vWorldPos;
-            out vec3 vNormal;
-            out vec2 vUv;
-            void main()
-            {
-                vec4 world = vec4(aPosition, 1.0) * uModel;
-                vec3 normalWs = (vec4(aNormal, 0.0) * uModel).xyz;
-                vWorldPos = world.xyz;
-                vNormal   = length(normalWs) > 0.0001 ? normalize(normalWs) : vec3(0.0, 1.0, 0.0);
-                vUv = aUv;
-                gl_Position = world * uMvp;
-            }
-            """;
-
-        const string fragmentSource = """
-            #version 330 core
-            in vec3 vWorldPos;
-            in vec3 vNormal;
-            in vec2 vUv;
-
-            uniform sampler2D uSplatMap;
-            uniform sampler2D uLayer0;
-            uniform sampler2D uLayer1;
-            uniform sampler2D uLayer2;
-            uniform sampler2D uLayer3;
-            uniform int uHasLayer0;
-            uniform int uHasLayer1;
-            uniform int uHasLayer2;
-            uniform int uHasLayer3;
-            uniform float uTiling0;
-            uniform float uTiling1;
-            uniform float uTiling2;
-            uniform float uTiling3;
-
-            uniform vec3  uAmbientColor;
-            uniform float uAmbientIntensity;
-            uniform float uSkyStrength;
-            uniform vec3  uDirDir;
-            uniform vec3  uDirColor;
-            uniform float uDirIntensity;
-
-            out vec4 outColor;
-
-            vec3 LayerColor(sampler2D layerTex, int hasLayer, float tiling)
-            {
-                return hasLayer != 0 ? texture(layerTex, vUv * tiling).rgb : vec3(0.5);
-            }
-
-            void main()
-            {
-                vec3 N = normalize(vNormal);
-                vec4 splat = texture(uSplatMap, vUv);
-
-                vec3 albedo = LayerColor(uLayer0, uHasLayer0, uTiling0) * splat.r
-                            + LayerColor(uLayer1, uHasLayer1, uTiling1) * splat.g
-                            + LayerColor(uLayer2, uHasLayer2, uTiling2) * splat.b
-                            + LayerColor(uLayer3, uHasLayer3, uTiling3) * splat.a;
-
-                const float SKY_DIFFUSE_FILL = 0.48;
-                vec3 sky = uAmbientColor * (uAmbientIntensity + max(N.y, 0.0) * uSkyStrength * SKY_DIFFUSE_FILL);
-                vec3 ground = uAmbientColor * uAmbientIntensity * 0.35 * max(-N.y, 0.0);
-                vec3 ambientLight = sky + ground;
-
-                vec3 sunL = normalize(-uDirDir);
-                vec3 diffuse = uDirColor * uDirIntensity * max(dot(N, sunL), 0.0);
-
-                vec3 hdr = albedo * (ambientLight + diffuse);
-                outColor = vec4(max(hdr, vec3(0.0)), 1.0);
-            }
-            """;
-
-        int vertex = CompileShader(ShaderType.VertexShader, vertexSource);
-        int fragment = CompileShader(ShaderType.FragmentShader, fragmentSource);
-        int program = GL.CreateProgram();
-        GL.AttachShader(program, vertex);
-        GL.AttachShader(program, fragment);
-        GL.LinkProgram(program);
-        GL.GetProgram(program, GetProgramParameterName.LinkStatus, out int status);
-        if (status == 0) throw new InvalidOperationException(GL.GetProgramInfoLog(program));
-
-        GL.DetachShader(program, vertex);
-        GL.DetachShader(program, fragment);
-        GL.DeleteShader(vertex);
-        GL.DeleteShader(fragment);
-        return program;
     }
 
 private readonly record struct TreeBillboardInstance(Vector3 Center, float HalfWidth, float Height, float Yaw, Vector4 Color);
 
-// Shader instanciado para billboards de árbol: quad unitario compartido (offset -0.5..0.5 en X,
-// 0..1 en Y anclado al piso), rotado SOLO en Y para mirar hacia la cámara (no billboard esférico
-// como las partículas) usando el yaw ya calculado en CPU por instancia.
+// Shader instanciado para billboards de Ã¡rbol: quad unitario compartido (offset -0.5..0.5 en X,
+// 0..1 en Y anclado al piso), rotado SOLO en Y para mirar hacia la cÃ¡mara (no billboard esfÃ©rico
+// como las partÃ­culas) usando el yaw ya calculado en CPU por instancia.
 private static int CreateTreeBillboardShader()
     {
         const string vert = """
             #version 330 core
-            layout(location=0) in vec2  aUnitOffset;   // por-vértice (divisor 0): x en -0.5..0.5, y en 0..1
-            layout(location=1) in vec2  aUnitUv;        // por-vértice (divisor 0): 0..1
-            layout(location=2) in vec3  iCenter;        // por-instancia (divisor 1): base del árbol, a nivel de piso
+            layout(location=0) in vec2  aUnitOffset;   // por-vÃ©rtice (divisor 0): x en -0.5..0.5, y en 0..1
+            layout(location=1) in vec2  aUnitUv;        // por-vÃ©rtice (divisor 0): 0..1
+            layout(location=2) in vec3  iCenter;        // por-instancia (divisor 1): base del Ã¡rbol, a nivel de piso
             layout(location=3) in float iHalfWidth;
             layout(location=4) in float iHeight;
             layout(location=5) in float iYaw;
             layout(location=6) in vec4  iColor;
             uniform mat4 uMvp;
+            uniform float uTime;
+            uniform float uWind;   // 0 = sin viento (Ã¡rboles); >0 dobla la copa del quad (pasto)
             out vec4 vColor;
             out vec2 vUv;
             void main()
@@ -570,6 +474,12 @@ private static int CreateTreeBillboardShader()
                 float s = sin(iYaw);
                 vec3 right = vec3(c, 0.0, -s);
                 vec3 world = iCenter + right * (aUnitOffset.x * iHalfWidth * 2.0) + vec3(0.0, aUnitOffset.y * iHeight, 0.0);
+                if (uWind > 0.0)
+                {
+                    float sway = sin(uTime * 1.9 + (iCenter.x + iCenter.z) * 0.8) * uWind * aUnitOffset.y * aUnitOffset.y * iHeight;
+                    world.x += sway * 0.7;
+                    world.z += sway * 0.5;
+                }
                 vColor = iColor;
                 vUv = aUnitUv;
                 gl_Position = vec4(world, 1.0) * uMvp;
@@ -601,3 +511,5 @@ private static int CreateTreeBillboardShader()
         return p;
     }
 }
+
+

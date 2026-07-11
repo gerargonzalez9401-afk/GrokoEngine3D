@@ -37,11 +37,34 @@ public enum EnvironmentMode
     ProceduralSky
 }
 
+public enum RendererRenderingPath
+{
+    Forward,
+    ForwardPlus,
+    Deferred
+}
+
+/// <summary>
+/// Modo de LOD para assets que traen niveles como hijos (Tree_LOD0, Tree_LOD1...).
+/// Performance120 recupera el camino rápido histórico para objetos Static.
+/// </summary>
+public enum StaticHierarchyLodMode
+{
+    Performance120,
+    LodPro
+}
+
 internal readonly record struct SceneRenderStats(
     int DrawCalls,
     int ShadowDrawCalls,
     int InstancedDrawCalls,
     int Instances,
+    int DynamicMeshGroups,
+    int DynamicMeshSingles,
+    int DynamicMeshLargestGroup,
+    int OpaqueDynamicMeshes,
+    int TransparentDynamicMeshes,
+    int TransparentSkinnedMeshes,
     long Triangles,
     int StaticRanges,
     int SolidRanges,
@@ -52,9 +75,29 @@ internal readonly record struct SceneRenderStats(
     int GpuMeshCacheCount,
     int ParsedMeshCacheCount,
     int ShaderGraphCacheCount,
+    int TerrainTreeMeshCount,
+    int TerrainTreeBillboardCount,
+    int TerrainTreeCulledCount,
+    int TerrainTreeVisibleCells,
+    int HierarchyLod0Count,
+    int HierarchyLod1Count,
+    int HierarchyLod2Count,
+    int HierarchyLod3Count,
+    int HierarchyLodSkippedCount,
+    int HierarchyLodCulledCount,
+    int StaticHierarchyLodFastCount,
+    int HierarchyLodGpuReplays,
+    int HierarchyLodGpuMisses,
+    int HierarchyLodGpuFrustumCulled,
+    int HierarchyLodGpuParts,
+    RendererRenderingPath RenderingPath,
+    bool DeferredGBufferActive,
     int RenderWidth,
     int RenderHeight,
     float BuildSceneMs,
+    float BuildGridMs,
+    float BuildWalkMs,
+    float BuildParticleCollectMs,
     float ShadowMs,
     float SkyboxMs,
     float StaticOpaqueMs,
@@ -69,7 +112,7 @@ internal readonly record struct SceneRenderStats(
     float PointShadowMs,
     float RenderOtherMs)
 {
-    public static readonly SceneRenderStats Empty = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static readonly SceneRenderStats Empty = default;
 }
 
 internal sealed partial class SceneViewportRenderer
@@ -111,7 +154,8 @@ internal sealed partial class SceneViewportRenderer
         string? ShaderGraphPath = null,
         IReadOnlyDictionary<string, float[]>? ShaderGraphProperties = null,
         IReadOnlyDictionary<string, string>? ShaderGraphTextures = null,
-        GameObject? TerrainObject = null);
+        bool AlphaClip = false,
+        float AlphaClipThreshold = 0.5f);
 
     private readonly record struct DynamicMeshDraw(
         CachedGpuMesh Mesh,
@@ -128,6 +172,8 @@ internal sealed partial class SceneViewportRenderer
         float Alpha = 1f,
         float RefractionStrength = 0f,
         float DistortionStrength = 0f,
+        bool AlphaClip = false,
+        float AlphaClipThreshold = 0.5f,
         bool CastShadows = true,
         bool ReceiveShadows = true,
         bool TwoSidedShadows = false,
@@ -149,6 +195,8 @@ internal sealed partial class SceneViewportRenderer
         float Alpha = 1f,
         float RefractionStrength = 0f,
         float DistortionStrength = 0f,
+        bool AlphaClip = false,
+        float AlphaClipThreshold = 0.5f,
         bool CastShadows = true,
         bool ReceiveShadows = true,
         bool TwoSidedShadows = false,
@@ -156,19 +204,27 @@ internal sealed partial class SceneViewportRenderer
 
     private readonly record struct SurfaceMaps(string? NormalMapPath, string? RoughnessMapPath, string? MetallicMapPath);
 
+    private readonly record struct ReflectionProbeCubeCacheEntry(
+        int TextureId,
+        float MaxLod,
+        DateTime CubemapWriteTime,
+        DateTime FaceWriteTime);
+
     private readonly record struct SurfaceTransparency(
         MaterialSurfaceType SurfaceType,
         float Alpha,
+        float AlphaClipThreshold,
         float RefractionStrength,
         float DistortionStrength)
     {
+        public bool IsCutout => SurfaceType == MaterialSurfaceType.Cutout;
+
         public bool IsTransparent =>
             SurfaceType == MaterialSurfaceType.Transparent ||
-            Alpha < 0.999f ||
             RefractionStrength > 0.0001f ||
             DistortionStrength > 0.0001f;
 
-        public static readonly SurfaceTransparency Opaque = new(MaterialSurfaceType.Opaque, 1f, 0f, 0f);
+        public static readonly SurfaceTransparency Opaque = new(MaterialSurfaceType.Opaque, 1f, 0.5f, 0f, 0f);
     }
 
     private readonly record struct MeshVertData(Vector3 Position, Vector3 Normal, Vector2 Uv);
@@ -204,7 +260,8 @@ internal sealed partial class SceneViewportRenderer
         public SolidVertex[] Vertices { get; }
     }
 
-    private readonly record struct CachedParsedMesh(ParsedMesh Mesh, DateTime FileTime);
+    // NextValidationTick (TickCount64): hasta entonces NO se re-stat el archivo en disco.
+    private readonly record struct CachedParsedMesh(ParsedMesh Mesh, DateTime FileTime, long NextValidationTick);
 
     private sealed class CachedGpuMesh
     {

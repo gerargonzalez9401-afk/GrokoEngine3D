@@ -502,7 +502,7 @@ namespace GrokoEngine
         private bool _burstFired;
         private bool _playing;
         private bool _warnedMissingParticlePhysics;
-        private Random _rng = new();
+        private System.Random _rng = new();
 
         public IReadOnlyList<Particle> Particles => _particles;
         public bool IsPlaying => _playing;
@@ -510,7 +510,7 @@ namespace GrokoEngine
 
         public void Play()
         {
-            _rng = AutoRandomSeed ? new Random() : new Random(RandomSeed);
+            _rng = AutoRandomSeed ? new System.Random() : new System.Random(RandomSeed);
             _playing = true;
             _time = 0f;
             _emitTimer = 0f;

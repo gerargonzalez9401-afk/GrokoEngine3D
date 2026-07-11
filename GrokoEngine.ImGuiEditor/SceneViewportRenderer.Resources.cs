@@ -50,6 +50,11 @@ internal sealed partial class SceneViewportRenderer
         if (_pointShadowCube != 0) GL.DeleteTexture(_pointShadowCube);
         if (_pointShadowFbo != 0) GL.DeleteFramebuffer(_pointShadowFbo);
         if (_shaderGraphWhiteTex != 0) GL.DeleteTexture(_shaderGraphWhiteTex);
+        ReleaseDeferredTargets();
+        if (_gbufferShader != 0) GL.DeleteProgram(_gbufferShader);
+        if (_deferredLightingShader != 0) GL.DeleteProgram(_deferredLightingShader);
+        if (_deferredQuadVbo != 0) GL.DeleteBuffer(_deferredQuadVbo);
+        if (_deferredQuadVao != 0) GL.DeleteVertexArray(_deferredQuadVao);
 
         foreach (var entry in _shaderGraphCache.Values)
             if (entry.Program != 0)
@@ -67,6 +72,12 @@ internal sealed partial class SceneViewportRenderer
         if (_envTexture != 0) GL.DeleteTexture(_envTexture);
         if (_envPrefilterCube != 0) GL.DeleteTexture(_envPrefilterCube);
         if (_brdfLutTexture != 0) GL.DeleteTexture(_brdfLutTexture);
+        foreach (var entry in _reflectionProbeCubeCache.Values)
+            if (entry.TextureId != 0)
+                GL.DeleteTexture(entry.TextureId);
+        _reflectionProbeCubeCache.Clear();
+
+        DisposeTerrainPass();
 
         foreach (var qid in _occlusionQueries.Values)
             GL.DeleteQuery(qid);

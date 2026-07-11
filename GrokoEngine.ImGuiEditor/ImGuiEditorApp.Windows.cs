@@ -714,7 +714,7 @@ internal sealed partial class ImGuiEditorApp
 
             ImGui.Spacing();
             DrawRenderProSection("Renderer Data / Path");
-            DrawStringCombo("Rendering Path##rpPath", ref renderingPath, ["Forward", "Forward+"]);
+            DrawStringCombo("Rendering Path##rpPath", ref renderingPath, ["Forward", "Forward+", "Deferred"]);
             ImGui.TextDisabled(renderingPath == "Forward+"
                 ? "Forward+ prepara el camino para muchas luces por tile/cluster."
                 : "Forward clasico: simple, estable y barato para escenas pequenas.");
@@ -898,6 +898,27 @@ internal sealed partial class ImGuiEditorApp
             ImGui.TextDisabled("AO usa sampling tipo GTAO para contacto moderno.");
 
             ImGui.Spacing();
+            DrawRenderProSection("Static LOD");
+            if (ImGui.BeginCombo("Tree/Prop LOD Mode##staticHierarchyLod", StaticHierarchyLodModeLabel(staticHierarchyLodMode)))
+            {
+                foreach (StaticHierarchyLodMode mode in Enum.GetValues<StaticHierarchyLodMode>())
+                {
+                    bool selected = staticHierarchyLodMode == mode;
+                    if (ImGui.Selectable(StaticHierarchyLodModeLabel(mode), selected))
+                    {
+                        staticHierarchyLodMode = mode;
+                        sceneRenderer.InvalidateStaticBatch();
+                    }
+                    if (selected)
+                        ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
+            }
+            ImGui.TextDisabled(staticHierarchyLodMode == StaticHierarchyLodMode.Performance120
+                ? "Static trees/props use the fast baked path first, matching the 120 FPS backup."
+                : "Hierarchy LOD is evaluated dynamically for Static assets. More Unity-like, heavier.");
+
+            ImGui.Spacing();
             DrawRenderProSection("Presets");
             if (ImGui.Button("Balanced##renderPreset", new Vector2(106f, 26f)))
                 ApplyRenderQualityPreset(1);
@@ -926,11 +947,22 @@ internal sealed partial class ImGuiEditorApp
             if (ImGui.Button("Final##debugFast", new Vector2(76f, 24f)))
                 lightingDebugView = LightingDebugView.Final;
             ImGui.SameLine();
+            if (ImGui.Button("GBuffer##debugFast", new Vector2(86f, 24f)))
+                lightingDebugView = LightingDebugView.Normals;
+            ImGui.SameLine();
+            if (ImGui.Button("Lights##debugFast", new Vector2(78f, 24f)))
+                lightingDebugView = LightingDebugView.DirectLights;
+            if (ImGui.Button("Probe##debugFast", new Vector2(76f, 24f)))
+                lightingDebugView = LightingDebugView.ReflectionProbe;
+            ImGui.SameLine();
             if (ImGui.Button("Material Health##debugFast", new Vector2(136f, 24f)))
                 lightingDebugView = LightingDebugView.MaterialHealth;
             ImGui.SameLine();
             if (ImGui.Button("Cascades##debugFast", new Vector2(96f, 24f)))
                 lightingDebugView = LightingDebugView.ShadowCascades;
+            ImGui.TextDisabled(sceneRenderer.LastStats.DeferredGBufferActive
+                ? "Deferred activo: Albedo/Normals/Roughness/Metallic leen el G-buffer real."
+                : "Forward activo: debug equivalente para comparar contra Deferred.");
 
             ImGui.Spacing();
             DrawRenderProSection("Lighting / IBL");
@@ -1023,6 +1055,7 @@ internal sealed partial class ImGuiEditorApp
                 shadowBias = 1.25f;
                 iblDiffuseStrength = 0.45f;
                 iblSpecularStrength = 0.10f;
+                staticHierarchyLodMode = StaticHierarchyLodMode.Performance120;
                 break;
             case 2:
                 renderScale = 1f;
@@ -1033,6 +1066,7 @@ internal sealed partial class ImGuiEditorApp
                 shadowBias = 0.85f;
                 iblDiffuseStrength = 0.85f;
                 iblSpecularStrength = 0.22f;
+                staticHierarchyLodMode = StaticHierarchyLodMode.LodPro;
                 break;
             default:
                 renderScale = 1f;
@@ -1043,9 +1077,11 @@ internal sealed partial class ImGuiEditorApp
                 shadowBias = 1f;
                 iblDiffuseStrength = 0.65f;
                 iblSpecularStrength = 0.16f;
+                staticHierarchyLodMode = StaticHierarchyLodMode.Performance120;
                 break;
         }
 
+        sceneRenderer.InvalidateStaticBatch();
         lightingDebugView = LightingDebugView.Final;
         statusMessage = "Render quality preset applied";
     }
@@ -1056,6 +1092,13 @@ internal sealed partial class ImGuiEditorApp
         ImGui.TextColored(new Vec4(0.82f, 0.82f, 0.78f, 1f), title);
         ImGui.Separator();
     }
+
+    private static string StaticHierarchyLodModeLabel(StaticHierarchyLodMode mode) => mode switch
+    {
+        StaticHierarchyLodMode.Performance120 => "Performance / 120 FPS",
+        StaticHierarchyLodMode.LodPro => "LOD Pro",
+        _ => mode.ToString()
+    };
 
     private static string LightingDebugViewLabel(LightingDebugView view) => view switch
     {
@@ -1068,6 +1111,8 @@ internal sealed partial class ImGuiEditorApp
         LightingDebugView.ShadowCascades => "Shadow Cascades",
         LightingDebugView.IblSpecular => "IBL Specular",
         LightingDebugView.MaterialHealth => "Material Health",
+        LightingDebugView.DirectLights => "Direct Lights",
+        LightingDebugView.ReflectionProbe => "Reflection Probe",
         _ => view.ToString()
     };
 
@@ -1082,6 +1127,8 @@ internal sealed partial class ImGuiEditorApp
         LightingDebugView.ShadowCascades => "Colores por cascada de sombra direccional.",
         LightingDebugView.IblSpecular => "Solo la energia especular del IBL.",
         LightingDebugView.MaterialHealth => "Semaforo de materiales: verde OK, amarillo revisar, rojo peligro.",
+        LightingDebugView.DirectLights => "Solo luces directas: direccional, point, spot y area. Ideal para comparar Deferred con Forward.",
+        LightingDebugView.ReflectionProbe => "Solo la contribucion especular de Reflection Probe activa.",
         _ => string.Empty
     };
 

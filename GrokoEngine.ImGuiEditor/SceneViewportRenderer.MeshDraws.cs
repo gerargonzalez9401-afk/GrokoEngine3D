@@ -11,6 +11,8 @@ internal sealed partial class SceneViewportRenderer
 {
     private void SortDynamicMeshDrawsForStateReuse()
     {
+        SortShaderGraphMeshDrawsForInstancing();
+
         if (dynamicMeshDraws.Count <= 1)
         {
             SortSkinnedMeshDrawsForStateReuse();
@@ -35,10 +37,70 @@ internal sealed partial class SceneViewportRenderer
             if (cmp != 0) return cmp;
             cmp = CompareVector4(a.Material, b.Material);
             if (cmp != 0) return cmp;
-            return CompareVector4(a.Emission, b.Emission);
+            cmp = CompareVector4(a.Emission, b.Emission);
+            if (cmp != 0) return cmp;
+            cmp = a.AlphaClip.CompareTo(b.AlphaClip);
+            if (cmp != 0) return cmp;
+            return a.AlphaClipThreshold.CompareTo(b.AlphaClipThreshold);
         });
 
         SortSkinnedMeshDrawsForStateReuse();
+    }
+
+    // Agrupa los draws shader-graph idénticos para que queden CONSECUTIVOS: así el pase de
+    // color y el de sombras pueden fusionarlos en un DrawArraysInstanced (N árboles con las
+    // mismas hojas = 1 draw call, como las mallas con material normal).
+    private void SortShaderGraphMeshDrawsForInstancing()
+    {
+        if (shaderGraphDynamicMeshDraws.Count <= 1)
+            return;
+
+        shaderGraphDynamicMeshDraws.Sort(static (a, b) =>
+        {
+            int cmp = StringComparer.OrdinalIgnoreCase.Compare(a.ShaderGraphPath, b.ShaderGraphPath);
+            if (cmp != 0) return cmp;
+            cmp = a.Mesh.Vao.CompareTo(b.Mesh.Vao);
+            if (cmp != 0) return cmp;
+            cmp = a.Start.CompareTo(b.Start);
+            if (cmp != 0) return cmp;
+            cmp = a.Count.CompareTo(b.Count);
+            if (cmp != 0) return cmp;
+            // Identidad de los diccionarios de texturas/propiedades: los draws que comparten el
+            // mismo .mat comparten la MISMA instancia, así que la identidad basta para agrupar.
+            cmp = RuntimeHelpers.GetHashCode(a.ShaderGraphTextures).CompareTo(RuntimeHelpers.GetHashCode(b.ShaderGraphTextures));
+            if (cmp != 0) return cmp;
+            cmp = RuntimeHelpers.GetHashCode(a.ShaderGraphProperties).CompareTo(RuntimeHelpers.GetHashCode(b.ShaderGraphProperties));
+            if (cmp != 0) return cmp;
+            cmp = a.ReceiveShadows.CompareTo(b.ReceiveShadows);
+            if (cmp != 0) return cmp;
+            return a.ShadowsOnly.CompareTo(b.ShadowsOnly);
+        });
+    }
+
+    private static bool CanInstanceShaderGraphDraws(in ShaderGraphDynamicMeshDraw a, in ShaderGraphDynamicMeshDraw b) =>
+        string.Equals(a.ShaderGraphPath, b.ShaderGraphPath, StringComparison.OrdinalIgnoreCase) &&
+        ReferenceEquals(a.Mesh, b.Mesh) &&
+        a.Start == b.Start &&
+        a.Count == b.Count &&
+        ReferenceEquals(a.ShaderGraphTextures, b.ShaderGraphTextures) &&
+        ReferenceEquals(a.ShaderGraphProperties, b.ShaderGraphProperties) &&
+        a.ReceiveShadows == b.ReceiveShadows &&
+        a.ShadowsOnly == b.ShadowsOnly;
+
+    private void UploadShaderGraphInstanceMatrices(int start, int count)
+    {
+        if (count <= 0)
+            return;
+
+        EnsureInstanceCapacity(count);
+        if (instanceUploadBuffer.Length < count)
+            Array.Resize(ref instanceUploadBuffer, count);
+
+        for (int i = 0; i < count; i++)
+            instanceUploadBuffer[i] = Matrix4.Transpose(shaderGraphDynamicMeshDraws[start + i].World);
+
+        GL.BindBuffer(BufferTarget.ArrayBuffer, dynamicInstanceBuffer);
+        GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, count * Unsafe.SizeOf<Matrix4>(), instanceUploadBuffer);
     }
 
     private void SortSkinnedMeshDrawsForStateReuse()
@@ -131,6 +193,7 @@ internal sealed partial class SceneViewportRenderer
                 boundReceiveShadows = draw.ReceiveShadows;
             }
             ApplyDynamicSurfaceUniformsIfChanged(draw, ref boundColor, ref boundMaterial, ref boundEmission);
+            ApplyAlphaClipUniforms(draw.AlphaClip, draw.AlphaClipThreshold);
             ApplySurfaceTexturesIfChanged(
                 draw.TexturePath,
                 draw.NormalMapPath,
@@ -149,6 +212,7 @@ internal sealed partial class SceneViewportRenderer
             }
 
             int instanceCount = end - i;
+            TrackDynamicMeshGroup(instanceCount);
             if (instanceCount > 1)
             {
                 UploadInstanceMatrices(i, instanceCount);
@@ -237,6 +301,7 @@ internal sealed partial class SceneViewportRenderer
                 hasBoundWorld = true;
             }
             ApplySkinnedSurfaceUniformsIfChanged(draw, ref boundColor, ref boundMaterial, ref boundEmission);
+            ApplyAlphaClipUniforms(draw.AlphaClip, draw.AlphaClipThreshold);
             if (!ReferenceEquals(boundSkin, draw.Skin))
             {
                 UploadBoneMatrices(solidBoneMatrixLocations, draw.Skin);
@@ -459,6 +524,8 @@ internal sealed partial class SceneViewportRenderer
         Math.Abs(a.Alpha - b.Alpha) < 0.0001f &&
         Math.Abs(a.RefractionStrength - b.RefractionStrength) < 0.0001f &&
         Math.Abs(a.DistortionStrength - b.DistortionStrength) < 0.0001f &&
+        a.AlphaClip == b.AlphaClip &&
+        Math.Abs(a.AlphaClipThreshold - b.AlphaClipThreshold) < 0.0001f &&
         a.ReceiveShadows == b.ReceiveShadows &&
         a.ShadowsOnly == b.ShadowsOnly;
 
@@ -470,6 +537,14 @@ internal sealed partial class SceneViewportRenderer
         SetIntUniform(solidUseSkinningLocation, 0);
         if (solidUseSurfaceUniformsLocation >= 0)
             GL.Uniform1(solidUseSurfaceUniformsLocation, 0);
+        ApplyAlphaClipUniforms(false, 0.5f);
+    }
+
+    private void ApplyAlphaClipUniforms(bool enabled, float threshold)
+    {
+        SetIntUniform(solidAlphaClipEnabledLocation, enabled ? 1 : 0);
+        if (solidAlphaClipThresholdLocation >= 0)
+            GL.Uniform1(solidAlphaClipThresholdLocation, Math.Clamp(threshold, 0f, 1f));
     }
 
     private void ApplyDynamicModelUniform(DynamicMeshDraw draw)
@@ -485,6 +560,7 @@ internal sealed partial class SceneViewportRenderer
         SetVector4Uniform(solidSurfaceColorLocation, draw.Color);
         SetVector4Uniform(solidSurfaceMaterialLocation, draw.Material);
         SetVector4Uniform(solidSurfaceEmissionLocation, draw.Emission);
+        ApplyAlphaClipUniforms(draw.AlphaClip, draw.AlphaClipThreshold);
     }
 
     private void ApplyDynamicSurfaceUniformsIfChanged(DynamicMeshDraw draw, ref Vector4 boundColor, ref Vector4 boundMaterial, ref Vector4 boundEmission)
@@ -515,6 +591,7 @@ internal sealed partial class SceneViewportRenderer
         SetVector4Uniform(solidSurfaceColorLocation, draw.Color);
         SetVector4Uniform(solidSurfaceMaterialLocation, draw.Material);
         SetVector4Uniform(solidSurfaceEmissionLocation, draw.Emission);
+        ApplyAlphaClipUniforms(draw.AlphaClip, draw.AlphaClipThreshold);
     }
 
     private void ApplySkinnedSurfaceUniformsIfChanged(SkinnedMeshDraw draw, ref Vector4 boundColor, ref Vector4 boundMaterial, ref Vector4 boundEmission)

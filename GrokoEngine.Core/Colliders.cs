@@ -82,7 +82,10 @@ namespace GrokoEngine
 
         private void EnsureHeightRange(Terrain terrain)
         {
-            if (_cachedHeightVersion == terrain.Version)
+            // Cacheado por CollisionVersion (no Version): este escaneo recorre el heightmap
+            // COMPLETO (4M de floats a resolución 2049) y Version cambia en cada frame de
+            // pincelada — se recalcula al soltar el pincel, cuando la física realmente rebuildea.
+            if (_cachedHeightVersion == terrain.CollisionVersion)
                 return;
 
             float min = 0f, max = 0f;
@@ -100,7 +103,7 @@ namespace GrokoEngine
 
             _cachedMinHeight = min * terrain.HeightScale;
             _cachedMaxHeight = max * terrain.HeightScale;
-            _cachedHeightVersion = terrain.Version;
+            _cachedHeightVersion = terrain.CollisionVersion;
         }
 
         // Altura mundial real del terreno bajo (worldX, worldZ), vía interpolación bilineal del heightmap.
@@ -241,10 +244,20 @@ namespace GrokoEngine
             return new Bounds(center - half, center + half);
         }
 
+        // Memo de la última consulta: la física llama a TrySampleHeight varias veces por frame
+        // con el MISMO (x,z) (probe de suelo + resolución por eje del CharacterController),
+        // así que repetir el barrido de triángulos sería tirar el trabajo.
+        private object? _memoMesh;
+        private System.Numerics.Matrix4x4 _memoMatrix;
+        private float _memoX, _memoZ, _memoSurfaceY;
+        private bool _memoFound, _memoValid;
+
         // Altura mundial de la SUPERFICIE de la malla bajo (worldX, worldZ): busca el triángulo más alto
         // que cubre ese punto (en XZ) e interpola su Y. Permite colisión de RAMPAS/pendientes (la inclinación
-        // está en la geometría de la malla), sin reescribir el motor de físicas AABB. Usa la matriz mundial
-        // completa, así que respeta la ROTACIÓN del objeto (p. ej. un puente girado 90°).
+        // está en la geometría de la malla), sin reescribir el motor de físicas AABB. Respeta la ROTACIÓN
+        // del objeto (p. ej. un puente girado 90°): el rayo vertical mundial se lleva al espacio de la MALLA
+        // con la inversa de la matriz mundial, y el barrido corre sobre las posiciones crudas SIN transformar
+        // cada vértice (Möller–Trumbore por triángulo; antes eran 3 transformaciones de matriz por triángulo).
         public bool TrySampleHeight(float worldX, float worldZ, out float surfaceY)
         {
             surfaceY = 0f;
@@ -254,8 +267,17 @@ namespace GrokoEngine
             var mesh = ObjLoader.Load(mf.MeshPath);
             if (mesh == null || mesh.Positions.Length < 9) return false;
 
-            float importScale = mf.ImportScale <= 0f ? 1f : mf.ImportScale;
             var wm = gameObject.WorldMatrix;
+            if (_memoValid && ReferenceEquals(_memoMesh, mesh) && _memoX == worldX && _memoZ == worldZ && _memoMatrix == wm)
+            {
+                surfaceY = _memoSurfaceY;
+                return _memoFound;
+            }
+
+            if (!System.Numerics.Matrix4x4.Invert(wm, out var inv))
+                return false;
+
+            float importScale = mf.ImportScale <= 0f ? 1f : mf.ImportScale;
 
             int vStart = 0;
             int vEnd = mesh.Positions.Length / 3;
@@ -266,28 +288,58 @@ namespace GrokoEngine
                 vEnd = Math.Min(vEnd, sub.VertexStart + sub.VertexCount);
             }
 
+            // Rayo mundial: origen (worldX, 0, worldZ), dirección (0,-1,0). En espacio de malla:
+            // mundo = wm · (raw·importScale + Center)  →  raw(t) = ((inv·o - Center) + t·(inv·d)) / importScale.
+            // El parámetro t se conserva, así que la Y mundial del impacto es simplemente -t.
+            float invScale = 1f / importScale;
+            var oL = System.Numerics.Vector3.Transform(new System.Numerics.Vector3(worldX, 0f, worldZ), inv);
+            var dL = System.Numerics.Vector3.TransformNormal(new System.Numerics.Vector3(0f, -1f, 0f), inv);
+            float rox = (oL.X - Center.X) * invScale, roy = (oL.Y - Center.Y) * invScale, roz = (oL.Z - Center.Z) * invScale;
+            float rdx = dL.X * invScale, rdy = dL.Y * invScale, rdz = dL.Z * invScale;
+
             bool found = false;
-            float bestY = float.MinValue;
+            float bestT = float.MaxValue;   // t mínimo = Y mundial máxima (dirección -Y)
+            var positions = mesh.Positions;
+            const float eps = 0.0005f;      // misma tolerancia de borde que la versión baricéntrica anterior
             for (int v = vStart; v + 2 < vEnd; v += 3)
             {
-                var a = WorldVertex(mesh, v, importScale, wm);
-                var b = WorldVertex(mesh, v + 1, importScale, wm);
-                var c = WorldVertex(mesh, v + 2, importScale, wm);
-                if (HeightInTriangleXZ(worldX, worldZ, a, b, c, out float y) && y > bestY)
-                {
-                    bestY = y;
-                    found = true;
-                }
+                int i = v * 3;
+                float ax = positions[i], ay = positions[i + 1], az = positions[i + 2];
+                float e1x = positions[i + 3] - ax, e1y = positions[i + 4] - ay, e1z = positions[i + 5] - az;
+                float e2x = positions[i + 6] - ax, e2y = positions[i + 7] - ay, e2z = positions[i + 8] - az;
+
+                float px = rdy * e2z - rdz * e2y;
+                float py = rdz * e2x - rdx * e2z;
+                float pz = rdx * e2y - rdy * e2x;
+                float det = e1x * px + e1y * py + e1z * pz;
+                if (det > -1e-9f && det < 1e-9f) continue;   // triángulo paralelo al rayo (pared vertical)
+
+                float invDet = 1f / det;
+                float tx = rox - ax, ty = roy - ay, tz = roz - az;
+                float u = (tx * px + ty * py + tz * pz) * invDet;
+                if (u < -eps || u > 1f + eps) continue;
+
+                float qx = ty * e1z - tz * e1y;
+                float qy = tz * e1x - tx * e1z;
+                float qz = tx * e1y - ty * e1x;
+                float w = (rdx * qx + rdy * qy + rdz * qz) * invDet;
+                if (w < -eps || u + w > 1f + eps) continue;
+
+                // Línea infinita, no rayo: t puede ser negativo (triángulo por encima del origen Y=0).
+                float t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
+                if (t < bestT) { bestT = t; found = true; }
             }
 
-            if (found) { surfaceY = bestY; return true; }
-            return false;
-        }
+            if (found) surfaceY = -bestT;
 
-        private Vector3 WorldVertex(ParsedMesh mesh, int v, float importScale, System.Numerics.Matrix4x4 wm)
-        {
-            int i = v * 3;
-            return ToWorld(mesh.Positions[i] * importScale, mesh.Positions[i + 1] * importScale, mesh.Positions[i + 2] * importScale, wm);
+            _memoMesh = mesh;
+            _memoMatrix = wm;
+            _memoX = worldX;
+            _memoZ = worldZ;
+            _memoSurfaceY = surfaceY;
+            _memoFound = found;
+            _memoValid = true;
+            return found;
         }
 
         // Pasa una posición local (malla × importScale) a mundo, sumándole el Center y aplicando la matriz
@@ -297,21 +349,6 @@ namespace GrokoEngine
             var p = System.Numerics.Vector3.Transform(
                 new System.Numerics.Vector3(lx + Center.X, ly + Center.Y, lz + Center.Z), wm);
             return new Vector3(p.X, p.Y, p.Z);
-        }
-
-        // Coordenadas baricéntricas en el plano XZ; si el punto cae dentro del triángulo, interpola la Y.
-        private static bool HeightInTriangleXZ(float px, float pz, Vector3 a, Vector3 b, Vector3 c, out float y)
-        {
-            y = 0f;
-            float d = (b.Z - c.Z) * (a.X - c.X) + (c.X - b.X) * (a.Z - c.Z);
-            if (Math.Abs(d) < 1e-9f) return false;
-            float w1 = ((b.Z - c.Z) * (px - c.X) + (c.X - b.X) * (pz - c.Z)) / d;
-            float w2 = ((c.Z - a.Z) * (px - c.X) + (a.X - c.X) * (pz - c.Z)) / d;
-            float w3 = 1f - w1 - w2;
-            const float eps = -0.0005f;
-            if (w1 < eps || w2 < eps || w3 < eps) return false;
-            y = w1 * a.Y + w2 * b.Y + w3 * c.Y;
-            return true;
         }
     }
 }

@@ -32,6 +32,10 @@ using GlfwMouseButton = OpenTK.Windowing.GraphicsLibraryFramework.MouseButton;
 namespace GrokoEngine.ImGuiEditor;
 internal sealed partial class ImGuiEditorApp
 {
+    private string? prefabInspectorCachedPath;
+    private DateTime prefabInspectorCachedWriteUtc;
+    private GameObject? prefabInspectorRoot;
+
     private void DrawInspectorPanel(Vector2 size)
     {
         BeginPanel("##InspectorPanel", size);
@@ -67,7 +71,15 @@ internal sealed partial class ImGuiEditorApp
             }
         }
 
-        DrawPanelHeader("Inspector", inspected?.Name, () =>
+        string? inspectorTitle = inspected?.Name;
+        if (inspected == null &&
+            !string.IsNullOrWhiteSpace(inspectedAssetPath) &&
+            inspectedAssetPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+        {
+            inspectorTitle = Path.GetFileNameWithoutExtension(inspectedAssetPath);
+        }
+
+        DrawPanelHeader("Inspector", inspectorTitle, () =>
         {
             bool wasLocked = inspectorLocked;
             if (DrawInlineIconToggle(wasLocked ? EditorIcon.Lock : EditorIcon.Unlock,
@@ -104,6 +116,13 @@ internal sealed partial class ImGuiEditorApp
             return;
         }
 
+        DrawObjectInspectorContent(inspected);
+
+        ImGui.EndChild();
+    }
+
+    private void DrawObjectInspectorContent(GameObject inspected)
+    {
         DrawSelectedObjectHeader(inspected);
         HandleInspectorAssetDropTarget(inspected);
         DrawObjectEditorMeta(inspected);
@@ -156,8 +175,6 @@ internal sealed partial class ImGuiEditorApp
         ImGui.PopStyleColor(3);
         DrawAddComponentPopup(inspected);
         ImGui.Spacing();
-
-        ImGui.EndChild();
     }
 
     private void DrawSelectedObjectHeader(GameObject obj)
@@ -501,6 +518,12 @@ internal sealed partial class ImGuiEditorApp
     private void DrawSelectedAssetSummary(string path)
     {
         bool folder = Directory.Exists(path);
+        if (!folder && path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+        {
+            DrawPrefabAssetInspector(path);
+            return;
+        }
+
         ImGui.PushStyleColor(ImGuiCol.ChildBg, new System.Numerics.Vector4(0.095f, 0.108f, 0.126f, 1f));//color del header del inspector 
         ImGui.BeginChild("InspectorAssetHeader", new Vector2(0f, 70f), ImGuiChildFlags.None);//alto del header del inspector de faul 70
         var drawList = ImGui.GetWindowDrawList();
@@ -566,6 +589,12 @@ internal sealed partial class ImGuiEditorApp
         if (ScriptableObjectAsset.IsAssetPath(path))
         {
             DrawScriptableObjectAssetInspector(path);
+            return;
+        }
+
+        if (IsAudioFileExtension(path))
+        {
+            DrawAudioClipInspector(path);
             return;
         }
 
@@ -1387,19 +1416,152 @@ internal sealed partial class ImGuiEditorApp
         if (ImGui.Combo("##" + label, ref i, opts, opts.Length)) set(opts[i]);
     }
 
-    private static void DrawPrefabAssetInspector(string path)
+    private void DrawPrefabAssetInspector(string path)
     {
-        ImGui.TextDisabled("Prefab Asset");
+        string prefabPath = SceneViewportRenderer.NormalizeExistingAssetPath(path) ?? path;
+        GameObject? prefabRoot = GetPrefabInspectorRoot(prefabPath, out string loadError);
+        if (prefabRoot == null)
+        {
+            ImGui.TextDisabled("Prefab Asset");
+            ImGui.TextWrapped("Prefab metadata unavailable.");
+            if (!string.IsNullOrWhiteSpace(loadError))
+                ImGui.TextColored(new Vec4(1f, 0.45f, 0.38f, 1f), loadError);
+            return;
+        }
+
+        prefabRoot.PrefabAssetPath = prefabPath;
+        DrawObjectInspectorContent(prefabRoot);
+    }
+
+    private GameObject? GetPrefabInspectorRoot(string prefabPath, out string error)
+    {
+        error = string.Empty;
+        string fullPath = NormalizePrefabPathForCompare(prefabPath);
+        DateTime writeUtc = DateTime.MinValue;
         try
         {
-            string text = File.ReadAllText(path);
-            ImGui.Text($"Size: {text.Length / 1024f:F1} KB");
-            ImGui.Text($"Objects: {text.Split(new[] { "\"Name\"" }, StringSplitOptions.None).Length - 1}");
+            if (File.Exists(fullPath))
+                writeUtc = File.GetLastWriteTimeUtc(fullPath);
         }
-        catch
+        catch { }
+
+        if (prefabInspectorRoot != null &&
+            string.Equals(prefabInspectorCachedPath, fullPath, StringComparison.OrdinalIgnoreCase) &&
+            prefabInspectorCachedWriteUtc == writeUtc)
         {
-            ImGui.TextWrapped("Prefab metadata unavailable.");
+            return prefabInspectorRoot;
         }
+
+        try
+        {
+            prefabInspectorRoot = SceneSerializer.LoadPrefab(fullPath, physicsEngine, scriptCompiler);
+            prefabInspectorRoot.PrefabAssetPath = fullPath;
+            prefabInspectorCachedPath = fullPath;
+            prefabInspectorCachedWriteUtc = writeUtc;
+            return prefabInspectorRoot;
+        }
+        catch (Exception ex)
+        {
+            prefabInspectorRoot = null;
+            prefabInspectorCachedPath = fullPath;
+            prefabInspectorCachedWriteUtc = writeUtc;
+            error = ex.Message;
+            return null;
+        }
+    }
+
+    private void DrawPrefabSummaryCard(GameObject prefabRoot, string prefabPath, long bytes, int objectCount, int componentCount, int sceneInstances)
+    {
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vec4(0.075f, 0.085f, 0.095f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vec4(0.20f, 0.25f, 0.30f, 1f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8f);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildBorderSize, 1f);
+        ImGui.BeginChild("##PrefabAssetSummary", new Vector2(-1f, 116f), ImGuiChildFlags.Borders);
+
+        DrawInlineIcon(EditorIcon.Prefab, "Prefab", 38f);
+        ImGui.SameLine();
+        ImGui.BeginGroup();
+        ImGui.Text(prefabRoot.Name);
+        ImGui.TextDisabled(Path.GetFileName(prefabPath));
+        ImGui.TextDisabled(bytes > 0 ? $"{bytes / 1024f:F1} KB" : "Prefab file");
+        ImGui.EndGroup();
+
+        ImGui.Spacing();
+        ImGui.Columns(3, "##PrefabStats", false);
+        ImGui.TextDisabled("Objects");
+        ImGui.Text(objectCount.ToString(CultureInfo.InvariantCulture));
+        ImGui.NextColumn();
+        ImGui.TextDisabled("Components");
+        ImGui.Text(componentCount.ToString(CultureInfo.InvariantCulture));
+        ImGui.NextColumn();
+        ImGui.TextDisabled("Scene uses");
+        ImGui.Text(sceneInstances.ToString(CultureInfo.InvariantCulture));
+        ImGui.Columns(1);
+
+        ImGui.EndChild();
+        ImGui.PopStyleVar(2);
+        ImGui.PopStyleColor(2);
+    }
+
+    private int CountPrefabInstancesInScene(string prefabPath)
+    {
+        string normalized = NormalizePrefabPathForCompare(prefabPath);
+        return sceneGraph.Flatten().Count(o =>
+            !string.IsNullOrWhiteSpace(o.PrefabAssetPath) &&
+            string.Equals(NormalizePrefabPathForCompare(o.PrefabAssetPath), normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void ApplyPrefabAssetToSceneInstances(string prefabPath)
+    {
+        string normalized = SceneViewportRenderer.NormalizeExistingAssetPath(prefabPath) ?? prefabPath;
+        if (!File.Exists(normalized))
+        {
+            statusMessage = "Prefab asset not found";
+            return;
+        }
+
+        int updated = CommitSceneMutation("Apply Prefab To Scene Instances", () =>
+        {
+            string compare = NormalizePrefabPathForCompare(normalized);
+            var instances = sceneGraph.Flatten()
+                .Where(o => !string.IsNullOrWhiteSpace(o.PrefabAssetPath) &&
+                            string.Equals(NormalizePrefabPathForCompare(o.PrefabAssetPath), compare, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var instance in instances)
+            {
+                var template = SceneSerializer.LoadPrefab(normalized, physicsEngine, scriptCompiler);
+                ResetIds(template);
+                instance.ReplacePrefabContent(template, preserveRootName: true, preserveRootTransform: true);
+                instance.PrefabAssetPath = normalized;
+                PrewarmRenderableAssets(instance);
+            }
+
+            physicsEngine.ClearColliders();
+            physicsEngine.SyncPhysicsComponents(objects);
+            sceneRenderer.InvalidateStaticBatch();
+            sceneRenderer.InvalidateCullingState();
+
+            var all = sceneGraph.Flatten().ToHashSet();
+            if (selected != null && !all.Contains(selected))
+                selected = instances.FirstOrDefault();
+
+            return instances.Count;
+        });
+
+        statusMessage = updated == 1
+            ? "Prefab aplicado a 1 instancia de la escena."
+            : $"Prefab aplicado a {updated} instancias de la escena.";
+    }
+
+    private static string NormalizePrefabPathForCompare(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return string.Empty;
+
+        string resolved = SceneViewportRenderer.NormalizeExistingAssetPath(path) ?? path;
+        try { return Path.GetFullPath(resolved); }
+        catch { return resolved; }
     }
 
     private void DrawTransform(GameObject obj)
@@ -1512,6 +1674,12 @@ internal sealed partial class ImGuiEditorApp
             Vector2 iconMin = new Vector2(x, rowMin.Y + 5f);
             drawList.AddImage(rigidbodyTextureId, iconMin, iconMin + new Vector2(14f, 14f));
         }
+        else if (title.Contains("Audio", StringComparison.OrdinalIgnoreCase) && TryGetCustomEditorIconTexture("audiosource_64.png", out var audioTextureId))
+        {
+            // Icono naranja a todo color (no teñido), igual que el de Rigidbody.
+            Vector2 iconMin = new Vector2(x, rowMin.Y + 5f);
+            drawList.AddImage(audioTextureId, iconMin, iconMin + new Vector2(14f, 14f));
+        }
         else
         {
             DrawAtlasIconOrFallback(drawList, icon, new Vector2(x, rowMin.Y + 5f), 14f, ImGui.GetColorU32(UiIcon));
@@ -1557,6 +1725,7 @@ internal sealed partial class ImGuiEditorApp
 
     private static EditorIcon GetComponentIcon(string title)
     {
+        if (title.Contains("Audio", StringComparison.OrdinalIgnoreCase)) return EditorIcon.AudioSource;
         if (title.Contains("Transform", StringComparison.OrdinalIgnoreCase)) return EditorIcon.Transform;
         if (title.Contains("Camera", StringComparison.OrdinalIgnoreCase)) return EditorIcon.Camera;
         if (title.Contains("Light", StringComparison.OrdinalIgnoreCase)) return EditorIcon.Light;
@@ -2025,6 +2194,8 @@ internal sealed partial class ImGuiEditorApp
             MaterialAsset.Save(path, CloneMaterialData(pending.Data));
             pendingMaterialSaves.Remove(path);
             InvalidateAssetPreview(path, deleteTexture: true);
+            sceneRenderer.InvalidateMaterialAsset(path);   // los slots de mallas (estáticas o no) ven el cambio ya
+            sceneRenderer.InvalidateStaticBatch();
             statusMessageValue = "Material asset saved";
         }
     }
@@ -2037,6 +2208,7 @@ internal sealed partial class ImGuiEditorApp
         {
             MaterialAsset.Save(pair.Key, CloneMaterialData(pair.Value.Data));
             InvalidateAssetPreview(pair.Key, deleteTexture: true);
+            sceneRenderer.InvalidateMaterialAsset(pair.Key);
         }
         pendingMaterialSaves.Clear();
     }
@@ -2074,6 +2246,7 @@ internal sealed partial class ImGuiEditorApp
         mat.Metallic = Clamp01(data.Metallic);
         mat.SurfaceType = data.SurfaceType;
         mat.Alpha = Clamp01(data.Alpha);
+        mat.AlphaClipThreshold = Clamp01(data.AlphaClipThreshold);
         mat.RefractionStrength = Clamp01(data.RefractionStrength);
         mat.DistortionStrength = Clamp01(data.DistortionStrength);
         mat.SpecularHighlights = data.SpecularHighlights;
@@ -2249,6 +2422,7 @@ internal sealed partial class ImGuiEditorApp
         Metallic = mat.Metallic,
         SurfaceType = mat.SurfaceType,
         Alpha = mat.Alpha,
+        AlphaClipThreshold = mat.AlphaClipThreshold,
         RefractionStrength = mat.RefractionStrength,
         DistortionStrength = mat.DistortionStrength,
         SpecularHighlights = mat.SpecularHighlights,
@@ -2277,6 +2451,7 @@ internal sealed partial class ImGuiEditorApp
         Metallic = data.Metallic,
         SurfaceType = data.SurfaceType,
         Alpha = data.Alpha,
+        AlphaClipThreshold = data.AlphaClipThreshold,
         RefractionStrength = data.RefractionStrength,
         DistortionStrength = data.DistortionStrength,
         SpecularHighlights = data.SpecularHighlights,
@@ -2443,13 +2618,27 @@ internal sealed partial class ImGuiEditorApp
             ImGui.Dummy(new Vector2(0f, 4f));
 
             FieldRow("Surface Type");
-            string surfacePreview = data.SurfaceType == MaterialSurfaceType.Transparent ? "Transparent" : "Opaque";
+            string surfacePreview = data.SurfaceType switch
+            {
+                MaterialSurfaceType.Cutout => "Cutout",
+                MaterialSurfaceType.Transparent => "Transparent",
+                _ => "Opaque"
+            };
             if (ImGui.BeginCombo("##matasset_surface_type", surfacePreview))
             {
                 if (ImGui.Selectable("Opaque", data.SurfaceType == MaterialSurfaceType.Opaque))
                 {
                     data.SurfaceType = MaterialSurfaceType.Opaque;
                     data.Alpha = 1f;
+                    changed = true;
+                }
+                if (ImGui.Selectable("Cutout / Alpha Clip", data.SurfaceType == MaterialSurfaceType.Cutout))
+                {
+                    data.SurfaceType = MaterialSurfaceType.Cutout;
+                    data.Alpha = 1f;
+                    data.RefractionStrength = 0f;
+                    data.DistortionStrength = 0f;
+                    data.AlphaClipThreshold = Math.Clamp(data.AlphaClipThreshold <= 0f ? 0.5f : data.AlphaClipThreshold, 0f, 1f);
                     changed = true;
                 }
                 if (ImGui.Selectable("Transparent", data.SurfaceType == MaterialSurfaceType.Transparent))
@@ -2460,6 +2649,13 @@ internal sealed partial class ImGuiEditorApp
                     changed = true;
                 }
                 ImGui.EndCombo();
+            }
+
+            if (data.SurfaceType == MaterialSurfaceType.Cutout)
+            {
+                float clip = data.AlphaClipThreshold;
+                if (DrawUnitySliderFloat("Alpha Clip", ref clip, 0f, 1f)) { data.AlphaClipThreshold = Math.Clamp(clip, 0f, 1f); changed = true; }
+                ImGui.TextDisabled("Cutout se dibuja en Opaque: rapido para hojas/vegetacion y compatible con instancing.");
             }
 
             if (data.SurfaceType == MaterialSurfaceType.Transparent)
@@ -2508,6 +2704,61 @@ internal sealed partial class ImGuiEditorApp
                 changed = true;
             }
             ImGui.Dummy(new Vector2(0f, 12f));
+        }
+
+        // Preview de la esfera PBR, INTERACTIVO (como Unity): arrastrar rota la bola,
+        // doble clic la resetea. Sin rotación usa la imagen del cache de disco (coste =
+        // un AddImage); con rotación renderiza en vivo solo cuando cambia el ángulo.
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.TextDisabled("Preview");
+        ImGui.Spacing();
+        {
+            if (matSphereLivePath != path)
+                ResetLiveMaterialSphere(path);
+
+            float previewSize = Math.Min(220f, ImGui.GetContentRegionAvail().X);
+            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0f, (ImGui.GetContentRegionAvail().X - previewSize) * 0.5f));
+            var previewOrigin = ImGui.GetCursorScreenPos();
+            ImGui.InvisibleButton("##mat_sphere_drag", new Vector2(previewSize, previewSize));
+
+            if (ImGui.IsItemActive())
+            {
+                var drag = ImGui.GetIO().MouseDelta;
+                if (drag.X != 0f || drag.Y != 0f)
+                {
+                    // Signo invertido: la SUPERFICIE de la bola sigue al ratón (como agarrarla).
+                    matSphereYaw -= drag.X * 0.7f;
+                    matSpherePitch = Math.Clamp(matSpherePitch - drag.Y * 0.7f, -80f, 80f);
+                }
+            }
+
+            if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+            {
+                matSphereYaw = 0f;
+                matSpherePitch = 0f;
+            }
+
+            bool hasRotation = MathF.Abs(matSphereYaw) > 0.01f || MathF.Abs(matSpherePitch) > 0.01f;
+            IntPtr sphereTexture = IntPtr.Zero;
+            if (hasRotation)
+            {
+                sphereTexture = GetLiveMaterialSphereTexture(path);
+                // El primer render de fondo aún no llegó: mostrar la estática para no parpadear.
+                if (sphereTexture == IntPtr.Zero)
+                    TryGetCachedPreviewTexture(path, out sphereTexture);
+            }
+            else if (!TryGetCachedPreviewTexture(path, out sphereTexture))
+            {
+                QueuePreviewGeneration(path);
+            }
+
+            if (sphereTexture != IntPtr.Zero)
+                ImGui.GetWindowDrawList().AddImage(sphereTexture, previewOrigin, previewOrigin + new Vector2(previewSize, previewSize));
+            else
+                ImGui.GetWindowDrawList().AddText(previewOrigin + new Vector2(8f, previewSize * 0.5f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "Generating preview...");
+
+            ImGui.TextDisabled("Drag to rotate - double click to reset");
         }
 
         ImGui.Dummy(new Vector2(0f, 80f));

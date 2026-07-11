@@ -53,11 +53,15 @@ internal sealed partial class SceneViewportRenderer
 
     private MaterialAssetData? GetCachedMaterialAssetData(string? path)
     {
+        // NormalizeExistingAssetPath ya valida existencia (memoizado con TTL): no repetir File.Exists.
         string? normalized = NormalizeExistingAssetPath(path);
-        if (string.IsNullOrWhiteSpace(normalized) || !System.IO.File.Exists(normalized))
+        if (string.IsNullOrWhiteSpace(normalized))
             return null;
 
-        const int refreshEveryFrames = 30;
+        // Ventana larga: este cache se consulta por slot/objeto en caminos por-frame. Los cambios
+        // hechos EN el editor no dependen de esta ventana (InvalidateMaterialAsset refresca al
+        // momento); el stat periódico solo detecta ediciones externas del .mat.
+        const int refreshEveryFrames = 240;
         if (materialAssetRenderCache.TryGetValue(normalized, out var cached) &&
             _frameCount - cached.Frame < refreshEveryFrames)
             return cached.Data;
@@ -85,6 +89,26 @@ internal sealed partial class SceneViewportRenderer
         var data = MaterialAsset.Load(normalized);
         materialAssetRenderCache[normalized] = (fileTime, _frameCount, data);
         return data;
+    }
+
+    /// <summary>
+    /// Refresca al momento el .mat cacheado para render (llamar al guardarlo desde el editor);
+    /// sin esto, los objetos estáticos verían el cambio hasta 240 frames después.
+    /// </summary>
+    public void InvalidateMaterialAsset(string? path)
+    {
+        InvalidateNormalizedAssetPath(path);
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            materialAssetRenderCache.Remove(System.IO.Path.GetFullPath(path));
+        }
+        catch
+        {
+            materialAssetRenderCache.Clear();
+        }
     }
 
     private Vector4 GetObjectColor(GameObject obj, Vector4 fallback)
@@ -137,12 +161,12 @@ internal sealed partial class SceneViewportRenderer
     private SurfaceTransparency GetObjectTransparency(GameObject obj)
     {
         if (GetPreviewOverrideData(obj, -1) is { } over)
-            return new SurfaceTransparency(over.SurfaceType, Math.Clamp(over.Alpha, 0f, 1f), Math.Clamp(over.RefractionStrength, 0f, 1f), Math.Clamp(over.DistortionStrength, 0f, 1f));
+            return new SurfaceTransparency(over.SurfaceType, Math.Clamp(over.Alpha, 0f, 1f), Math.Clamp(over.AlphaClipThreshold, 0f, 1f), Math.Clamp(over.RefractionStrength, 0f, 1f), Math.Clamp(over.DistortionStrength, 0f, 1f));
 
         var material = obj.GetComponent<Material>();
         return material == null
             ? SurfaceTransparency.Opaque
-            : new SurfaceTransparency(material.SurfaceType, Math.Clamp(material.Alpha, 0f, 1f), Math.Clamp(material.RefractionStrength, 0f, 1f), Math.Clamp(material.DistortionStrength, 0f, 1f));
+            : new SurfaceTransparency(material.SurfaceType, Math.Clamp(material.Alpha, 0f, 1f), Math.Clamp(material.AlphaClipThreshold, 0f, 1f), Math.Clamp(material.RefractionStrength, 0f, 1f), Math.Clamp(material.DistortionStrength, 0f, 1f));
     }
 
     private bool ObjectUsesTransparentMaterial(GameObject obj, MeshFilter? meshFilter)
@@ -153,7 +177,22 @@ internal sealed partial class SceneViewportRenderer
         if (meshFilter == null || meshFilter.MaterialSlots.Count == 0)
             return false;
 
-        for (int i = 0; i < meshFilter.MaterialSlots.Count; i++)
+        int firstSlot = 0;
+        int lastSlotExclusive = meshFilter.MaterialSlots.Count;
+        if (meshFilter.SubmeshIndex >= 0)
+        {
+            // Objetos importados como hijos de FBX/LOD suelen traer un MeshFilter por submesh,
+            // pero conservan la lista completa de materiales del asset. Para decidir si este
+            // hijo necesita ruta transparente solo importa SU submesh; revisar los 12 slots de
+            // cada hijo de cada arbol multiplica trabajo y puede mandar objetos opacos a rutas
+            // dinamicas por un material transparente que ni siquiera se dibuja.
+            if (meshFilter.SubmeshIndex >= meshFilter.MaterialSlots.Count)
+                return false;
+            firstSlot = meshFilter.SubmeshIndex;
+            lastSlotExclusive = meshFilter.SubmeshIndex + 1;
+        }
+
+        for (int i = firstSlot; i < lastSlotExclusive; i++)
         {
             string? slotPath = meshFilter.MaterialSlots[i];
             if (!string.IsNullOrWhiteSpace(PreviewMaterialAssetPath) &&
@@ -168,6 +207,7 @@ internal sealed partial class SceneViewportRenderer
             var transparency = new SurfaceTransparency(
                 data.SurfaceType,
                 Math.Clamp(data.Alpha, 0f, 1f),
+                Math.Clamp(data.AlphaClipThreshold, 0f, 1f),
                 Math.Clamp(data.RefractionStrength, 0f, 1f),
                 Math.Clamp(data.DistortionStrength, 0f, 1f));
 
@@ -203,7 +243,7 @@ internal sealed partial class SceneViewportRenderer
                 new SurfaceMaps(data.NormalMapPath, data.RoughnessMapPath, data.MetallicMapPath),
                 new Vector4(Math.Clamp(data.Metallic, 0f, 1f), Math.Clamp(data.Roughness, 0.04f, 1f), data.SpecularHighlights ? 1f : 0f, data.EnvironmentReflections ? 1f : 0f),
                 new Vector4(Math.Max(0f, data.EmissionR), Math.Max(0f, data.EmissionG), Math.Max(0f, data.EmissionB), Math.Max(0f, data.EmissionIntensity)),
-                new SurfaceTransparency(data.SurfaceType, Math.Clamp(data.Alpha, 0f, 1f), Math.Clamp(data.RefractionStrength, 0f, 1f), Math.Clamp(data.DistortionStrength, 0f, 1f)),
+                new SurfaceTransparency(data.SurfaceType, Math.Clamp(data.Alpha, 0f, 1f), Math.Clamp(data.AlphaClipThreshold, 0f, 1f), Math.Clamp(data.RefractionStrength, 0f, 1f), Math.Clamp(data.DistortionStrength, 0f, 1f)),
                 string.IsNullOrWhiteSpace(data.ShaderGraphPath) ? null : data.ShaderGraphPath,
                 data.ShaderGraphProperties.Count > 0 ? data.ShaderGraphProperties : null,
                 data.ShaderGraphTextures.Count > 0 ? data.ShaderGraphTextures : null);

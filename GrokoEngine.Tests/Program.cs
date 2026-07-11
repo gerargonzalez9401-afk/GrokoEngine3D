@@ -36,6 +36,7 @@ internal static class Program
             ("MaterialAsset reuses imported materials", MaterialAssetReusesImportedMaterials),
             ("MaterialAsset applies shared material", MaterialAssetAppliesSharedMaterial),
             ("SceneSerializer preserves material instance flag", SceneSerializerPreservesMaterialInstanceFlag),
+            ("SceneSerializer preserves material cutout settings", SceneSerializerPreservesMaterialCutoutSettings),
             ("SceneSerializer preserves bone attachment", SceneSerializerPreservesBoneAttachment),
             ("SceneCommandHistory executes undo and redo", SceneCommandHistoryExecutesUndoRedo),
             ("SelectionService selects toggles and restores by id", SelectionServiceSelectsTogglesAndRestoresById),
@@ -62,6 +63,8 @@ internal static class Program
             ("SceneSerializer preserves light cookie and IES paths", SceneSerializerPreservesLightCookieAndIesPaths),
             ("IesProfile parses minimal LM-63 file and normalizes peak", IesProfileParsesMinimalLm63FileAndNormalizesPeak),
             ("IesProfile averages asymmetric horizontal angles", IesProfileAveragesAsymmetricHorizontalAngles),
+            ("ClusteredLighting computes grid and cluster index", ClusteredLightingComputesGridAndClusterIndex),
+            ("ClusteredLighting normalizes settings and clamps depth", ClusteredLightingNormalizesSettingsAndClampsDepth),
             ("PhysicsEngine fires trigger exit when other object destroyed", PhysicsEngineFiresTriggerExitWhenOtherObjectDestroyed),
             ("PhysicsEngine fires trigger exit when collider disabled mid play", PhysicsEngineFiresTriggerExitWhenColliderDisabledMidPlay),
             ("Terrain samples height bilinear", TerrainSamplesHeightBilinear),
@@ -78,6 +81,10 @@ internal static class Program
             ("TerrainTreeBrush paint fails without prototypes", TerrainTreeBrushPaintFailsWithoutPrototypes),
             ("TerrainTreeBrush erase removes trees within radius", TerrainTreeBrushEraseRemovesTreesWithinRadius),
             ("TerrainTreeBrush spacing holds with many existing trees", TerrainTreeBrushSpacingHoldsWithManyExistingTrees),
+            ("TerrainTreeLod classifies mesh billboard and culled trees", TerrainTreeLodClassifiesMeshBillboardAndCulledTrees),
+            ("TerrainTreeLod respects max mesh tree budget", TerrainTreeLodRespectsMaxMeshTreeBudget),
+            ("TerrainTreeLod computes stable cells", TerrainTreeLodComputesStableCells),
+            ("TerrainTreeLod computes conservative cell bounds", TerrainTreeLodComputesConservativeCellBounds),
             ("TerrainDetailBrush plants within radius", TerrainDetailBrushPlantsWithinRadius),
             ("TerrainDetailBrush paint fails without prototypes", TerrainDetailBrushPaintFailsWithoutPrototypes),
             ("TerrainDetailBrush erase removes details within radius", TerrainDetailBrushEraseRemovesDetailsWithinRadius),
@@ -86,6 +93,14 @@ internal static class Program
             ("TerrainMeshGenerator stitches normals with a connected neighbor", TerrainMeshGeneratorStitchesNormalsWithNeighbor),
             ("TerrainMeshGenerator skips stitching when neighbor resolution differs", TerrainMeshGeneratorSkipsStitchingWhenNeighborResolutionDiffers),
             ("SceneSerializer preserves terrain neighbor ids", SceneSerializerPreservesTerrainNeighborIds),
+            ("SceneSerializer preserves terrain shading settings", SceneSerializerPreservesTerrainShadingSettings),
+            ("TerrainQuadTree builds min/max pyramid", TerrainQuadTreeBuildsMinMaxPyramid),
+            ("TerrainQuadTree UpdateRegion matches full rebuild", TerrainQuadTreeUpdateRegionMatchesFullRebuild),
+            ("TerrainQuadTree selection covers terrain without overlap", TerrainQuadTreeSelectionCoversTerrainWithoutOverlap),
+            ("TerrainQuadTree selection is deterministic and distance dependent", TerrainQuadTreeSelectionIsDeterministicAndDistanceDependent),
+            ("TerrainNormalBaker matches mesh generator normals", TerrainNormalBakerMatchesMeshGeneratorNormals),
+            ("Terrain MarkDirtyRegion unions and consumes", TerrainMarkDirtyRegionUnionsAndConsumes),
+            ("TerrainMeshGenerator stride decimates collision mesh and keeps extents", TerrainMeshGeneratorStrideDecimatesCollisionMesh),
             ("SceneManager resolves scene path by name", SceneManagerResolveScenePathFindsSceneByName),
             ("SceneManager LoadScene swaps roots and preserves survivors", SceneManagerLoadSceneSwapsRootsAndPreservesSurvivors),
             ("EditorSceneGraph attach moves existing object", EditorSceneGraphAttachMovesExistingObject),
@@ -121,6 +136,7 @@ internal static class Program
             ("SceneSerializer preserves post process enabled flag", SceneSerializerPreservesPostProcessEnabledFlag),
             ("SceneSerializer preserves camera clear flags", SceneSerializerPreservesCameraClearFlags),
             ("SceneSerializer preserves camera render settings", SceneSerializerPreservesCameraRenderSettings),
+            ("SceneSerializer preserves reflection probe settings", SceneSerializerPreservesReflectionProbeSettings),
             ("SceneSerializer does not duplicate character capsule", SceneSerializerDoesNotDuplicateCharacterCapsule),
             ("CharacterController ignores same object colliders", CharacterControllerIgnoresSameObjectColliders),
             ("CharacterController auto centers capsule", CharacterControllerAutoCentersCapsule),
@@ -643,6 +659,27 @@ internal static class Program
         AssertTrue(loadedMat.IsInstance, "loaded material instance");
         AssertEqual(Path.GetFullPath(materialPath), Path.GetFullPath(loadedMat.AssetPath), "instance source asset path");
         AssertNear(0.9f, loadedMat.R, "instance color");
+    }
+
+    private static void SceneSerializerPreservesMaterialCutoutSettings()
+    {
+        var obj = new GameObject { Name = "LeafCard" };
+        var mat = obj.AddComponent<Material>();
+        mat.SurfaceType = MaterialSurfaceType.Cutout;
+        mat.Alpha = 1f;
+        mat.AlphaClipThreshold = 0.42f;
+        mat.RefractionStrength = 0f;
+        mat.DistortionStrength = 0f;
+
+        string json = SceneSerializer.Serialize(new[] { obj });
+        var loaded = SceneSerializer.Deserialize(json, new PhysicsEngine(), new ScriptCompiler(CreateTempProject()))[0];
+        var loadedMat = loaded.GetComponent<Material>()!;
+
+        AssertEqual(MaterialSurfaceType.Cutout, loadedMat.SurfaceType, "cutout surface type");
+        AssertNear(0.42f, loadedMat.AlphaClipThreshold, "alpha clip threshold");
+        AssertNear(1f, loadedMat.Alpha, "cutout alpha stays opaque");
+        AssertNear(0f, loadedMat.RefractionStrength, "cutout refraction off");
+        AssertNear(0f, loadedMat.DistortionStrength, "cutout distortion off");
     }
 
     private static void SceneSerializerPreservesBoneAttachment()
@@ -2167,6 +2204,41 @@ internal static class Program
         AssertNear(1f, profile!.AngularFalloff[0], "averaged horizontal angles peak at 0 deg");
     }
 
+    private static void ClusteredLightingComputesGridAndClusterIndex()
+    {
+        var settings = new ClusteredLightingSettings(TileSize: 16, DepthSlices: 24, MaxLightsPerCluster: 64);
+        var grid = ClusteredLighting.ComputeGrid(1920, 1080, settings);
+
+        AssertEqual(120, grid.TileCountX, "1920px at 16px/tile -> 120 tiles X");
+        AssertEqual(68, grid.TileCountY, "1080px at 16px/tile rounds up to 68 tiles Y");
+        AssertEqual(24, grid.DepthSlices, "depth slice count preserved");
+        AssertEqual(120 * 68 * 24, grid.ClusterCount, "cluster count = X * Y * Z");
+
+        int first = ClusteredLighting.ComputeClusterIndex(0, 0, 0.1f, 1920, 1080, 0.1f, 1000f, settings);
+        int clamped = ClusteredLighting.ComputeClusterIndex(-100, -100, 0.001f, 1920, 1080, 0.1f, 1000f, settings);
+        AssertEqual(first, clamped, "negative pixel/depth inputs clamp to first cluster");
+
+        int far = ClusteredLighting.ComputeClusterIndex(1919, 1079, 1000f, 1920, 1080, 0.1f, 1000f, settings);
+        AssertEqual(grid.ClusterCount - 1, far, "bottom-right far depth maps to final cluster");
+    }
+
+    private static void ClusteredLightingNormalizesSettingsAndClampsDepth()
+    {
+        var normalized = new ClusteredLightingSettings(TileSize: 1, DepthSlices: 999, MaxLightsPerCluster: 2).Normalize();
+        AssertEqual(8, normalized.TileSize, "tile size clamps to minimum");
+        AssertEqual(64, normalized.DepthSlices, "depth slices clamp to maximum");
+        AssertEqual(8, normalized.MaxLightsPerCluster, "max lights per cluster clamps to minimum");
+
+        int nearSlice = ClusteredLighting.ComputeDepthSlice(0.01f, 0.3f, 500f, 24);
+        int farSlice = ClusteredLighting.ComputeDepthSlice(10000f, 0.3f, 500f, 24);
+        AssertEqual(0, nearSlice, "depth before near plane clamps to first slice");
+        AssertEqual(23, farSlice, "depth beyond far plane clamps to last slice");
+
+        int close = ClusteredLighting.ComputeDepthSlice(1f, 0.1f, 1000f, 24);
+        int mid = ClusteredLighting.ComputeDepthSlice(100f, 0.1f, 1000f, 24);
+        AssertTrue(mid > close, "logarithmic depth slices increase monotonically");
+    }
+
     private static void SceneSerializerPreservesContactShadowSettings()
     {
         var physics = new PhysicsEngine();
@@ -2219,6 +2291,7 @@ internal static class Program
         terrain.TreeDistance = 300f;
         terrain.BillboardStart = 45f;
         terrain.MaxMeshTrees = 750;
+        terrain.TreeCellSize = 24f;
 
         string json = SceneSerializer.Serialize(new[] { obj });
         var loaded = SceneSerializer.Deserialize(json, physics, scripts);
@@ -2234,6 +2307,7 @@ internal static class Program
         AssertNear(300f, loadedTerrain.TreeDistance, "tree distance restored");
         AssertNear(45f, loadedTerrain.BillboardStart, "billboard start restored");
         AssertEqual(750, loadedTerrain.MaxMeshTrees, "max mesh trees restored");
+        AssertNear(24f, loadedTerrain.TreeCellSize, "tree cell size restored");
     }
 
     private static void PhysicsEngineFiresTriggerExitWhenOtherObjectDestroyed()
@@ -2317,7 +2391,242 @@ internal static class Program
         AssertEqual(2, terrain.Resolution, "resolution clamps up to the minimum of 2");
 
         terrain.Resolution = 5000;
-        AssertEqual(512, terrain.Resolution, "resolution clamps down to the documented max of 512");
+        AssertEqual(2049, terrain.Resolution, "resolution clamps down to the documented max of 2049");
+    }
+
+    private static Terrain CreateNoisyTerrain(int resolution, int seed)
+    {
+        var terrain = new Terrain { Resolution = resolution, SizeX = 100f, SizeZ = 100f, HeightScale = 10f };
+        var rng = new System.Random(seed);
+        for (int i = 0; i < terrain.Heightmap.Length; i++)
+            terrain.Heightmap[i] = (float)(rng.NextDouble() * 4.0 - 2.0);
+        return terrain;
+    }
+
+    private static void TerrainQuadTreeBuildsMinMaxPyramid()
+    {
+        var terrain = new Terrain { Resolution = 65 };
+        for (int i = 0; i < terrain.Heightmap.Length; i++) terrain.Heightmap[i] = 0.5f;
+        terrain.Heightmap[10 * 65 + 10] = 2f;  // dentro de la hoja (0,0)
+        terrain.Heightmap[40 * 65 + 40] = -2f; // dentro de la hoja (1,1)
+
+        var tree = new TerrainQuadTree();
+        tree.Build(terrain);
+
+        AssertEqual(64, tree.RootQuads, "root cubre los 64 quads");
+        AssertEqual(2, tree.LodLevels, "65x65 = 2 niveles (hojas de 32 + raiz)");
+
+        tree.GetNodeHeightBounds(0, 0, 0, out float min00, out float max00);
+        AssertNear(0.5f, min00, "min hoja (0,0)");
+        AssertNear(2f, max00, "max hoja (0,0) ve el pico");
+
+        tree.GetNodeHeightBounds(0, 1, 1, out float min11, out float max11);
+        AssertNear(-2f, min11, "min hoja (1,1) ve el pozo");
+        AssertNear(0.5f, max11, "max hoja (1,1)");
+
+        tree.GetRootHeightBounds(out float rootMin, out float rootMax);
+        AssertNear(-2f, rootMin, "min raiz agrega hijos");
+        AssertNear(2f, rootMax, "max raiz agrega hijos");
+    }
+
+    private static void TerrainQuadTreeUpdateRegionMatchesFullRebuild()
+    {
+        var terrain = CreateNoisyTerrain(129, seed: 7);
+        var incremental = new TerrainQuadTree();
+        incremental.Build(terrain);
+
+        // Simula una pincelada: cambia un rect y actualiza solo esa region.
+        var rng = new System.Random(99);
+        for (int z = 20; z <= 50; z++)
+            for (int x = 10; x <= 40; x++)
+                terrain.Heightmap[z * 129 + x] = (float)(rng.NextDouble() * 4.0 - 2.0);
+        incremental.UpdateRegion(terrain, 10, 20, 40, 50);
+
+        var full = new TerrainQuadTree();
+        full.Build(terrain);
+
+        for (int level = 0; level < full.LodLevels; level++)
+        {
+            int side = full.LeavesPerSide >> level;
+            for (int z = 0; z < side; z++)
+            {
+                for (int x = 0; x < side; x++)
+                {
+                    full.GetNodeHeightBounds(level, x, z, out float em, out float eM);
+                    incremental.GetNodeHeightBounds(level, x, z, out float am, out float aM);
+                    AssertNear(em, am, $"min nivel {level} nodo ({x},{z})");
+                    AssertNear(eM, aM, $"max nivel {level} nodo ({x},{z})");
+                }
+            }
+        }
+    }
+
+    private static void TerrainQuadTreeSelectionCoversTerrainWithoutOverlap()
+    {
+        var terrain = CreateNoisyTerrain(129, seed: 3);
+        var tree = new TerrainQuadTree();
+        tree.Build(terrain);
+
+        float lodRange0 = TerrainQuadTree.ComputeLodRange0(terrain);
+        var selected = new List<SelectedTerrainNode>();
+        // Camara cerca de una esquina, sin frustum (null = sin culling) para exigir cobertura total.
+        tree.SelectNodes(terrain, new Vector3(-45f, 5f, -45f), lodRange0, null, selected);
+
+        AssertTrue(selected.Count > 0, "seleccion no vacia");
+
+        // Granularidad minima de cobertura: medio nodo hoja (un cuadrante de 32 quads = 16).
+        int gran = TerrainQuadTree.LeafQuads / 2;
+        int side = tree.RootQuads / gran;
+        var covered = new bool[side * side];
+        foreach (var node in selected)
+        {
+            int half = node.Size / 2;
+            for (int q = 0; q < 4; q++)
+            {
+                if ((node.QuadrantMask & (1 << q)) == 0)
+                    continue;
+                int qx0 = (node.X + (q & 1) * half) / gran;
+                int qz0 = (node.Z + (q >> 1) * half) / gran;
+                int qCells = half / gran;
+                for (int z = qz0; z < qz0 + qCells; z++)
+                {
+                    for (int x = qx0; x < qx0 + qCells; x++)
+                    {
+                        int idx = z * side + x;
+                        AssertFalse(covered[idx], $"celda ({x},{z}) cubierta dos veces");
+                        covered[idx] = true;
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < covered.Length; i++)
+            AssertTrue(covered[i], $"celda {i} sin cubrir");
+    }
+
+    private static void TerrainQuadTreeSelectionIsDeterministicAndDistanceDependent()
+    {
+        var terrain = CreateNoisyTerrain(257, seed: 11);
+        var tree = new TerrainQuadTree();
+        tree.Build(terrain);
+        float lodRange0 = TerrainQuadTree.ComputeLodRange0(terrain);
+
+        var camera = new Vector3(-48f, 2f, -48f);
+        var a = new List<SelectedTerrainNode>();
+        var b = new List<SelectedTerrainNode>();
+        tree.SelectNodes(terrain, camera, lodRange0, null, a);
+        tree.SelectNodes(terrain, camera, lodRange0, null, b);
+
+        AssertEqual(a.Count, b.Count, "misma cantidad de nodos en dos selecciones iguales");
+        for (int i = 0; i < a.Count; i++)
+        {
+            AssertEqual(a[i].X, b[i].X, $"nodo {i} X");
+            AssertEqual(a[i].Z, b[i].Z, $"nodo {i} Z");
+            AssertEqual(a[i].Size, b[i].Size, $"nodo {i} Size");
+            AssertEqual(a[i].LodLevel, b[i].LodLevel, $"nodo {i} LodLevel");
+            AssertEqual(a[i].QuadrantMask, b[i].QuadrantMask, $"nodo {i} QuadrantMask");
+        }
+
+        // Con la camara en la esquina (-x,-z), los nodos lejanos (esquina opuesta) deben salir a
+        // nivel mas grueso que los cercanos: la densidad de triangulos depende de la distancia.
+        int nearLevel = int.MaxValue, farLevel = -1;
+        foreach (var node in a)
+        {
+            bool near = node.X < 64 && node.Z < 64;
+            bool far = node.X + node.Size > 192 && node.Z + node.Size > 192;
+            if (near) nearLevel = Math.Min(nearLevel, node.LodLevel);
+            if (far) farLevel = Math.Max(farLevel, node.LodLevel);
+        }
+        AssertTrue(nearLevel < farLevel, $"LOD cerca ({nearLevel}) mas fino que lejos ({farLevel})");
+    }
+
+    private static void TerrainNormalBakerMatchesMeshGeneratorNormals()
+    {
+        var terrain = CreateNoisyTerrain(17, seed: 5);
+        var baked = TerrainNormalBaker.BakeAll(terrain);
+        var mesh = TerrainMeshGenerator.Generate(terrain);
+
+        int res = terrain.Resolution;
+        // El primer vertice del primer triangulo del quad (x,z) es exactamente el vertice (x,z),
+        // asi que las normales del soup del generador se pueden comparar 1 a 1 contra el bake.
+        for (int z = 0; z < res - 1; z++)
+        {
+            for (int x = 0; x < res - 1; x++)
+            {
+                int tri = (z * (res - 1) + x) * 2;
+                float nx = mesh.Normals[tri * 9 + 0];
+                float ny = mesh.Normals[tri * 9 + 1];
+                float nz = mesh.Normals[tri * 9 + 2];
+
+                int o = (z * res + x) * TerrainNormalBaker.BytesPerTexel;
+                float bx = baked[o + 0] / 255f * 2f - 1f;
+                float by = baked[o + 1] / 255f * 2f - 1f;
+                float bz = baked[o + 2] / 255f * 2f - 1f;
+
+                // Tolerancia por la cuantizacion a 8 bits del bake.
+                AssertNear(nx, bx, $"normal X en ({x},{z})", 0.02f);
+                AssertNear(ny, by, $"normal Y en ({x},{z})", 0.02f);
+                AssertNear(nz, bz, $"normal Z en ({x},{z})", 0.02f);
+            }
+        }
+    }
+
+    private static void TerrainMarkDirtyRegionUnionsAndConsumes()
+    {
+        var terrain = new Terrain { Resolution = 65 };
+        int v0 = terrain.Version;
+
+        AssertFalse(terrain.ConsumeDirtyRegion(out _, out _, out _, out _), "sin region al inicio");
+
+        terrain.MarkDirtyRegion(5, 10, 15, 20);
+        terrain.MarkDirtyRegion(12, 2, 30, 8);
+        AssertEqual(v0 + 2, terrain.Version, "cada marca bumpea Version");
+        AssertTrue(terrain.HasDirtyRegion, "hay region pendiente");
+
+        AssertTrue(terrain.ConsumeDirtyRegion(out int minX, out int minZ, out int maxX, out int maxZ), "consume la region");
+        AssertEqual(5, minX, "union minX");
+        AssertEqual(2, minZ, "union minZ");
+        AssertEqual(30, maxX, "union maxX");
+        AssertEqual(20, maxZ, "union maxZ");
+        AssertFalse(terrain.HasDirtyRegion, "consumir resetea");
+
+        // Fuera de rango se clampea; un rect invertido tras clamp no marca nada.
+        terrain.MarkDirtyRegion(-10, -10, 200, 200);
+        AssertTrue(terrain.ConsumeDirtyRegion(out minX, out minZ, out maxX, out maxZ), "region clampeada");
+        AssertEqual(0, minX, "clamp minX");
+        AssertEqual(64, maxX, "clamp maxX");
+
+        // Cambiar Resolution invalida la region pendiente (coords viejas no sirven).
+        terrain.MarkDirtyRegion(1, 1, 2, 2);
+        terrain.Resolution = 129;
+        AssertFalse(terrain.HasDirtyRegion, "cambio de resolucion descarta la region");
+    }
+
+    private static void TerrainMeshGeneratorStrideDecimatesCollisionMesh()
+    {
+        var terrain = CreateNoisyTerrain(129, seed: 21);
+
+        var full = TerrainMeshGenerator.Generate(terrain);
+        var half = TerrainMeshGenerator.Generate(terrain, stride: 2);
+
+        AssertEqual((129 - 1) * (129 - 1) * 2, full.TriangleCount, "malla completa sin decimar");
+        AssertEqual(64 * 64 * 2, half.TriangleCount, "stride 2 => 64x64 quads");
+
+        // La malla decimada debe cubrir exactamente el mismo rectangulo que la completa.
+        float minX = float.MaxValue, maxX = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
+        for (int v = 0; v < half.Positions.Length / 3; v++)
+        {
+            minX = MathF.Min(minX, half.Positions[v * 3 + 0]);
+            maxX = MathF.Max(maxX, half.Positions[v * 3 + 0]);
+            minZ = MathF.Min(minZ, half.Positions[v * 3 + 2]);
+            maxZ = MathF.Max(maxZ, half.Positions[v * 3 + 2]);
+        }
+        AssertNear(-terrain.SizeX * 0.5f, minX, "borde -X cubierto");
+        AssertNear(terrain.SizeX * 0.5f, maxX, "borde +X cubierto");
+        AssertNear(-terrain.SizeZ * 0.5f, minZ, "borde -Z cubierto");
+        AssertNear(terrain.SizeZ * 0.5f, maxZ, "borde +Z cubierto");
+
+        // Las alturas decimadas son muestras reales del heightmap (celdas pares).
+        AssertNear(terrain.GetHeight(0, 0) * terrain.HeightScale, half.Positions[1], "altura de la esquina intacta");
     }
 
     private static void TerrainColliderSamplesHeightAndBounds()
@@ -2431,7 +2740,7 @@ internal static class Program
     {
         var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
         terrain.TreePrototypes.Add("tree.fbx");
-        var rng = new Random(1234);
+        var rng = new System.Random(1234);
 
         bool changed = TerrainTreeBrush.Paint(terrain, prototypeIndex: 0, localX: 0f, localZ: 0f, radius: 2f,
             density: 5f, deltaTime: 1f, rng, minSpacing: 0.3f);
@@ -2449,7 +2758,7 @@ internal static class Program
     private static void TerrainTreeBrushPaintFailsWithoutPrototypes()
     {
         var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
-        var rng = new Random(1);
+        var rng = new System.Random(1);
 
         bool changed = TerrainTreeBrush.Paint(terrain, prototypeIndex: 0, localX: 0f, localZ: 0f, radius: 2f,
             density: 5f, deltaTime: 1f, rng);
@@ -2479,7 +2788,7 @@ internal static class Program
     {
         var terrain = new Terrain { Resolution = 33, SizeX = 200f, SizeZ = 200f };
         terrain.TreePrototypes.Add("tree.fbx");
-        var seedRng = new Random(42);
+        var seedRng = new System.Random(42);
         for (int i = 0; i < 500; i++)
         {
             terrain.Trees.Add(new TerrainTreeInstance
@@ -2494,7 +2803,7 @@ internal static class Program
         // deberia poder, aunque los otros 499 esten en cualquier otra celda de la grilla.
         var target = terrain.Trees[250];
         int countBefore = terrain.Trees.Count;
-        var rng = new Random(7);
+        var rng = new System.Random(7);
         for (int i = 0; i < 20; i++)
             TerrainTreeBrush.Paint(terrain, prototypeIndex: 0, localX: target.LocalX, localZ: target.LocalZ,
                 radius: 0.05f, density: 1000f, deltaTime: 1f, rng, minSpacing: 5f);
@@ -2502,11 +2811,71 @@ internal static class Program
         AssertEqual(countBefore, terrain.Trees.Count, "planting right on top of an existing tree is blocked by min spacing even with hundreds of unrelated trees in the grid");
     }
 
+    private static void TerrainTreeLodClassifiesMeshBillboardAndCulledTrees()
+    {
+        var terrain = new Terrain { TreeDistance = 30f, BillboardStart = 10f, MaxMeshTrees = 8, TreeCellSize = 8f };
+        terrain.TreePrototypes.Add("tree.fbx");
+        terrain.Trees.Add(new TerrainTreeInstance { LocalX = 2f, LocalZ = 0f, Scale = 1f, PrototypeIndex = 0 });
+        terrain.Trees.Add(new TerrainTreeInstance { LocalX = 12f, LocalZ = 0f, Scale = 1f, PrototypeIndex = 0 });
+        terrain.Trees.Add(new TerrainTreeInstance { LocalX = 40f, LocalZ = 0f, Scale = 1f, PrototypeIndex = 0 });
+
+        var result = GrokoEngine.Rendering.TerrainTreeLod.Classify(terrain, Vector3.Zero);
+
+        AssertEqual(1, result.MeshCount, "near tree stays as mesh");
+        AssertEqual(1, result.BillboardCount, "mid tree becomes billboard");
+        AssertEqual(1, result.CulledCount, "far tree gets culled");
+        AssertEqual(2, result.Decisions.Count, "only visible trees produce render decisions");
+        AssertEqual(GrokoEngine.Rendering.TerrainTreeRenderMode.Mesh, result.Decisions[0].Mode, "closest visible tree is mesh after ranking");
+        AssertEqual(GrokoEngine.Rendering.TerrainTreeRenderMode.Billboard, result.Decisions[1].Mode, "second visible tree is billboard after ranking");
+    }
+
+    private static void TerrainTreeLodRespectsMaxMeshTreeBudget()
+    {
+        var terrain = new Terrain { TreeDistance = 100f, BillboardStart = 100f, MaxMeshTrees = 2, TreeCellSize = 16f };
+        terrain.TreePrototypes.Add("tree.fbx");
+        for (int i = 0; i < 5; i++)
+            terrain.Trees.Add(new TerrainTreeInstance { LocalX = i + 1f, LocalZ = 0f, Scale = 1f, PrototypeIndex = 0 });
+
+        var result = GrokoEngine.Rendering.TerrainTreeLod.Classify(terrain, Vector3.Zero);
+
+        AssertEqual(2, result.MeshCount, "only the closest trees consume the mesh budget");
+        AssertEqual(3, result.BillboardCount, "visible trees outside the mesh budget become billboards");
+        AssertEqual(0, result.CulledCount, "all trees are inside TreeDistance");
+    }
+
+    private static void TerrainTreeLodComputesStableCells()
+    {
+        var terrain = new Terrain { TreeDistance = 100f, BillboardStart = 10f, MaxMeshTrees = 1, TreeCellSize = 10f };
+        terrain.TreePrototypes.Add("tree.fbx");
+        terrain.Trees.Add(new TerrainTreeInstance { LocalX = 0.1f, LocalZ = 0.1f, Scale = 1f, PrototypeIndex = 0 });
+        terrain.Trees.Add(new TerrainTreeInstance { LocalX = 19.9f, LocalZ = -0.1f, Scale = 1f, PrototypeIndex = 0 });
+
+        var result = GrokoEngine.Rendering.TerrainTreeLod.Classify(terrain, Vector3.Zero);
+
+        AssertEqual(2, result.VisibleCellCount, "visible trees occupy two terrain cells");
+        AssertEqual(0, result.Decisions[0].CellX, "first cell X is stable");
+        AssertEqual(0, result.Decisions[0].CellZ, "first cell Z is stable");
+        AssertEqual(1, result.Decisions[1].CellX, "second cell X is stable");
+        AssertEqual(-1, result.Decisions[1].CellZ, "negative local Z maps to negative cell");
+    }
+
+    private static void TerrainTreeLodComputesConservativeCellBounds()
+    {
+        var center = GrokoEngine.Rendering.TerrainTreeLod.ComputeCellCenter(cellX: 2, cellZ: -1, cellSize: 16f, heightScale: 20f);
+        float radius = GrokoEngine.Rendering.TerrainTreeLod.ComputeConservativeCellRadius(cellSize: 16f, heightScale: 20f);
+
+        AssertNear(40f, center.X, "cell center X");
+        AssertNear(10f, center.Y, "cell center Y uses terrain height half");
+        AssertNear(-8f, center.Z, "cell center Z");
+        AssertTrue(radius > 36f, "radius includes vertical tree margin");
+        AssertTrue(radius < 40f, "radius stays conservative without exploding");
+    }
+
     private static void TerrainDetailBrushPlantsWithinRadius()
     {
         var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
         terrain.DetailPrototypes.Add(new TerrainDetailPrototype { TexturePath = "grass.png", Width = 0.5f, Height = 0.5f });
-        var rng = new Random(1234);
+        var rng = new System.Random(1234);
 
         bool changed = TerrainDetailBrush.Paint(terrain, prototypeIndex: 0, localX: 0f, localZ: 0f, radius: 2f,
             density: 20f, deltaTime: 1f, rng);
@@ -2524,7 +2893,7 @@ internal static class Program
     private static void TerrainDetailBrushPaintFailsWithoutPrototypes()
     {
         var terrain = new Terrain { Resolution = 9, SizeX = 8f, SizeZ = 8f };
-        var rng = new Random(1);
+        var rng = new System.Random(1);
 
         bool changed = TerrainDetailBrush.Paint(terrain, prototypeIndex: 0, localX: 0f, localZ: 0f, radius: 2f,
             density: 20f, deltaTime: 1f, rng);
@@ -2553,7 +2922,7 @@ internal static class Program
         for (int i = 0; i < Terrain.MaxDetailInstances; i++)
             terrain.Details.Add(new TerrainDetailInstance { LocalX = 0f, LocalZ = 0f, Scale = 1f });
 
-        var rng = new Random(1);
+        var rng = new System.Random(1);
         bool changed = TerrainDetailBrush.Paint(terrain, prototypeIndex: 0, localX: 0f, localZ: 0f, radius: 2f,
             density: 1000f, deltaTime: 1f, rng);
 
@@ -2660,6 +3029,30 @@ internal static class Program
         AssertEqual("neighbor-right", loadedTerrain.RightNeighborId ?? "", "right neighbor id restored");
         AssertEqual("neighbor-top", loadedTerrain.TopNeighborId ?? "", "top neighbor id restored");
         AssertEqual("neighbor-bottom", loadedTerrain.BottomNeighborId ?? "", "bottom neighbor id restored");
+    }
+
+    private static void SceneSerializerPreservesTerrainShadingSettings()
+    {
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets"));
+        var obj = new GameObject { Name = "TileShading" };
+        var terrain = obj.AddComponent<Terrain>();
+        terrain.BlendSharpness = 0.8f;
+        terrain.TriplanarSteepSlopes = true;
+        terrain.DetailTilingBreakupDistance = 120f;
+        terrain.LodDetailBalance = 1.5f;
+        terrain.DrawSkirts = false;
+
+        string json = SceneSerializer.Serialize(new[] { obj });
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts);
+        var loadedTerrain = loaded[0].GetComponent<Terrain>()!;
+
+        AssertNear(0.8f, loadedTerrain.BlendSharpness, "blend sharpness restored");
+        AssertTrue(loadedTerrain.TriplanarSteepSlopes, "triplanar restored");
+        AssertNear(120f, loadedTerrain.DetailTilingBreakupDistance, "anti-tiling distance restored");
+        AssertNear(1.5f, loadedTerrain.LodDetailBalance, "lod balance restored");
+        AssertFalse(loadedTerrain.DrawSkirts, "skirts flag restored");
+        AssertEqual(4, loadedTerrain.LayerNormalTextures.Length, "layer normal slots present");
     }
 
     private static void SceneManagerResolveScenePathFindsSceneByName()
@@ -3747,6 +4140,7 @@ internal static class Program
         cam.SensorHeightMm = 18f;
         cam.OrthographicSize = 12.5f;
         cam.PostProcessing = false;
+        cam.RenderingPath = CameraRenderingPath.Deferred;
         cam.AntiAliasingMode = CameraAntiAliasingMode.SMAA;
         cam.AntiAliasingSamples = 8;
         cam.StopNaNs = true;
@@ -3771,6 +4165,7 @@ internal static class Program
         AssertNear(18f, loadedCam.SensorHeightMm, "camera sensor height restored");
         AssertNear(12.5f, loadedCam.OrthographicSize, "camera ortho size restored");
         AssertFalse(loadedCam.PostProcessing, "camera post processing restored");
+        AssertEqual(CameraRenderingPath.Deferred, loadedCam.RenderingPath, "camera rendering path restored");
         AssertEqual(CameraAntiAliasingMode.SMAA, loadedCam.AntiAliasingMode, "camera aa mode restored");
         AssertEqual(8, loadedCam.AntiAliasingSamples, "camera aa samples restored");
         AssertTrue(loadedCam.StopNaNs, "camera stop nans restored");
@@ -3781,6 +4176,65 @@ internal static class Program
         AssertEqual(CameraTextureMode.Off, loadedCam.DepthTexture, "camera depth texture restored");
         AssertEqual("Default", loadedCam.CullingMask, "camera culling mask restored");
         AssertTrue(loadedCam.OcclusionCulling, "camera occlusion restored");
+    }
+
+    private static void SceneSerializerPreservesReflectionProbeSettings()
+    {
+        var physics = new PhysicsEngine();
+        string assets = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets");
+        Directory.CreateDirectory(assets);
+        var scripts = new ScriptCompiler(assets);
+
+        string cubemap = Path.Combine(assets, "Studio.cubemap");
+        File.WriteAllText(cubemap, "{}");
+
+        var obj = new GameObject { Name = "Reflection Probe" };
+        var probe = obj.AddComponent<ReflectionProbe>();
+        probe.Mode = ReflectionProbeMode.Custom;
+        probe.CustomCubemapPath = cubemap;
+        probe.Intensity = 1.75f;
+        probe.BlendDistance = 3.5f;
+        probe.SizeX = 12f;
+        probe.SizeY = 8f;
+        probe.SizeZ = 16f;
+        probe.CenterX = 1f;
+        probe.CenterY = 2f;
+        probe.CenterZ = 3f;
+        probe.Resolution = 256;
+        probe.NearClip = 0.2f;
+        probe.FarClip = 250f;
+        probe.Importance = 4;
+        probe.BoxProjection = false;
+        probe.HDR = false;
+        probe.RefreshMode = ReflectionProbeRefreshMode.EveryFrame;
+        probe.TimeSlicing = ReflectionProbeTimeSlicing.AllFacesAtOnce;
+
+        string scenePath = Path.Combine(Directory.GetParent(assets)!.FullName, "ReflectionProbe.gscene");
+        SceneSerializer.Save(scenePath, new[] { obj });
+        string json = File.ReadAllText(scenePath);
+        AssertContains(json, "ReflectionProbe", "reflection probe serialized");
+        AssertContains(json, "CustomCubemapPath", "reflection probe cubemap path serialized");
+
+        var loaded = SceneSerializer.Load(scenePath, physics, scripts);
+        var loadedProbe = loaded[0].GetComponent<ReflectionProbe>()!;
+        AssertEqual(ReflectionProbeMode.Custom, loadedProbe.Mode, "reflection probe mode restored");
+        AssertEqual(cubemap, loadedProbe.CustomCubemapPath, "reflection probe custom cubemap restored");
+        AssertNear(1.75f, loadedProbe.Intensity, "reflection probe intensity restored");
+        AssertNear(3.5f, loadedProbe.BlendDistance, "reflection probe blend distance restored");
+        AssertNear(12f, loadedProbe.SizeX, "reflection probe size x restored");
+        AssertNear(8f, loadedProbe.SizeY, "reflection probe size y restored");
+        AssertNear(16f, loadedProbe.SizeZ, "reflection probe size z restored");
+        AssertNear(1f, loadedProbe.CenterX, "reflection probe center x restored");
+        AssertNear(2f, loadedProbe.CenterY, "reflection probe center y restored");
+        AssertNear(3f, loadedProbe.CenterZ, "reflection probe center z restored");
+        AssertEqual(256, loadedProbe.Resolution, "reflection probe resolution restored");
+        AssertNear(0.2f, loadedProbe.NearClip, "reflection probe near clip restored");
+        AssertNear(250f, loadedProbe.FarClip, "reflection probe far clip restored");
+        AssertEqual(4, loadedProbe.Importance, "reflection probe importance restored");
+        AssertFalse(loadedProbe.BoxProjection, "reflection probe box projection restored");
+        AssertFalse(loadedProbe.HDR, "reflection probe hdr restored");
+        AssertEqual(ReflectionProbeRefreshMode.EveryFrame, loadedProbe.RefreshMode, "reflection probe refresh mode restored");
+        AssertEqual(ReflectionProbeTimeSlicing.AllFacesAtOnce, loadedProbe.TimeSlicing, "reflection probe time slicing restored");
     }
 
     private sealed class TestCommand : ISceneCommand

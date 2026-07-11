@@ -44,26 +44,26 @@ namespace GrokoEngine
     {
         private int _resolution = 33;
 
-        // Tope subido de 256 a 512 (256x256 -> 512x512 celdas). Por qué no más: el mesh se
-        // regenera ENTERO (formato no indexado, 2 triángulos por celda) en cada trazo de sculpt/
-        // paint, así que la resolución máxima está limitada por cuánto aguanta reconstruirse a
-        // 60fps mientras se edita en vivo, no por memoria. A 512 ya es notablemente más pesado
-        // que el viejo tope de 256; ir más alto (1024+, donde Unity realmente empieza a partir el
-        // terreno en patches/chunks con LOD) necesitaría ese chunking — reconstruir solo la
-        // región tocada por el pincel, no el terreno completo — que todavía no existe acá.
+        // Tope 2049 (estilo Unity): el render ya no reconstruye una malla CPU por pincelada — el
+        // heightmap vive como textura en GPU y el vertex shader desplaza una rejilla compartida
+        // (CDLOD), así que esculpir solo re-sube el rect tocado con glTexSubImage2D. El límite
+        // ahora es memoria/bake de normales, no la reconstrucción de malla.
         public int Resolution
         {
             get => _resolution;
             set
             {
-                int v = Math.Clamp(value, 2, 512);
+                int v = Math.Clamp(value, 2, 2049);
                 if (v == _resolution)
                     return;
                 _resolution = v;
                 EnsureHeightmapSize();
                 EnsureSplatMapSize();
+                HasDirtyRegion = false; // coords viejas ya no valen: forzar re-subida completa
+                HasSplatDirtyRegion = false;
                 Version++;
                 SplatVersion++;
+                CollisionVersion++;
             }
         }
 
@@ -76,6 +76,29 @@ namespace GrokoEngine
         // Hasta 4 capas de textura pintables (rutas, pueden ser null/"") y su tiling (repeticiones de UV).
         public string[] LayerTextures = { "", "", "", "" };
         public float[] LayerTiling = new float[4] { 1f, 1f, 1f, 1f };
+
+        // Normal map opcional por capa (misma convención de rutas que LayerTextures).
+        public string[] LayerNormalTextures = { "", "", "", "" };
+
+        // Nitidez del height-based blending entre capas del splat (0 = mezcla lineal clásica,
+        // 1 = transiciones duras donde "gana" la textura con más altura aparente).
+        public float BlendSharpness = 0.35f;
+
+        // Proyección triplanar en pendientes empinadas (evita el estirado de UV en paredes).
+        // Cuesta 3 fetches extra por capa donde se activa, por eso es opcional.
+        public bool TriplanarSteepSlopes = false;
+
+        // A partir de esta distancia se mezcla cada capa consigo misma a un tiling distinto para
+        // romper la repetición visible de lejos. 0 = desactivado.
+        public float DetailTilingBreakupDistance = 40f;
+
+        // Multiplicador del rango base de LOD (CDLOD): >1 = más detalle a más distancia (más
+        // triángulos), <1 = LOD más agresivo (más rendimiento).
+        public float LodDetailBalance = 1f;
+
+        // Faldas: cada nodo LOD baja una tira de vértices en su borde para tapar cualquier grieta
+        // residual (sobre todo entre dos Terrain vecinos que eligen LODs distintos en la unión).
+        public bool DrawSkirts = true;
 
         // Mapa de pesos por capa (RGBA, uno por celda del heightmap, row-major). Por defecto 100% capa 0.
         public byte[] SplatMap = Array.Empty<byte>();
@@ -106,6 +129,7 @@ namespace GrokoEngine
         public float TreeDistance = 250f;
         public float BillboardStart = 80f;
         public int MaxMeshTrees = 1500;
+        public float TreeCellSize = 32f;
 
         // Detalles/pasto plantables (estilo Unity "Detail Prototypes"). Sin límite de cantidad
         // "malla vs billboard" como los árboles porque SIEMPRE son billboard; en cambio Unity
@@ -126,6 +150,113 @@ namespace GrokoEngine
         // (Resolution, SizeX/Z, HeightScale o el propio Heightmap).
         // El renderer usa esto para saber cuándo regenerar/reasubir el mesh a la GPU.
         public int Version;
+
+        // Región sucia del heightmap (rect inclusivo en coordenadas de celda) acumulada desde la
+        // última vez que el renderer la consumió. Si Version cambió y NO hay región pendiente
+        // (undo, carga de escena, import, cambio de Resolution), el renderer re-sube todo.
+        public bool HasDirtyRegion { get; private set; }
+        public int DirtyMinX { get; private set; }
+        public int DirtyMinZ { get; private set; }
+        public int DirtyMaxX { get; private set; }
+        public int DirtyMaxZ { get; private set; }
+
+        // Marca una región de celdas como modificada (une con la pendiente) y bumpea Version.
+        // Los brushes/el editor llaman esto EN VEZ de incrementar Version a mano, así el renderer
+        // puede subir solo el rect tocado en lugar del heightmap completo.
+        public void MarkDirtyRegion(int minX, int minZ, int maxX, int maxZ)
+        {
+            minX = Math.Clamp(minX, 0, _resolution - 1);
+            minZ = Math.Clamp(minZ, 0, _resolution - 1);
+            maxX = Math.Clamp(maxX, 0, _resolution - 1);
+            maxZ = Math.Clamp(maxZ, 0, _resolution - 1);
+            if (maxX < minX || maxZ < minZ)
+                return;
+
+            if (HasDirtyRegion)
+            {
+                DirtyMinX = Math.Min(DirtyMinX, minX);
+                DirtyMinZ = Math.Min(DirtyMinZ, minZ);
+                DirtyMaxX = Math.Max(DirtyMaxX, maxX);
+                DirtyMaxZ = Math.Max(DirtyMaxZ, maxZ);
+            }
+            else
+            {
+                HasDirtyRegion = true;
+                DirtyMinX = minX;
+                DirtyMinZ = minZ;
+                DirtyMaxX = maxX;
+                DirtyMaxZ = maxZ;
+            }
+            Version++;
+        }
+
+        // El renderer llama esto tras subir la región a GPU. Devuelve false si no había región
+        // pendiente (en ese caso, ante un cambio de Version corresponde re-subida completa).
+        public bool ConsumeDirtyRegion(out int minX, out int minZ, out int maxX, out int maxZ)
+        {
+            minX = DirtyMinX;
+            minZ = DirtyMinZ;
+            maxX = DirtyMaxX;
+            maxZ = DirtyMaxZ;
+            bool had = HasDirtyRegion;
+            HasDirtyRegion = false;
+            return had;
+        }
+
+        // Región sucia del SplatMap (pintura de capas), mismo contrato que la del heightmap:
+        // marcar bumpea SplatVersion y el renderer sube solo el rect; SplatVersion cambiado sin
+        // región pendiente = re-subida completa de la textura splat.
+        public bool HasSplatDirtyRegion { get; private set; }
+        public int SplatDirtyMinX { get; private set; }
+        public int SplatDirtyMinZ { get; private set; }
+        public int SplatDirtyMaxX { get; private set; }
+        public int SplatDirtyMaxZ { get; private set; }
+
+        public void MarkSplatDirtyRegion(int minX, int minZ, int maxX, int maxZ)
+        {
+            minX = Math.Clamp(minX, 0, _resolution - 1);
+            minZ = Math.Clamp(minZ, 0, _resolution - 1);
+            maxX = Math.Clamp(maxX, 0, _resolution - 1);
+            maxZ = Math.Clamp(maxZ, 0, _resolution - 1);
+            if (maxX < minX || maxZ < minZ)
+                return;
+
+            if (HasSplatDirtyRegion)
+            {
+                SplatDirtyMinX = Math.Min(SplatDirtyMinX, minX);
+                SplatDirtyMinZ = Math.Min(SplatDirtyMinZ, minZ);
+                SplatDirtyMaxX = Math.Max(SplatDirtyMaxX, maxX);
+                SplatDirtyMaxZ = Math.Max(SplatDirtyMaxZ, maxZ);
+            }
+            else
+            {
+                HasSplatDirtyRegion = true;
+                SplatDirtyMinX = minX;
+                SplatDirtyMinZ = minZ;
+                SplatDirtyMaxX = maxX;
+                SplatDirtyMaxZ = maxZ;
+            }
+            SplatVersion++;
+        }
+
+        public bool ConsumeSplatDirtyRegion(out int minX, out int minZ, out int maxX, out int maxZ)
+        {
+            minX = SplatDirtyMinX;
+            minZ = SplatDirtyMinZ;
+            maxX = SplatDirtyMaxX;
+            maxZ = SplatDirtyMaxZ;
+            bool had = HasSplatDirtyRegion;
+            HasSplatDirtyRegion = false;
+            return had;
+        }
+
+        // Versión de COLISIÓN: sube solo cuando la física debe reconstruir (al SOLTAR el pincel,
+        // al importar heightmap, al cambiar Resolution o al cargar escena) — NO en cada frame de
+        // pincelada como Version. Reconstruir la malla de colisión de Bepu es caro (triángulos de
+        // todo el terreno); hacerlo 60 veces por segundo mientras se esculpe congela el editor.
+        // El muestreo de altura en CPU (TerrainCollider.SampleHeight/CharacterController) lee el
+        // Heightmap vivo, así que siempre es exacto aunque esta versión vaya retrasada.
+        public int CollisionVersion;
 
         // Se incrementa cada vez que cambia el SplatMap (pintura) o el Resolution.
         // El renderer usa esto para saber cuándo re-subir la textura splat a la GPU.

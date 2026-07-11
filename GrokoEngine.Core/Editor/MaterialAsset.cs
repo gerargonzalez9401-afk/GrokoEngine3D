@@ -25,6 +25,7 @@ namespace GrokoEngine
         public float Metallic { get; set; } = 0f;
         public MaterialSurfaceType SurfaceType { get; set; } = MaterialSurfaceType.Opaque;
         public float Alpha { get; set; } = 1f;
+        public float AlphaClipThreshold { get; set; } = 0.5f;
         public float RefractionStrength { get; set; } = 0f;
         public float DistortionStrength { get; set; } = 0f;
         public bool SpecularHighlights { get; set; } = true;
@@ -46,6 +47,7 @@ namespace GrokoEngine
             ShaderGraphProperties ??= new Dictionary<string, float[]>();
             ShaderGraphTextures ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             Alpha = Math.Max(0f, Math.Min(1f, Alpha <= 0f && SurfaceType == MaterialSurfaceType.Opaque ? 1f : Alpha));
+            AlphaClipThreshold = Math.Max(0f, Math.Min(1f, AlphaClipThreshold));
             RefractionStrength = Math.Max(0f, Math.Min(1f, RefractionStrength));
             DistortionStrength = Math.Max(0f, Math.Min(1f, DistortionStrength));
         }
@@ -156,6 +158,7 @@ namespace GrokoEngine
             mat.Metallic = Clamp01(data.Metallic);
             mat.SurfaceType = data.SurfaceType;
             mat.Alpha = Clamp01(data.Alpha);
+            mat.AlphaClipThreshold = Clamp01(data.AlphaClipThreshold);
             mat.RefractionStrength = Clamp01(data.RefractionStrength);
             mat.DistortionStrength = Clamp01(data.DistortionStrength);
             mat.SpecularHighlights = data.SpecularHighlights;
@@ -188,6 +191,7 @@ namespace GrokoEngine
                 Metallic = material.Metallic,
                 SurfaceType = material.SurfaceType,
                 Alpha = material.Alpha,
+                AlphaClipThreshold = material.AlphaClipThreshold,
                 RefractionStrength = material.RefractionStrength,
                 DistortionStrength = material.DistortionStrength,
                 SpecularHighlights = material.SpecularHighlights,

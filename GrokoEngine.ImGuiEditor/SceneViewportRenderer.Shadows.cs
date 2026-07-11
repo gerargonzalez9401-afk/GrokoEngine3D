@@ -383,6 +383,7 @@ private void RenderDepthMap(int framebuffer, int size, int program, int mvpLocat
         GL.ColorMask(false, false, false, false);
         GL.UseProgram(program);
         GL.UniformMatrix4(mvpLocation, true, ref mvp);
+        _currentDepthMvp = mvp; // el pase de profundidad del terreno (programa propio) la necesita
         DrawDepthGeometry(modelLocation);
         GL.BindVertexArray(0);
         GL.UseProgram(0);
@@ -399,17 +400,16 @@ private void DrawDepthGeometry(int modelLocation)
         SetMatrixUniform(modelLocation, ref identity);
         SetDepthInstancing(modelLocation, false);
         SetDepthSkinning(modelLocation, false);
+        ApplyDepthAlphaClip(modelLocation, false, 0.5f, null);
         if (_staticVertexCount > 0)
         {
             GL.BindVertexArray(_staticVertexArray);
-            TrackShadowDraw();
-            GL.DrawArrays(PrimitiveType.Triangles, 0, _staticVertexCount);
+            DrawSolidDepthRanges(modelLocation, _staticRanges);
         }
         if (solidVertices.Count > 0)
         {
             GL.BindVertexArray(solidVertexArray);
-            TrackShadowDraw();
-            GL.DrawArrays(PrimitiveType.Triangles, 0, solidVertices.Count);
+            DrawSolidDepthRanges(modelLocation, solidRanges);
         }
 
         int boundVao = 0;
@@ -432,6 +432,7 @@ private void DrawDepthGeometry(int modelLocation)
                 GL.BindVertexArray(draw.Mesh.Vao);
                 boundVao = draw.Mesh.Vao;
             }
+            ApplyDepthAlphaClip(modelLocation, draw.AlphaClip, draw.AlphaClipThreshold, draw.TexturePath);
 
             // "Two Sided" en Cast Shadows: no culear caras traseras al proyectar sombra, para que
             // geometría delgada (una hoja, una tarjeta) no deje "agujeros" de sombra en el lado
@@ -460,25 +461,56 @@ private void DrawDepthGeometry(int modelLocation)
             if (draw.TwoSidedShadows)
                 GL.Enable(EnableCap.CullFace);
 
+            ApplyDepthAlphaClip(modelLocation, false, 0.5f, null);
             i = end;
         }
 
-        foreach (var draw in shaderGraphDynamicMeshDraws)
+        // Shader-graph: la lista viene ordenada (SortShaderGraphMeshDrawsForInstancing), así que
+        // los draws idénticos consecutivos también se proyectan a sombra en un solo instanced draw.
+        for (int sg = 0; sg < shaderGraphDynamicMeshDraws.Count;)
         {
-            if (!draw.CastShadows)
-                continue;
+            var draw = shaderGraphDynamicMeshDraws[sg];
+            int end = sg + 1;
+            while (end < shaderGraphDynamicMeshDraws.Count &&
+                   CanInstanceShaderGraphDraws(draw, shaderGraphDynamicMeshDraws[end]) &&
+                   shaderGraphDynamicMeshDraws[end].CastShadows == draw.CastShadows &&
+                   shaderGraphDynamicMeshDraws[end].TwoSidedShadows == draw.TwoSidedShadows)
+                end++;
 
-            var world = draw.World;
-            SetMatrixUniform(modelLocation, ref world);
-            SetDepthInstancing(modelLocation, false);
-            SetDepthSkinning(modelLocation, false);
+            if (!draw.CastShadows)
+            {
+                sg = end;
+                continue;
+            }
+
             GL.BindVertexArray(draw.Mesh.Vao);
-            TrackShadowDraw();
             if (draw.TwoSidedShadows)
                 GL.Disable(EnableCap.CullFace);
-            GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
+
+            int instanceCount = end - sg;
+            if (instanceCount > 1)
+            {
+                UploadShaderGraphInstanceMatrices(sg, instanceCount);
+                SetDepthInstancing(modelLocation, true);
+                SetDepthSkinning(modelLocation, false);
+                TrackShadowDraw();
+                GL.DrawArraysInstanced(PrimitiveType.Triangles, draw.Start, draw.Count, instanceCount);
+                SetDepthInstancing(modelLocation, false);
+            }
+            else
+            {
+                var world = draw.World;
+                SetMatrixUniform(modelLocation, ref world);
+                SetDepthInstancing(modelLocation, false);
+                SetDepthSkinning(modelLocation, false);
+                TrackShadowDraw();
+                GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
+            }
+
             if (draw.TwoSidedShadows)
                 GL.Enable(EnableCap.CullFace);
+
+            sg = end;
         }
 
         foreach (var draw in skinnedMeshDraws)
@@ -491,6 +523,7 @@ private void DrawDepthGeometry(int modelLocation)
             SetDepthInstancing(modelLocation, false);
             SetDepthSkinning(modelLocation, true);
             UploadBoneMatrices(GetDepthBoneLocations(modelLocation), draw.Skin);
+            ApplyDepthAlphaClip(modelLocation, draw.AlphaClip, draw.AlphaClipThreshold, draw.TexturePath);
             GL.BindVertexArray(draw.Mesh.Vao);
             TrackShadowDraw();
             if (draw.TwoSidedShadows)
@@ -498,6 +531,7 @@ private void DrawDepthGeometry(int modelLocation)
             GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
             if (draw.TwoSidedShadows)
                 GL.Enable(EnableCap.CullFace);
+            ApplyDepthAlphaClip(modelLocation, false, 0.5f, null);
         }
 
         foreach (var draw in shaderGraphSkinnedMeshDraws)
@@ -522,6 +556,47 @@ private void DrawDepthGeometry(int modelLocation)
         SetMatrixUniform(modelLocation, ref identity);
         SetDepthInstancing(modelLocation, false);
         SetDepthSkinning(modelLocation, false);
+        ApplyDepthAlphaClip(modelLocation, false, 0.5f, null);
+
+        // Terrain: proyecta sombra con su propio programa depth-only (desplazamiento por
+        // heightmap). Solo en los pases direccional/spot — el pase de point lights usa otro
+        // shader (profundidad radial) y se omite por ahora.
+        if (modelLocation != _pointShadowModelLocation)
+            DrawTerrainDepth();
+    }
+
+private void DrawSolidDepthRanges(int modelLocation, IReadOnlyList<SolidRange> ranges)
+    {
+        foreach (var range in ranges)
+        {
+            ApplyDepthAlphaClip(modelLocation, range.AlphaClip, range.AlphaClipThreshold, range.TexturePath);
+            TrackShadowDraw();
+            GL.DrawArrays(PrimitiveType.Triangles, range.Start, range.Count);
+        }
+
+        ApplyDepthAlphaClip(modelLocation, false, 0.5f, null);
+    }
+
+private void ApplyDepthAlphaClip(int modelLocation, bool enabled, float threshold, string? texturePath)
+    {
+        bool pointShadow = modelLocation == _pointShadowModelLocation;
+        int alphaClipLocation = pointShadow ? _pointShadowAlphaClipLocation : _shadowAlphaClipLocation;
+        int thresholdLocation = pointShadow ? _pointShadowAlphaClipThresholdLocation : _shadowAlphaClipThresholdLocation;
+        int hasTextureLocation = pointShadow ? _pointShadowHasTextureLocation : _shadowHasTextureLocation;
+        int textureLocation = pointShadow ? _pointShadowTextureLocation : _shadowTextureLocation;
+
+        SetIntUniform(alphaClipLocation, enabled ? 1 : 0);
+        if (thresholdLocation >= 0)
+            GL.Uniform1(thresholdLocation, Math.Clamp(threshold, 0f, 1f));
+
+        int texture = 0;
+        if (enabled && !string.IsNullOrWhiteSpace(texturePath))
+            texture = GetTexture(texturePath);
+
+        SetIntUniform(hasTextureLocation, texture != 0 ? 1 : 0);
+        SetIntUniform(textureLocation, 0);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, texture);
     }
 
 private void SetDepthInstancing(int modelLocation, bool enabled)
@@ -771,6 +846,7 @@ private static int CreateShadowShader()
         const string vertexSource = """
             #version 330 core
             layout (location = 0) in vec3 aPosition;
+            layout (location = 3) in vec2 aUv;
             layout (location = 6) in mat4 aInstanceModel;
             layout (location = 10) in vec4 aBoneIndices;
             layout (location = 11) in vec4 aBoneWeights;
@@ -779,6 +855,7 @@ private static int CreateShadowShader()
             uniform int uUseInstancing;
             uniform int uUseSkinning;
             uniform mat4 uBones[128];
+            out vec2 vUv;
             void main()
             {
                 mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
@@ -800,13 +877,27 @@ private static int CreateShadowShader()
                     if (totalWeight > 0.0001)
                         world = skinnedPos;
                 }
+                vUv = aUv;
                 gl_Position = world * uMvp;
             }
             """;
 
         const string fragmentSource = """
             #version 330 core
-            void main() { }
+            in vec2 vUv;
+            uniform sampler2D uTexture;
+            uniform int uHasTexture;
+            uniform int uAlphaClip;
+            uniform float uAlphaClipThreshold;
+            void main()
+            {
+                if (uAlphaClip != 0 && uHasTexture != 0)
+                {
+                    float alpha = texture(uTexture, vUv).a;
+                    if (alpha < uAlphaClipThreshold)
+                        discard;
+                }
+            }
             """;
 
         int vertex = CompileShader(ShaderType.VertexShader, vertexSource);
@@ -829,6 +920,7 @@ private static int CreatePointShadowShader()
         const string vertexSource = """
             #version 330 core
             layout (location = 0) in vec3 aPosition;
+            layout (location = 3) in vec2 aUv;
             layout (location = 6) in mat4 aInstanceModel;
             layout (location = 10) in vec4 aBoneIndices;
             layout (location = 11) in vec4 aBoneWeights;
@@ -838,6 +930,7 @@ private static int CreatePointShadowShader()
             uniform int uUseSkinning;
             uniform mat4 uBones[128];
             out vec3 vWorldPos;
+            out vec2 vUv;
             void main()
             {
                 mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
@@ -859,6 +952,7 @@ private static int CreatePointShadowShader()
                     if (totalWeight > 0.0001)
                         world = skinnedPos;
                 }
+                vUv = aUv;
                 vWorldPos = world.xyz;
                 gl_Position = world * uMvp;
             }
@@ -867,10 +961,21 @@ private static int CreatePointShadowShader()
         const string fragmentSource = """
             #version 330 core
             in vec3 vWorldPos;
+            in vec2 vUv;
             uniform vec3 uLightPos;
             uniform float uFarPlane;
+            uniform sampler2D uTexture;
+            uniform int uHasTexture;
+            uniform int uAlphaClip;
+            uniform float uAlphaClipThreshold;
             void main()
             {
+                if (uAlphaClip != 0 && uHasTexture != 0)
+                {
+                    float alpha = texture(uTexture, vUv).a;
+                    if (alpha < uAlphaClipThreshold)
+                        discard;
+                }
                 gl_FragDepth = length(vWorldPos - uLightPos) / max(uFarPlane, 0.001);
             }
             """;

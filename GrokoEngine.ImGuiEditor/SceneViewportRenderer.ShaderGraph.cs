@@ -34,6 +34,7 @@ internal sealed partial class SceneViewportRenderer
     {
         public int Program;
         public DateTime FileTime;
+        public long NextValidationTick;   // TickCount64: hasta entonces no se re-stat el .shadergraph
         public ShaderGraphModel? Model;
         public string FragmentSource = string.Empty;
         public List<string> Samplers = new();
@@ -60,6 +61,7 @@ internal sealed partial class SceneViewportRenderer
         public int[] CascadeSplitLocations = new int[5];
         public int ModelLocation = -1;
         public int UseModelLocation = -1;
+        public int UseInstancingLocation = -1;
         public int UseSkinningLocation = -1;
         public int[] BoneMatrixLocations = new int[MaxGpuBones];
         public int SceneDepthSamplerIndex = -1;
@@ -83,12 +85,17 @@ internal sealed partial class SceneViewportRenderer
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec3 a_Normal;
 layout(location = 3) in vec2 a_UV;
+// Matriz de modelo POR INSTANCIA (divisor 1, locations 6-9): la comparten todas las
+// mallas GPU (ver ConfigureGpuMeshVertexAttributes). Permite dibujar N copias de la
+// misma malla shader-graph en UN draw call, igual que las mallas con material normal.
+layout(location = 6) in mat4 a_InstanceModel;
 layout(location = 10) in vec4 a_BoneIndices;
 layout(location = 11) in vec4 a_BoneWeights;
 
 uniform mat4 u_ViewProj;
 uniform mat4 u_Model;
 uniform int u_UseModel;
+uniform int u_UseInstancing;
 uniform int u_UseSkinning;
 uniform mat4 u_Bones[128];
 
@@ -101,7 +108,7 @@ out vec4 v_ScreenPos;
 
 void main()
 {
-    mat4 model = u_UseModel != 0 ? u_Model : mat4(1.0);
+    mat4 model = u_UseInstancing != 0 ? a_InstanceModel : (u_UseModel != 0 ? u_Model : mat4(1.0));
     vec4 world = vec4(a_Position, 1.0) * model;
     vec3 normalWS = (vec4(a_Normal, 0.0) * model).xyz;
 
@@ -276,22 +283,33 @@ void main()
         ResolveShaderGraphLighting(objects, out var lightDir, out var lightColor, out var lightIntensity);
         int boundVao = 0;
 
-        foreach (var draw in shaderGraphDynamicMeshDraws)
+        // La lista viene ORDENADA (SortShaderGraphMeshDrawsForInstancing): los draws idénticos
+        // (misma malla+grafo+material) son consecutivos y se fusionan en un DrawArraysInstanced.
+        for (int i = 0; i < shaderGraphDynamicMeshDraws.Count;)
         {
+            var draw = shaderGraphDynamicMeshDraws[i];
+            int end = i + 1;
+            while (end < shaderGraphDynamicMeshDraws.Count && CanInstanceShaderGraphDraws(draw, shaderGraphDynamicMeshDraws[end]))
+                end++;
+
             // "Shadows Only": sigue proyectando sombra (depth pass), pero acá en color no se dibuja.
             if (draw.ShadowsOnly)
+            {
+                i = end;
                 continue;
+            }
 
             var entry = GetShaderGraphEntry(draw.ShaderGraphPath);
-            if (entry == null || entry.Program == 0) continue;
+            if (entry == null || entry.Program == 0)
+            {
+                i = end;
+                continue;
+            }
 
             ApplyShaderGraphRenderState(entry.Model);
             GL.UseProgram(entry.Program);
 
-            var world = draw.World;
             ApplyShaderGraphFrameUniforms(entry, ref mvp, cameraPosition, viewportWidth, viewportHeight, lightDir, lightColor, lightIntensity, cameraNear, cameraFar, draw.ReceiveShadows);
-            SetMatrixUniform(entry.ModelLocation, ref world);
-            SetIntUniform(entry.UseModelLocation, 1);
             SetIntUniform(entry.UseSkinningLocation, 0);
             BindShaderGraphResources(entry, draw.ShaderGraphTextures, draw.ShaderGraphProperties);
 
@@ -301,8 +319,27 @@ void main()
                 boundVao = draw.Mesh.Vao;
             }
 
-            TrackMainDraw(draw.Count);
-            GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
+            int instanceCount = end - i;
+            if (instanceCount > 1)
+            {
+                UploadShaderGraphInstanceMatrices(i, instanceCount);
+                SetIntUniform(entry.UseInstancingLocation, 1);
+                SetIntUniform(entry.UseModelLocation, 0);
+                TrackMainDraw(draw.Count, instanceCount);
+                GL.DrawArraysInstanced(PrimitiveType.Triangles, draw.Start, draw.Count, instanceCount);
+                SetIntUniform(entry.UseInstancingLocation, 0);
+            }
+            else
+            {
+                var world = draw.World;
+                SetMatrixUniform(entry.ModelLocation, ref world);
+                SetIntUniform(entry.UseInstancingLocation, 0);
+                SetIntUniform(entry.UseModelLocation, 1);
+                TrackMainDraw(draw.Count);
+                GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
+            }
+
+            i = end;
         }
 
         GL.BindVertexArray(0);
@@ -522,11 +559,38 @@ void main()
         GL.ColorMask(true, true, true, true);
     }
 
+    /// <summary>Fuerza la revalidación inmediata de un grafo (llamar al guardarlo desde el editor).</summary>
+    internal void InvalidateShaderGraphEntry(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+        if (_shaderGraphCache.TryGetValue(path, out var entry))
+            entry.NextValidationTick = 0;
+        SceneViewportRenderer.InvalidateNormalizedAssetPath(path);
+    }
+
     internal ShaderGraphMaterialEntry? GetShaderGraphEntry(string path)
     {
+        // Esto corre VARIAS veces por draw y por frame (prepass, NeedsSceneDepth, draw).
+        // Sin la ventana, cada llamada era un GetLastWriteTimeUtc contra disco → con N mallas
+        // shader-graph (hojas de árboles, etc.) el coste escalaba por objeto y hundía los FPS
+        // (brutal en proyectos OneDrive). El stat solo detecta ediciones EXTERNAS del grafo;
+        // guardar desde el editor de Shader Graph invalida por otro camino.
+        long now = Environment.TickCount64;
+        if (_shaderGraphCache.TryGetValue(path, out var cached))
+        {
+            if (now < cached.NextValidationTick)
+                return cached;
+
+            var cachedFileTime = System.IO.File.GetLastWriteTimeUtc(path);
+            if (cached.FileTime == cachedFileTime)
+            {
+                cached.NextValidationTick = now + 2000;
+                return cached;
+            }
+        }
+
         var fileTime = System.IO.File.GetLastWriteTimeUtc(path);
-        if (_shaderGraphCache.TryGetValue(path, out var cached) && cached.FileTime == fileTime)
-            return cached;
 
         ShaderGraphModel model;
         try
@@ -554,6 +618,7 @@ void main()
         var entry = new ShaderGraphMaterialEntry
         {
             FileTime = fileTime,
+            NextValidationTick = now + 2000,
             Model = model,
             FragmentSource = fragmentSrc,
             NeedsSceneDepth = ShaderGraphModelNeedsSceneDepth(model),
@@ -634,6 +699,7 @@ void main()
         }
         entry.ModelLocation = GL.GetUniformLocation(entry.Program, "u_Model");
         entry.UseModelLocation = GL.GetUniformLocation(entry.Program, "u_UseModel");
+        entry.UseInstancingLocation = GL.GetUniformLocation(entry.Program, "u_UseInstancing");
         entry.UseSkinningLocation = GL.GetUniformLocation(entry.Program, "u_UseSkinning");
         for (int i = 0; i < MaxGpuBones; i++)
             entry.BoneMatrixLocations[i] = GL.GetUniformLocation(entry.Program, $"u_Bones[{i}]");

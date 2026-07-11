@@ -1,0 +1,78 @@
+{
+  "Version": 2,
+  "Objects": [
+    {
+      "Id": "camera-pipeline-main",
+      "Name": "Camera Pipeline Test",
+      "Type": 0,
+      "IsActive": true,
+      "IsCamera": true,
+      "Layer": 0,
+      "Position": { "X": 0, "Y": 2.5, "Z": -7 },
+      "Rotation": { "X": 18, "Y": 0, "Z": 0 },
+      "Scale": { "X": 1, "Y": 1, "Z": 1 },
+      "Components": [
+        { "TypeName": "Camera", "Fields": { "FOV": "58", "NearClip": "0.1", "FarClip": "500", "ClearFlags": "Skybox", "Projection": "0", "PostProcessing": "True", "AntiAliasingMode": "1", "AntiAliasingSamples": "4", "FrustumCulling": "True", "OcclusionCulling": "True", "RenderShadows": "True", "OpaqueTexture": "1", "DepthTexture": "1", "CullingMask": "Everything" } },
+        { "TypeName": "PostProcessSettings", "Fields": { "PostProcessEnabled": "True", "ToneMapping": "True", "Bloom": "True", "BloomStrength": "0.12", "AmbientOcclusion": "True", "AmbientOcclusionStrength": "0.35", "ColorAdjustments": "True", "Contrast": "4", "Saturation": "2" } }
+      ],
+      "Children": []
+    },
+    {
+      "Id": "pipeline-sun",
+      "Name": "Sun With Shadows",
+      "Type": 0,
+      "IsActive": true,
+      "Layer": 0,
+      "Position": { "X": 0, "Y": 5, "Z": 0 },
+      "Rotation": { "X": 45, "Y": -30, "Z": 0 },
+      "Scale": { "X": 1, "Y": 1, "Z": 1 },
+      "Components": [
+        { "TypeName": "DirectionalLight", "Fields": { "DirectionX": "-0.35", "DirectionY": "-1", "DirectionZ": "-0.25", "Intensity": "1.1", "R": "1", "G": "0.95", "B": "0.85", "Shadows": "True", "ShadowStrength": "0.8", "ContactShadows": "True" } }
+      ],
+      "Children": []
+    },
+    {
+      "Id": "pipeline-floor",
+      "Name": "Occlusion Floor",
+      "Type": 2,
+      "IsActive": true,
+      "IsStatic": true,
+      "Layer": 0,
+      "Position": { "X": 0, "Y": -0.55, "Z": 0 },
+      "Rotation": { "X": 0, "Y": 0, "Z": 0 },
+      "Scale": { "X": 8, "Y": 1, "Z": 6 },
+      "Components": [
+        { "TypeName": "Material", "Fields": { "R": "0.45", "G": "0.45", "B": "0.43", "Roughness": "0.78", "Metallic": "0", "SurfaceType": "Opaque" } }
+      ],
+      "Children": []
+    },
+    {
+      "Id": "pipeline-cube",
+      "Name": "Opaque Cube",
+      "Type": 1,
+      "IsActive": true,
+      "Layer": 0,
+      "Position": { "X": -1.2, "Y": 0.35, "Z": 0.2 },
+      "Rotation": { "X": 0, "Y": 28, "Z": 0 },
+      "Scale": { "X": 1, "Y": 1, "Z": 1 },
+      "Components": [
+        { "TypeName": "Material", "Fields": { "R": "0.85", "G": "0.2", "B": "0.15", "Roughness": "0.45", "Metallic": "0", "SurfaceType": "Opaque" } }
+      ],
+      "Children": []
+    },
+    {
+      "Id": "pipeline-sphere",
+      "Name": "Reflective Sphere",
+      "Type": 3,
+      "IsActive": true,
+      "Layer": 0,
+      "Position": { "X": 1.25, "Y": 0.35, "Z": 0.2 },
+      "Rotation": { "X": 0, "Y": 0, "Z": 0 },
+      "Scale": { "X": 1, "Y": 1, "Z": 1 },
+      "Components": [
+        { "TypeName": "Material", "Fields": { "R": "0.9", "G": "0.86", "B": "0.74", "Roughness": "0.22", "Metallic": "1", "SurfaceType": "Opaque", "EnvironmentReflections": "True" } }
+      ],
+      "Children": []
+    }
+  ]
+}

@@ -117,6 +117,7 @@ internal sealed partial class ImGuiEditorApp
         {
             SyncShaderGraphEditorStateToModel();
             GrokoShaderGraphPro.Services.GraphSerializer.Save(shaderGraphAssetPath, shaderGraphModel);
+            sceneRenderer.InvalidateShaderGraphEntry(shaderGraphAssetPath);   // recompila al momento, sin esperar la ventana de stat
             shaderGraphStatus = "Shader graph saved.";
         }
         if (shaderGraphAssetPath != null)

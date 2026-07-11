@@ -13,6 +13,24 @@ internal sealed partial class SceneViewportRenderer
         if (!obj.IsActive)
             return;
 
+        if (ShouldSkipHierarchyLodNode(obj))
+            return;
+
+        if (_activeStaticHierarchyLodFastPath &&
+            TryGetHierarchyLodLevel(obj.Name, out int staticFastLodLevel) &&
+            staticFastLodLevel != 0)
+            return;
+
+        // Hijos-variante LOD: fuera del recorrido ANTES de cualquier trabajo (no dibujan nunca).
+        if (IsLodVariantNode(obj))
+            return;
+
+        // Árboles/props Static con LodGroup jerárquico se hornean en el batch estático.
+        // En el pase dinámico no vuelven a analizar materiales/ruta; esto recupera el
+        // camino barato para bosques en plano sin romper el LOD elegido al reconstruir.
+        _perfWalkNodes++;
+        long perfT0 = RenderTimestamp();
+
         bool sel = ReferenceEquals(obj, selected) || SelectedObjectIds.Contains(obj.EditorId);
         Matrix4 world = GetLocalMatrix(obj) * parentWorld;
         var center = Vector3.TransformPosition(Vector3.Zero, world);
@@ -27,6 +45,63 @@ internal sealed partial class SceneViewportRenderer
         var animatorComponent = obj.GetComponent<Animator>();
         bool layerVisible = LayerMask.Contains(_activeCullingMask, obj.Layer);
 
+        // LodGroup: aplica a este objeto y a todos sus descendientes (el más cercano gana).
+        var prevLodGroup = _activeLodGroup;
+        var prevHierarchyLod = _activeHierarchyLod;
+        var prevStaticHierarchyLodFastPath = _activeStaticHierarchyLodFastPath;
+        if (obj.GetComponent<LodGroup>() is { Enabled: true } ownLodGroup)
+        {
+            _activeLodGroup = ownLodGroup;
+            bool staticHierarchyFastPath = UsesStaticHierarchyLodFastPath(obj);
+            _activeStaticHierarchyLodFastPath = staticHierarchyFastPath;
+            _activeHierarchyLod = staticHierarchyFastPath ? null : CreateHierarchyLodContext(obj, ownLodGroup, world);
+            if (!_buildingStatic && staticHierarchyFastPath)
+                _statsStaticHierarchyLodFast++;
+        }
+
+        if (_buildingStatic &&
+            _activeHierarchyLod.HasValue &&
+            HasHierarchyLodChildren(obj))
+        {
+            _activeLodGroup = prevLodGroup;
+            _activeHierarchyLod = prevHierarchyLod;
+            _activeStaticHierarchyLodFastPath = prevStaticHierarchyLodFastPath;
+            return;
+        }
+
+        // LODGroup jerarquico completamente fuera de distancia: corta la rama completa.
+        // Antes se seguia bajando por Arbol_LOD0/1/2 y sus submallas aunque el grupo ya
+        // estuviera culled; con cientos de arboles eso mantenia caro Build/Collect y hacia
+        // parecer que "desaparecen", pero el renderer seguia trabajando. Igual que Unity:
+        // si el LODGroup decide cull, no se visitan sus renderers hijos.
+        if (!sel &&
+            !_buildingStatic &&
+            _activeHierarchyLod is { Culled: true } &&
+            HasHierarchyLodChildren(obj))
+        {
+            _activeLodGroup = prevLodGroup;
+            _activeHierarchyLod = prevHierarchyLod;
+            _activeStaticHierarchyLodFastPath = prevStaticHierarchyLodFastPath;
+            return;
+        }
+
+        if (!sel &&
+            !_buildingStatic &&
+            obj.IsStatic &&
+            StaticHierarchyLodMode == StaticHierarchyLodMode.Performance120 &&
+            _activeHierarchyLod is { Culled: false } hierarchyLodContext &&
+            HasHierarchyLodChildren(obj) &&
+            TryQueueHierarchyLodGpuBatch(obj, hierarchyLodContext, frustum, world))
+        {
+            _activeLodGroup = prevLodGroup;
+            _activeHierarchyLod = prevHierarchyLod;
+            _activeStaticHierarchyLodFastPath = prevStaticHierarchyLodFastPath;
+            return;
+        }
+
+        long perfT1 = RenderTimestamp();
+        _perfWalkComponentTicks += perfT1 - perfT0;
+
         // Route according to the static/dynamic build pass. Transparent meshes stay out
         // of the static batch because they need the resolved opaque texture. A MeshRenderer with
         // non-default Cast/Receive Shadows also has to stay out: the static batch is one big merged
@@ -35,10 +110,58 @@ internal sealed partial class SceneViewportRenderer
         // routed through the per-object dynamic path, which is the only one that can honor it.
         bool meshRendererNeedsCustomShadows = meshRenderer != null && (meshRenderer.CastShadows != 1 || !meshRenderer.ReceiveShadows);
         bool shouldBuildGeometry = _buildingStatic == obj.IsStatic;
-        bool objectNeedsDynamicPass = obj.IsStatic && meshFilter != null &&
-            (ObjectUsesTransparentMaterial(obj, meshFilter) || meshRendererNeedsCustomShadows);
+        // Las mallas GRANDES marcadas Static también van por el pase dinámico: hornearlas en el
+        // batch pierde el frustum culling y el instancing GPU (N copias = N× vértices dibujados
+        // SIEMPRE), así que con props de alto poligonaje marcar Static BAJABA los FPS. El batch
+        // estático solo compensa para mallas pequeñas (ahorra draw calls sin inflar la geometría).
+        // La parte cara de la decisión (transparencia por slots + tamaño de malla) se CACHEA
+        // por objeto con TTL: recalcularla cada frame para cada hijo estático costaba ~5 ms
+        // con ~100 hijos (medido). InvalidateStaticBatch limpia el cache al cambiar materiales.
+        bool objectNeedsDynamicPass = _activeHierarchyLod.HasValue && meshFilter != null;
+        bool hierarchyLodMesh = (_activeHierarchyLod.HasValue || _activeStaticHierarchyLodFastPath) && TryGetHierarchyLodLevel(obj.Name, out _);
+        if (hierarchyLodMesh)
+        {
+            if (_activeHierarchyLod.HasValue || !obj.IsStatic || StaticHierarchyLodMode == StaticHierarchyLodMode.LodPro)
+            {
+                objectNeedsDynamicPass = true;
+            }
+            else if (meshFilter != null)
+            {
+                long nowTick = Environment.TickCount64;
+                if (!_staticRouteCache.TryGetValue(obj, out var route) || nowTick >= route.NextCheckTick)
+                {
+                    long ttl = 2000 + (System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj) & 1023);
+                    route = (nowTick + ttl, ObjectUsesTransparentMaterial(obj, meshFilter) || MeshTooBigForStaticBatch(meshFilter));
+                    _staticRouteCache[obj] = route;
+                }
+
+                objectNeedsDynamicPass = route.NeedsDynamicPass || meshRendererNeedsCustomShadows;
+            }
+            else
+            {
+                objectNeedsDynamicPass = meshRendererNeedsCustomShadows;
+            }
+        }
+        else if (obj.IsStatic && meshFilter != null)
+        {
+            long nowTick = Environment.TickCount64;
+            if (!_staticRouteCache.TryGetValue(obj, out var route) || nowTick >= route.NextCheckTick)
+            {
+                // Jitter por objeto: sin él, todos los objetos cacheados en el mismo frame
+                // expiraban JUNTOS y ese frame pagaba el recálculo entero (micro-tirón cada 2 s).
+                long ttl = 2000 + (System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj) & 1023);
+                route = (nowTick + ttl, ObjectUsesTransparentMaterial(obj, meshFilter) || MeshTooBigForStaticBatch(meshFilter));
+                _staticRouteCache[obj] = route;
+            }
+
+            objectNeedsDynamicPass = route.NeedsDynamicPass || meshRendererNeedsCustomShadows;
+        }
+
         if (objectNeedsDynamicPass)
             shouldBuildGeometry = !_buildingStatic;
+
+        long perfT2 = RenderTimestamp();
+        _perfWalkRouteTicks += perfT2 - perfT1;
 
         // Mesh Renderer desactivado (como Unity): se oculta la malla, PERO el collider/física sigue
         // funcionando (la física es independiente del render). Terrain no tiene MeshRenderer → no le afecta.
@@ -71,7 +194,7 @@ internal sealed partial class SceneViewportRenderer
                     }
 
                     if (occVisible && mesh != null)
-                        BuildMeshBounds(obj, mf, mesh, sel, world);
+                        BuildMeshBoundsCached(obj, mf, mesh, sel, world);
 
                     // Collect objects that need an occlusion query this frame (done after draw)
                     if (!_buildingStatic && _occlusionCullingEnabled && mesh != null && frustumVisible)
@@ -96,15 +219,18 @@ internal sealed partial class SceneViewportRenderer
                 if (skipFrustumCullingForStaticBatch || frustum.ContainsSphere(center, r))
                     BuildPrimitive(obj, sel, world);
             }
-            else if (terrainComponent is { } terrain)
-            {
-                var (mesh, meshPath) = GetTerrainMesh(obj, terrain);
-                var terrainFilter = new MeshFilter { MeshPath = meshPath, ImportScale = 1f };
-                bool frustumVisible = skipFrustumCullingForStaticBatch || FrustumContainsMesh(frustum, obj, terrainFilter, mesh, world);
-                if (frustumVisible)
-                    BuildTerrainGeometry(obj, terrain, mesh, meshPath, sel, world);
-            }
         }
+
+        long perfT3 = RenderTimestamp();
+        _perfWalkGeometryTicks += perfT3 - perfT2;
+        RecordSlowWalkNode(obj, perfT3 - perfT0);
+
+        // Terrain: SIEMPRE por el pase dinámico (CDLOD), sea Static o no — la geometría es
+        // virtual (heightmap en GPU + rejilla compartida), cuesta ~nada recolectarla por frame,
+        // y así esculpir un Terrain Static se ve en vivo sin reconstruir el batch estático.
+        // El culling fino lo hace la propia selección del quadtree (AABB por nodo vs frustum).
+        if (!_buildingStatic && layerVisible && terrainComponent is { } terrainDraw)
+            CollectTerrainDraw(obj, terrainDraw, world, sel);
 
         // Árboles del terreno: SIEMPRE por el pase dinámico, sin importar si el Terrain (que es
         // Static por defecto) está horneado en el batch estático o no. Se encolan vía
@@ -144,6 +270,29 @@ internal sealed partial class SceneViewportRenderer
 
         foreach (var child in obj.Children)
             BuildObjectRecursive(child, selected, frustum, world, cameraPosition);
+
+        _activeLodGroup = prevLodGroup;
+        _activeHierarchyLod = prevHierarchyLod;
+        _activeStaticHierarchyLodFastPath = prevStaticHierarchyLodFastPath;
+    }
+
+    // Tope de vértices por malla para entrar al batch estático. Por encima, el objeto Static se
+    // dibuja por el pase dinámico (frustum culling + instancing GPU de mallas repetidas), que
+    // para geometría pesada es más rápido que un VBO horneado que se dibuja entero cada frame.
+    private const int StaticBatchMaxVerticesPerMesh = 3000;
+
+    private bool MeshTooBigForStaticBatch(MeshFilter mf)
+    {
+        if (string.IsNullOrWhiteSpace(mf.MeshPath))
+            return false;
+        var mesh = GetParsedMesh(mf.MeshPath);
+        if (mesh == null)
+            return false;
+
+        int vertexCount = mf.SubmeshIndex >= 0 && mf.SubmeshIndex < mesh.Submeshes.Count
+            ? mesh.Submeshes[mf.SubmeshIndex].VertexCount
+            : mesh.Positions.Length / 3;
+        return vertexCount > StaticBatchMaxVerticesPerMesh;
     }
 
     private int ComputeStaticBatchSignature(IReadOnlyList<GameObject> objects)
@@ -184,25 +333,9 @@ internal sealed partial class SceneViewportRenderer
                 hash.Add(shadowsMr.ReceiveShadows);
             }
 
-            // Terrain marcado Static (el default al crearlo, como en Unity): esculpir, pintar
-            // capas o plantar/borrar árboles no reconstruye el batch estático por sí solo — son
-            // cambios al Heightmap/SplatMap/Trees, no a la Transform ni a otro campo ya hasheado
-            // arriba. Sin esto, un Terrain Static dejaría de reflejar sculpting/pintura/árboles
-            // hasta que ALGO MÁS en la escena forzara una reconstrucción del batch.
-            if (obj.GetComponent<Terrain>() is { } terrain)
-            {
-                hash.Add(terrain.Version);
-                hash.Add(terrain.SplatVersion);
-                hash.Add(terrain.TreeVersion);
-                hash.Add(terrain.DetailVersion);
-                // Las normales del borde de este terreno dependen del heightmap del vecino (ver
-                // GetTerrainMesh/TerrainMeshGenerator): si el vecino cambió, este Terrain Static
-                // también necesita reconstruirse aunque su propio Version no haya cambiado.
-                hash.Add(ResolveTerrainNeighbor(terrain.LeftNeighborId)?.Version ?? -1);
-                hash.Add(ResolveTerrainNeighbor(terrain.RightNeighborId)?.Version ?? -1);
-                hash.Add(ResolveTerrainNeighbor(terrain.TopNeighborId)?.Version ?? -1);
-                hash.Add(ResolveTerrainNeighbor(terrain.BottomNeighborId)?.Version ?? -1);
-            }
+            // Terrain: ya no participa del batch estático (el pase CDLOD lo dibuja aparte cada
+            // frame con sus propias cachés versionadas), así que sus versiones tampoco entran
+            // en la firma — esculpir/pintar no debe reconstruir el batch de la escena.
 
             if (obj.GetComponent<Material>() is { } material)
             {

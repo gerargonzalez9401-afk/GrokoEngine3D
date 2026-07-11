@@ -295,7 +295,10 @@ namespace GrokoEngine
                     break;
                 case TerrainCollider:
                     var terrain = collider.gameObject?.GetComponent<Terrain>();
-                    hash.Add(terrain?.Version ?? 0);
+                    // CollisionVersion, NO Version: Version sube en CADA frame de pincelada y
+                    // reconstruir la malla estática de Bepu (todo el terreno en triángulos) 60
+                    // veces por segundo congela el editor. CollisionVersion sube al soltar.
+                    hash.Add(terrain?.CollisionVersion ?? 0);
                     hash.Add(Quantize(terrain?.SizeX ?? 1f));
                     hash.Add(Quantize(terrain?.SizeZ ?? 1f));
                     hash.Add(Quantize(terrain?.HeightScale ?? 1f));
@@ -499,7 +502,12 @@ namespace GrokoEngine
                     if (currentCollisionPairs.Contains(key) || currentTriggerPairs.Contains(key))
                         continue;
 
-                    if (!bounds.Intersects(GetNarrowBounds(otherCollider, collider)))
+                    // Pretest con AABB planos: el bounds estrecho (que para MeshCollider recorre la
+                    // malla) solo se calcula si los planos ya se tocan.
+                    var otherPlain = otherCollider.GetBounds();
+                    if (!bounds.Intersects(otherPlain))
+                        continue;
+                    if (!bounds.Intersects(GetNarrowBounds(otherCollider, otherPlain, bounds)))
                         continue;
 
                     if (collider.IsTrigger || otherCollider.IsTrigger)
@@ -967,12 +975,15 @@ namespace GrokoEngine
                 if (!IsSolidObstacle(collider, otherCollider))
                     continue;
 
-                var other = GetNarrowBounds(otherCollider, collider);
-                bool xOverlap = bounds.Min.X < other.Max.X && bounds.Max.X > other.Min.X;
-                bool zOverlap = bounds.Min.Z < other.Max.Z && bounds.Max.Z > other.Min.Z;
+                // El solape X/Z se decide con el AABB plano (el estrecho solo recorta Max.Y);
+                // el estrecho — caro para MeshCollider — se calcula solo si hay solape.
+                var otherPlain = otherCollider.GetBounds();
+                bool xOverlap = bounds.Min.X < otherPlain.Max.X && bounds.Max.X > otherPlain.Min.X;
+                bool zOverlap = bounds.Min.Z < otherPlain.Max.Z && bounds.Max.Z > otherPlain.Min.Z;
                 if (!xOverlap || !zOverlap)
                     continue;
 
+                var other = GetNarrowBounds(otherCollider, otherPlain, bounds);
                 float distance = bounds.Min.Y - other.Max.Y;
                 if (distance >= -controller.SkinWidth && distance <= snapDistance)
                 {
@@ -1009,7 +1020,12 @@ namespace GrokoEngine
                     if (!IsSolidObstacle(collider, otherCollider))
                         continue;
 
-                    var otherBounds = GetNarrowBounds(otherCollider, collider);
+                    // Pretest con AABB plano antes del estrecho (caro para MeshCollider).
+                    var otherPlain = otherCollider.GetBounds();
+                    if (!myBounds.Intersects(otherPlain))
+                        continue;
+
+                    var otherBounds = GetNarrowBounds(otherCollider, otherPlain, myBounds);
                     if (!myBounds.Intersects(otherBounds))
                         continue;
 
@@ -1072,7 +1088,13 @@ namespace GrokoEngine
             var bounds = collider.GetBounds();
             foreach (var otherCollider in QueryNearby(collider))
             {
-                if (IsSolidObstacle(collider, otherCollider) && bounds.Intersects(GetNarrowBounds(otherCollider, collider)))
+                if (!IsSolidObstacle(collider, otherCollider))
+                    continue;
+
+                // Pretest con AABB plano antes del estrecho (caro para MeshCollider).
+                var otherPlain = otherCollider.GetBounds();
+                if (bounds.Intersects(otherPlain) &&
+                    bounds.Intersects(GetNarrowBounds(otherCollider, otherPlain, bounds)))
                     return true;
             }
 
@@ -1145,7 +1167,12 @@ namespace GrokoEngine
                     if (otherCollider.IsTrigger || otherCollider.gameObject == null || !otherCollider.gameObject.IsActive)
                         continue;
 
-                    var otherBounds = GetNarrowBounds(otherCollider, myCollider);
+                    // Pretest con AABB plano antes del estrecho (caro para MeshCollider).
+                    var otherPlain = otherCollider.GetBounds();
+                    if (!myBounds.Intersects(otherPlain))
+                        continue;
+
+                    var otherBounds = GetNarrowBounds(otherCollider, otherPlain, myBounds);
                     if (!myBounds.Intersects(otherBounds))
                         continue;
 
@@ -1173,7 +1200,12 @@ namespace GrokoEngine
                 if (otherCollider.IsTrigger || otherCollider.gameObject == null || !otherCollider.gameObject.IsActive)
                     continue;
 
-                var otherBounds = GetNarrowBounds(otherCollider, myCollider);
+                // Pretest con AABB plano antes del estrecho (caro para MeshCollider).
+                var otherPlain = otherCollider.GetBounds();
+                if (!myBounds.Intersects(otherPlain))
+                    continue;
+
+                var otherBounds = GetNarrowBounds(otherCollider, otherPlain, myBounds);
                 if (!myBounds.Intersects(otherBounds))
                     continue;
 
@@ -1281,13 +1313,18 @@ namespace GrokoEngine
         // Bounds "estrecho" de un collider visto desde otro: para TerrainCollider, recorta el techo (Max.Y)
         // a la altura real del heightmap bajo el centro XZ de relativeTo, en lugar del AABB plano.
         private static Bounds GetNarrowBounds(Collider collider, Collider relativeTo)
+            => GetNarrowBounds(collider, collider.GetBounds(), relativeTo.GetBounds());
+
+        // Sobrecarga con los AABB ya calculados: los bucles calientes de resolución ya tienen ambos
+        // bounds a mano, y para MeshCollider el muestreo de altura recorre triángulos de la malla —
+        // el llamador debe hacer PRIMERO el test barato de AABB planos (el estrecho solo BAJA Max.Y,
+        // así que si los planos no se tocan, los estrechos tampoco).
+        private static Bounds GetNarrowBounds(Collider collider, Bounds bounds, Bounds relativeBounds)
         {
             if (collider is TerrainCollider terrain)
             {
-                var bounds = collider.GetBounds();
-                var otherBounds = relativeTo.GetBounds();
-                float cx = (otherBounds.Min.X + otherBounds.Max.X) * 0.5f;
-                float cz = (otherBounds.Min.Z + otherBounds.Max.Z) * 0.5f;
+                float cx = (relativeBounds.Min.X + relativeBounds.Max.X) * 0.5f;
+                float cz = (relativeBounds.Min.Z + relativeBounds.Max.Z) * 0.5f;
                 float surfaceY = terrain.SampleHeight(cx, cz);
                 return new Bounds(bounds.Min, new Vector3(bounds.Max.X, surfaceY, bounds.Max.Z));
             }
@@ -1296,16 +1333,14 @@ namespace GrokoEngine
             // bajo el otro objeto → permite rampas/pendientes (el personaje se apoya en la malla inclinada).
             if (collider is MeshCollider meshCol && meshCol.UseMeshBounds)
             {
-                var bounds = collider.GetBounds();
-                var otherBounds = relativeTo.GetBounds();
-                float cx = (otherBounds.Min.X + otherBounds.Max.X) * 0.5f;
-                float cz = (otherBounds.Min.Z + otherBounds.Max.Z) * 0.5f;
+                float cx = (relativeBounds.Min.X + relativeBounds.Max.X) * 0.5f;
+                float cz = (relativeBounds.Min.Z + relativeBounds.Max.Z) * 0.5f;
                 if (meshCol.TrySampleHeight(cx, cz, out float surfaceY))
                     return new Bounds(bounds.Min, new Vector3(bounds.Max.X, surfaceY, bounds.Max.Z));
                 return bounds;
             }
 
-            return collider.GetBounds();
+            return bounds;
         }
 
         private static float AxisOverlap(Bounds a, Bounds b, int axis, int dir) =>
@@ -1402,9 +1437,10 @@ namespace GrokoEngine
             // Con BEPU listo usamos raycast preciso contra shapes reales. Si BEPU todavía
             // no fue construido (por ejemplo tras SyncPhysicsComponents en tests/editor),
             // caemos al broadphase legacy para que Physics.Raycast siga funcionando.
+            bool bepuConsulted = BepuBackend.Enabled && BepuBackend.IsReady;
             bool bepuHit = false;
             PhysicsRaycastHit bepuRayHit = default;
-            if (BepuBackend.Enabled && BepuBackend.IsReady)
+            if (bepuConsulted)
                 bepuHit = BepuBackend.TryRaycast(origin, direction, maxDistance, includeTriggers, layerMask, out bepuRayHit);
 
             LastRaycastCandidateCount = 0;
@@ -1427,6 +1463,14 @@ namespace GrokoEngine
                 if (!includeTriggers && collider.IsTrigger)
                     continue;
                 if (!LayerMask.Contains(layerMask, collider.gameObject.Layer))
+                    continue;
+
+                // Si BEPU fue consultado, sus colliders ya se testearon contra la forma REAL.
+                // El test legacy por AABB es mucho más grueso (el AABB del terreno cubre el mapa
+                // entero hasta el monte más alto: un origen "dentro" da hit a distancia 0 que
+                // taparía el hit preciso de BEPU). El legacy solo aporta lo que BEPU no gestiona:
+                // la cápsula del CharacterController y los triggers.
+                if (bepuConsulted && IsBepuManaged(collider))
                     continue;
 
                 if (RayIntersectsBounds(origin, dir, collider.GetBounds(), maxDistance, out float distance, out var normal) &&

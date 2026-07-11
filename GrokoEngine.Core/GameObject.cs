@@ -502,6 +502,95 @@ namespace GrokoEngine
             return true;
         }
 
+        /// <summary>
+        /// Replaces this object's serialized prefab content while keeping the live instance identity.
+        /// Editor prefab workflows use this to update scene instances from a prefab asset without
+        /// moving the root object or invalidating selection/history ids.
+        /// </summary>
+        public void ReplacePrefabContent(GameObject template, bool preserveRootName = true, bool preserveRootTransform = true)
+        {
+            if (template == null)
+                throw new ArgumentNullException(nameof(template));
+
+            string keepId = EditorId;
+            string keepName = Name;
+            string? keepPrefabPath = PrefabAssetPath;
+            bool keepDontDestroy = DontDestroyOnLoad;
+            var keepParent = Parent;
+            var keepPosition = transform.Position;
+            var keepRotation = transform.Rotation;
+            var keepScale = transform.Scale;
+            float keepRotX = _rx;
+            float keepRotY = _ry;
+            float keepRotZ = _rz;
+            bool keepUseQuaternionRotation = UseQuaternionRotation;
+
+            EditorId = keepId;
+            Name = preserveRootName ? keepName : template.Name;
+            Type = template.Type;
+            IsActive = template.IsActive;
+            IsCamera = template.IsCamera;
+            IsStatic = template.IsStatic;
+            Layer = template.Layer;
+            PrefabAssetPath = keepPrefabPath;
+            DontDestroyOnLoad = keepDontDestroy;
+
+            if (preserveRootTransform)
+            {
+                transform.Position = keepPosition;
+                transform.Rotation = keepRotation;
+                transform.Scale = keepScale;
+                _rx = keepRotX;
+                _ry = keepRotY;
+                _rz = keepRotZ;
+                UseQuaternionRotation = keepUseQuaternionRotation;
+            }
+            else
+            {
+                transform.Position = template.transform.Position;
+                transform.Rotation = template.transform.Rotation;
+                transform.Scale = template.transform.Scale;
+                _rx = template._rx;
+                _ry = template._ry;
+                _rz = template._rz;
+                UseQuaternionRotation = template.UseQuaternionRotation;
+            }
+
+            Components = template.Components;
+            foreach (var component in Components)
+                component.gameObject = this;
+            componentCacheDirty = true;
+
+            Children.Clear();
+            foreach (var child in template.Children.ToList())
+            {
+                child._parent = this;
+                Children.Add(child);
+                RebindTree(child);
+            }
+
+            _parent = keepParent;
+            MarkTransformDirtyRecursive();
+            OnPropertyChanged(nameof(Name));
+            OnPropertyChanged(nameof(IsActive));
+            OnPropertyChanged(nameof(IsCamera));
+            OnPropertyChanged(nameof(IsStatic));
+            OnPropertyChanged(nameof(Layer));
+        }
+
+        private static void RebindTree(GameObject obj)
+        {
+            foreach (var component in obj.Components)
+                component.gameObject = obj;
+            obj.componentCacheDirty = true;
+
+            foreach (var child in obj.Children)
+            {
+                child._parent = obj;
+                RebindTree(child);
+            }
+        }
+
         public void SetActive(bool active)
         {
             if (_isActive == active)

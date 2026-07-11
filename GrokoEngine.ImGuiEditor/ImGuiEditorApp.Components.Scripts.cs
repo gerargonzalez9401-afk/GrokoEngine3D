@@ -476,6 +476,17 @@ private void DrawScriptFields(object script, Action? onChanged = null)
                         () => { field.SetValue(script, null); onChanged?.Invoke(); });
                 }
             }
+            else if (ft == typeof(AudioClip))
+            {
+                var cur = field.GetValue(script) as AudioClip;
+                DrawAssetSlot(field.Name, cur?.Path ?? "", "None (Audio Clip)",
+                    path => { field.SetValue(script, new AudioClip(path)); onChanged?.Invoke(); },
+                    IsAudioAssetPath);
+            }
+            else if (IsAudioClipCollectionType(ft))
+            {
+                DrawAudioClipCollectionField(field, script, ft, onChanged);
+            }
             else
             {
                 FieldRow(field.Name);

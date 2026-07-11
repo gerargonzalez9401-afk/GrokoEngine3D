@@ -88,13 +88,16 @@ internal sealed partial class SceneViewportRenderer
     }
 
     private void AddSolidRange(string? texturePath, string? normalMapPath, string? roughnessMapPath, string? metallicMapPath, Action build)
-        => AddSolidRange(texturePath, normalMapPath, roughnessMapPath, metallicMapPath, null, null, null, build);
+        => AddSolidRange(texturePath, normalMapPath, roughnessMapPath, metallicMapPath, null, null, null, false, 0.5f, build);
 
     private void AddSolidRange(string? texturePath, string? normalMapPath, string? roughnessMapPath, string? metallicMapPath, string? shaderGraphPath, IReadOnlyDictionary<string, float[]>? shaderGraphProperties, IReadOnlyDictionary<string, string>? shaderGraphTextures, Action build)
+        => AddSolidRange(texturePath, normalMapPath, roughnessMapPath, metallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, false, 0.5f, build);
+
+    private void AddSolidRange(string? texturePath, string? normalMapPath, string? roughnessMapPath, string? metallicMapPath, string? shaderGraphPath, IReadOnlyDictionary<string, float[]>? shaderGraphProperties, IReadOnlyDictionary<string, string>? shaderGraphTextures, bool alphaClip, float alphaClipThreshold, Action build)
     {
         int start = ActiveSolidVertices.Count;
         build();
-        AddSolidRange(start, texturePath, normalMapPath, roughnessMapPath, metallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures);
+        AddSolidRange(start, texturePath, normalMapPath, roughnessMapPath, metallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, alphaClip, alphaClipThreshold);
     }
 
     private void AddSolidRange(int start, string? texturePath)
@@ -104,7 +107,7 @@ internal sealed partial class SceneViewportRenderer
             ActiveSolidRanges.Add(new SolidRange(start, count, NormalizeTexturePath(texturePath), null, null, null));
     }
 
-    private void AddSolidRange(int start, string? texturePath, string? normalMapPath, string? roughnessMapPath, string? metallicMapPath, string? shaderGraphPath = null, IReadOnlyDictionary<string, float[]>? shaderGraphProperties = null, IReadOnlyDictionary<string, string>? shaderGraphTextures = null)
+    private void AddSolidRange(int start, string? texturePath, string? normalMapPath, string? roughnessMapPath, string? metallicMapPath, string? shaderGraphPath = null, IReadOnlyDictionary<string, float[]>? shaderGraphProperties = null, IReadOnlyDictionary<string, string>? shaderGraphTextures = null, bool alphaClip = false, float alphaClipThreshold = 0.5f)
     {
         int count = ActiveSolidVertices.Count - start;
         if (count > 0)
@@ -117,7 +120,9 @@ internal sealed partial class SceneViewportRenderer
                 NormalizeTexturePath(metallicMapPath),
                 NormalizeExistingAssetPath(shaderGraphPath),
                 shaderGraphProperties,
-                shaderGraphTextures));
+                shaderGraphTextures,
+                alphaClip,
+                Math.Clamp(alphaClipThreshold, 0f, 1f)));
     }
 
     private void AddLine(Vector3 a, Vector3 b, Vector4 color)

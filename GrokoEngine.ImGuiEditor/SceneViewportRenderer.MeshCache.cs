@@ -247,9 +247,25 @@ internal sealed partial class SceneViewportRenderer
             return null;
         }
 
+        // Ventana de revalidación: esto corre por cada nodo con malla CADA frame, y el
+        // GetLastWriteTimeUtc por llamada costaba ~0.1 ms por nodo en carpetas OneDrive
+        // (medido: ~4 ms/frame con ~40 nodos con malla). El stat solo detecta ediciones
+        // externas del archivo; el reimport del editor invalida por otros caminos.
+        long nowTick = Environment.TickCount64;
+        if (parsedMeshCache.TryGetValue(fullPath, out var cached))
+        {
+            if (nowTick < cached.NextValidationTick)
+                return cached.Mesh;
+
+            DateTime diskTime = System.IO.File.GetLastWriteTimeUtc(fullPath);
+            if (cached.FileTime == diskTime)
+            {
+                parsedMeshCache[fullPath] = cached with { NextValidationTick = nowTick + 2000 };
+                return cached.Mesh;
+            }
+        }
+
         DateTime fileTime = System.IO.File.GetLastWriteTimeUtc(fullPath);
-        if (parsedMeshCache.TryGetValue(fullPath, out var cached) && cached.FileTime == fileTime)
-            return cached.Mesh;
 
         try
         {
@@ -263,7 +279,7 @@ internal sealed partial class SceneViewportRenderer
             if (parsedMeshCache.Count > 128)
                 parsedMeshCache.Clear();
 
-            parsedMeshCache[fullPath] = new CachedParsedMesh(mesh, fileTime);
+            parsedMeshCache[fullPath] = new CachedParsedMesh(mesh, fileTime, nowTick + 2000);
             return mesh;
         }
         catch (Exception ex)

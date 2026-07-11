@@ -1,4 +1,4 @@
-using GrokoEngine;
+﻿using GrokoEngine;
 using ImGuiNET;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -51,16 +51,16 @@ private void DrawAssetDragPreview(string path)
 
 private void DrawProjectAssetPreview(ImDrawListPtr drawList, string path, bool isDirectory, Vector2 min, float size)
     {
-        // Política: lo que YA está en caché se dibuja SIEMPRE (un AddImage es
-        // barato, no depende del hover ni del profiler). Lo visible y aún no
-        // cacheado entra en cola; la generación está limitada por frame en
+        // PolÃ­tica: lo que YA estÃ¡ en cachÃ© se dibuja SIEMPRE (un AddImage es
+        // barato, no depende del hover ni del profiler). Lo visible y aÃºn no
+        // cacheado entra en cola; la generaciÃ³n estÃ¡ limitada por frame en
         // ProcessPreviewGenerationQueue (1 job/frame, presupuesto de ms y de
-        // trabajos de disco), así que carga "de a poco" sin bloquear FPS.
+        // trabajos de disco), asÃ­ que carga "de a poco" sin bloquear FPS.
 
         if (isDirectory)
         {
             // No escanear el contenido de cada carpeta en cada frame.
-            // Para máximo FPS dibujamos icono de carpeta rápido.
+            // Para mÃ¡ximo FPS dibujamos icono de carpeta rÃ¡pido.
             DrawFolderPreview(drawList, min, size, false);
             return;
         }
@@ -80,9 +80,9 @@ private void DrawProjectAssetPreview(ImDrawListPtr drawList, string path, bool i
 
         if (MaterialAsset.IsMaterialPath(path))
         {
-            // DrawMaterialPreview dibuja la esfera cacheada si existe y, con
-            // requestPreview, encola la generación del visible.
-            DrawMeshLikePreview(drawList, min, size, "MAT");
+            // Esfera PBR cacheada (Library/Previews); si aÃºn no existe, se encola
+            // su generaciÃ³n en fondo y mientras tanto se ve el placeholder.
+            DrawMaterialPreview(drawList, path, min, size, requestPreview: true);
             return;
         }
 
@@ -111,6 +111,19 @@ private void DrawProjectAssetPreview(ImDrawListPtr drawList, string path, bool i
         if (kind == "PART")
         {
             DrawParticlePresetAssetPreview(drawList, min, size);
+            return;
+        }
+
+        if (kind == "CTRL")
+        {
+            DrawAnimatorControllerAssetPreview(drawList, min, size);
+            return;
+        }
+
+        if (kind == "AUDIO" && TryGetCustomEditorIconTexture("audioclip_64.png", out var audioTextureId))
+        {
+            // Onda naranja a todo color (no teñida), centrada en la celda.
+            DrawImagePreview(drawList, audioTextureId, min, size);
             return;
         }
 
@@ -147,226 +160,6 @@ private void DrawProjectEntryPreview(ImDrawListPtr drawList, ProjectAssetEntry e
         }
 
         DrawProjectAssetPreview(drawList, entry.Path, entry.IsDirectory, min, size);
-    }
-
-private static void DrawSubmeshAssetPreview(ImDrawListPtr drawList, Vector2 min, float size)
-    {
-        var max = min + new Vector2(size, size);
-        uint bg = ImGui.GetColorU32(new System.Numerics.Vector4(0.19f, 0.24f, 0.27f, 1f));
-        uint line = ImGui.GetColorU32(new System.Numerics.Vector4(0.48f, 0.78f, 0.92f, 1f));
-        uint soft = ImGui.GetColorU32(new System.Numerics.Vector4(0.24f, 0.48f, 0.58f, 1f));
-        drawList.AddRectFilled(min, max, bg, 4f);
-
-        float pad = size * 0.18f;
-        var a = min + new Vector2(pad, size * 0.70f);
-        var b = min + new Vector2(size * 0.48f, pad);
-        var c = min + new Vector2(size - pad, size * 0.70f);
-        var d = min + new Vector2(size * 0.50f, size * 0.84f);
-
-        drawList.AddTriangleFilled(a, b, d, soft);
-        drawList.AddTriangleFilled(b, c, d, soft);
-        drawList.AddLine(a, b, line, Math.Max(1f, size * 0.035f));
-        drawList.AddLine(b, c, line, Math.Max(1f, size * 0.035f));
-        drawList.AddLine(c, d, line, Math.Max(1f, size * 0.035f));
-        drawList.AddLine(d, a, line, Math.Max(1f, size * 0.035f));
-        drawList.AddLine(b, d, line, Math.Max(1f, size * 0.03f));
-    }
-
-private static void DrawAvatarAssetPreview(ImDrawListPtr drawList, Vector2 min, float size)
-    {
-        DrawFileAssetPreview(drawList, min, size, "AV", ProjectAssetColorForKind("AVATAR"));
-        uint mint = ImGui.GetColorU32(new System.Numerics.Vector4(0.55f, 1f, 0.88f, 1f));
-        var c = min + new Vector2(size * 0.5f, size * 0.44f);
-        float r = size * 0.08f;
-        drawList.AddCircleFilled(c + new Vector2(0f, -size * 0.16f), r, mint, 18);
-        drawList.AddLine(c + new Vector2(0f, -size * 0.07f), c + new Vector2(0f, size * 0.18f), mint, Math.Max(1.6f, size * 0.045f));
-        drawList.AddLine(c + new Vector2(-size * 0.17f, size * 0.02f), c + new Vector2(size * 0.17f, size * 0.02f), mint, Math.Max(1.4f, size * 0.04f));
-        drawList.AddLine(c + new Vector2(0f, size * 0.18f), c + new Vector2(-size * 0.13f, size * 0.34f), mint, Math.Max(1.4f, size * 0.04f));
-        drawList.AddLine(c + new Vector2(0f, size * 0.18f), c + new Vector2(size * 0.13f, size * 0.34f), mint, Math.Max(1.4f, size * 0.04f));
-    }
-
-private static void DrawAnimationAssetPreview(ImDrawListPtr drawList, Vector2 min, float size)
-    {
-        DrawFileAssetPreview(drawList, min, size, "AN", ProjectAssetColorForKind("ANIM"));
-        uint teal = ImGui.GetColorU32(new System.Numerics.Vector4(0.48f, 0.98f, 0.86f, 1f));
-        var a = min + new Vector2(size * 0.34f, size * 0.24f);
-        var b = min + new Vector2(size * 0.70f, size * 0.50f);
-        var c = min + new Vector2(size * 0.34f, size * 0.76f);
-        drawList.AddTriangleFilled(a, b, c, teal);
-    }
-
-private static void DrawParticlePresetAssetPreview(ImDrawListPtr drawList, Vector2 min, float size)
-    {
-        var max = min + new Vector2(size, size);
-        uint bgTop = ImGui.GetColorU32(new System.Numerics.Vector4(0.15f, 0.08f, 0.20f, 1f));
-        uint bgBottom = ImGui.GetColorU32(new System.Numerics.Vector4(0.04f, 0.05f, 0.08f, 1f));
-        uint border = ImGui.GetColorU32(new System.Numerics.Vector4(0.78f, 0.42f, 1.00f, 1f));
-        uint glow = ImGui.GetColorU32(new System.Numerics.Vector4(0.72f, 0.32f, 1.00f, 0.32f));
-        uint hot = ImGui.GetColorU32(new System.Numerics.Vector4(1.00f, 0.72f, 0.25f, 1f));
-        uint pink = ImGui.GetColorU32(new System.Numerics.Vector4(0.92f, 0.35f, 1.00f, 1f));
-        uint blue = ImGui.GetColorU32(new System.Numerics.Vector4(0.34f, 0.78f, 1.00f, 1f));
-        uint white = ImGui.GetColorU32(new System.Numerics.Vector4(0.92f, 0.96f, 1.00f, 1f));
-
-        drawList.AddRectFilledMultiColor(min, max, bgTop, bgTop, bgBottom, bgBottom);
-        drawList.AddRect(min, max, border, 6f, ImDrawFlags.None, Math.Max(1.2f, size * 0.035f));
-
-        var center = min + new Vector2(size * 0.50f, size * 0.55f);
-        for (int i = 0; i < 7; i++)
-        {
-            float a = -1.2f + i * 0.42f;
-            float len = size * (0.22f + (i % 3) * 0.045f);
-            var p0 = center + new Vector2(MathF.Cos(a) * size * 0.06f, MathF.Sin(a) * size * 0.04f);
-            var p1 = center + new Vector2(MathF.Cos(a) * len, MathF.Sin(a) * len);
-            uint col = i % 3 == 0 ? hot : i % 3 == 1 ? pink : blue;
-            drawList.AddLine(p0, p1, col, Math.Max(1.2f, size * 0.035f));
-            drawList.AddCircleFilled(p1, Math.Max(1.6f, size * 0.045f), col, 14);
-        }
-
-        drawList.AddCircleFilled(center, size * 0.18f, glow, 24);
-        drawList.AddCircleFilled(center, size * 0.075f, white, 18);
-
-        if (size >= 38f)
-            drawList.AddText(min + new Vector2(size * 0.17f, size * 0.09f), white, "FX");
-    }
-
-private void DrawFolderPreview(ImDrawListPtr drawList, Vector2 min, float size, bool hasContent)
-    {
-        IntPtr textureId;
-        bool gotTexture = hasContent
-            ? TryGetFolderFullIconTexture(out textureId)
-            : TryGetFolderEmptyIconTexture(out textureId);
-
-        if (gotTexture)
-        {
-            DrawImagePreview(drawList, textureId, min, size);
-            return;
-        }
-
-        DrawFileAssetPreview(drawList, min, size, "DIR", new System.Numerics.Vector4(0.55f, 0.55f, 0.58f, 1f));
-    }
-
-private static void DrawScriptAssetPreview(ImDrawListPtr drawList, Vector2 min, float size)
-    {
-        var max = min + new Vector2(size, size);
-        uint shadow = ImGui.GetColorU32(new System.Numerics.Vector4(0.05f, 0.06f, 0.06f, 1f));
-        uint paper = ImGui.GetColorU32(new System.Numerics.Vector4(0.90f, 0.91f, 0.90f, 1f));   // documento gris claro
-        uint fold = ImGui.GetColorU32(new System.Numerics.Vector4(0.68f, 0.70f, 0.68f, 1f));   // esquina doblada
-        uint green = ImGui.GetColorU32(new System.Numerics.Vector4(0.13f, 0.52f, 0.20f, 1f));   // verde C#
-
-        Vector2 a = min + new Vector2(size * 0.18f, size * 0.05f);
-        Vector2 b = max - new Vector2(size * 0.16f, size * 0.05f);
-        float cut = size * 0.22f;
-
-        // Documento con esquina superior-derecha doblada
-        drawList.AddRectFilled(a + new Vector2(2f, 3f), b + new Vector2(2f, 3f), shadow, 3f);
-        drawList.AddRectFilled(a, b, paper, 3f);
-        drawList.AddTriangleFilled(new Vector2(b.X - cut, a.Y), new Vector2(b.X, a.Y + cut), new Vector2(b.X - cut, a.Y + cut), fold);
-
-        // "#" verde grande (2 barras verticales inclinadas + 2 horizontales)
-        float cx = (a.X + b.X) * 0.5f;
-        float cy = (a.Y + b.Y) * 0.5f - size * 0.02f;
-        float h = size * 0.19f;
-        float w = size * 0.17f;
-        float sp = size * 0.075f;
-        float sk = size * 0.045f;
-        float th = Math.Max(1.6f, size * 0.05f);
-        drawList.AddLine(new Vector2(cx - sp - sk, cy - h), new Vector2(cx - sp + sk, cy + h), green, th);
-        drawList.AddLine(new Vector2(cx + sp - sk, cy - h), new Vector2(cx + sp + sk, cy + h), green, th);
-        drawList.AddLine(new Vector2(cx - w, cy - sp), new Vector2(cx + w, cy - sp), green, th);
-        drawList.AddLine(new Vector2(cx - w, cy + sp), new Vector2(cx + w, cy + sp), green, th);
-
-        // "cs" abajo-derecha (solo si el ícono es suficientemente grande)
-        if (size >= 44f)
-            drawList.AddText(new Vector2(b.X - size * 0.27f, b.Y - size * 0.24f), green, "cs");
-    }
-
-private static void DrawFileAssetPreview(ImDrawListPtr drawList, Vector2 min, float size, string kind, System.Numerics.Vector4 colorValue)
-    {
-        uint color = ImGui.GetColorU32(colorValue);
-        uint shadow = ImGui.GetColorU32(new System.Numerics.Vector4(0.08f, 0.08f, 0.09f, 1f));
-        uint fold = ImGui.GetColorU32(new System.Numerics.Vector4(colorValue.X * 0.60f, colorValue.Y * 0.60f, colorValue.Z * 0.60f, 1f));
-        Vector2 docMin = min + new Vector2(size * 0.16f, size * 0.06f);
-        Vector2 docMax = min + new Vector2(size * 0.84f, size * 0.92f);
-        drawList.AddRectFilled(docMin + new Vector2(2f, 3f), docMax + new Vector2(2f, 3f), shadow, 4f);
-        drawList.AddRectFilled(docMin, docMax, color, 4f);
-        drawList.AddTriangleFilled(new Vector2(docMax.X - size * 0.22f, docMin.Y), new Vector2(docMax.X, docMin.Y), new Vector2(docMax.X, docMin.Y + size * 0.22f), fold);
-        drawList.AddText(docMin + new Vector2(size * 0.10f, size * 0.36f), ImGui.GetColorU32(new System.Numerics.Vector4(0.96f, 0.96f, 0.96f, 1f)), kind);
-    }
-
-private bool TryGetEditorScriptIconTexture(out IntPtr textureId)
-    {
-        string iconPath = Path.Combine(projectPath, "Docs", "Photoshop", "CS_ICO.png");
-        if (!File.Exists(iconPath))
-        {
-            textureId = IntPtr.Zero;
-            return false;
-        }
-
-        return TryGetPreviewTexture(iconPath, out textureId);
-    }
-
-private bool TryGetCustomEditorIconTexture(string fileName, out IntPtr textureId)
-    {
-        textureId = IntPtr.Zero;
-
-        string iconPath = Path.Combine(AppContext.BaseDirectory, "EditorIcons", fileName);
-
-        if (!File.Exists(iconPath))
-            return false;
-
-        string key = "editoricon:" + iconPath;
-        DateTime writeTime = File.GetLastWriteTimeUtc(iconPath);
-
-        if (assetPreviewTextures.TryGetValue(key, out int cachedTexture) &&
-            assetPreviewWriteTimes.TryGetValue(key, out DateTime cachedTime) &&
-            cachedTime == writeTime &&
-            cachedTexture != 0)
-        {
-            textureId = (IntPtr)cachedTexture;
-            return true;
-        }
-
-        if (cachedTexture != 0)
-        {
-            GL.DeleteTexture(cachedTexture);
-            assetPreviewTextures.Remove(key);
-            assetPreviewWriteTimes.Remove(key);
-        }
-
-        if (!LoadPreviewTextureFile(iconPath, out int texture))
-            return false;
-
-        assetPreviewTextures[key] = texture;
-        assetPreviewWriteTimes[key] = writeTime;
-
-        textureId = (IntPtr)texture;
-        return true;
-    }
-
-private bool TryGetFolderEmptyIconTexture(out IntPtr textureId) =>
-        TryGetCustomEditorIconTexture("folder_empty.png", out textureId);
-
-private bool TryGetFolderFullIconTexture(out IntPtr textureId) =>
-        TryGetCustomEditorIconTexture("folder_full.png", out textureId);
-
-private bool TryGetRigidbodyIconTexture(out IntPtr textureId) =>
-        TryGetCustomEditorIconTexture("rigidbody.png", out textureId);
-
-private static void DrawImagePreview(
-    ImDrawListPtr drawList,
-    IntPtr textureId,
-    Vector2 min,
-    float size)
-    {
-        var max = min + new Vector2(size, size);
-
-        drawList.AddImage(
-            textureId,
-            min,
-            max,
-            new Vector2(0f, 0f),
-            new Vector2(1f, 1f)
-        );
     }
 
 private void DrawMaterialPreview(ImDrawListPtr drawList, string path, Vector2 min, float size, bool requestPreview)
@@ -406,6 +199,17 @@ private bool TryGetCachedPreviewTexture(string path, out IntPtr textureId)
         var now = DateTime.UtcNow;
         if (assetPreviewNextValidationUtc.TryGetValue(key, out DateTime nextValidation) && nextValidation > now)
         {
+            textureId = (IntPtr)cachedTexture;
+            assetPreviewFrameCache[key] = textureId;
+            return true;
+        }
+
+        // En Play NO se sondea el disco: los cambios hechos EN el editor invalidan directo
+        // (InvalidateAssetPreview) y las ediciones externas pueden esperar a salir de Play.
+        // Con el proyecto en OneDrive, cada stat costaba varios ms y bajaba los FPS del juego.
+        if (isPlaying)
+        {
+            assetPreviewNextValidationUtc[key] = now + PreviewValidationDelay();
             textureId = (IntPtr)cachedTexture;
             assetPreviewFrameCache[key] = textureId;
             return true;
@@ -460,7 +264,7 @@ private void InvalidateAssetPreview(string path, bool deleteTexture = false)
         assetPreviewNextValidationUtc.Remove(key);
         assetPreviewFrameCache.Remove(key);
         assetPreviewFrameMisses.Remove(key);
-        materialPreviewSourceCache.Remove(path);
+        materialPreviewSourceCache.TryRemove(path, out _);
 
         string shaderGraphKey = ShaderGraphMaterialPreviewCacheKey(path);
         if (deleteTexture && assetPreviewTextures.TryGetValue(shaderGraphKey, out int shaderGraphTexture) && shaderGraphTexture != 0)
@@ -515,6 +319,10 @@ private void QueuePreviewGeneration(string path)
 private static bool ShouldQueuePreviewAsset(string path)
     {
         if (MaterialAsset.IsTexturePath(path))
+            return true;
+
+        // Los .mat generan su esfera PBR en fondo, igual que texturas y mallas.
+        if (MaterialAsset.IsMaterialPath(path))
             return true;
 
         string kind = GetAssetKind(path);
@@ -619,13 +427,12 @@ private static IEnumerable<string> EnumeratePreviewPrewarmAssets(IEnumerable<str
         }
     }
 
-    private readonly Random previewValidationRng = new();
-
-    // Intervalo de revalidación CON jitter: evita que decenas de previews cacheadas en el mismo
-    // frame expiren todas a la vez (ráfaga de lecturas de disco → tirón de UI periódico). Las
-    // reparte a lo largo de ~1 s extra.
-    private TimeSpan PreviewValidationDelay() =>
-        AssetPreviewValidationInterval + TimeSpan.FromMilliseconds(previewValidationRng.Next(0, 1000));
+    // Intervalo de revalidaciÃ³n CON jitter: evita que decenas de previews cacheadas en el mismo
+    // frame expiren todas a la vez (rÃ¡faga de lecturas de disco â†’ tirÃ³n de UI periÃ³dico). Las
+    // reparte a lo largo de ~3 s extra. Random.Shared: esto tambiÃ©n se llama desde los workers
+    // de fondo de previews, y un Random normal se corrompe con acceso concurrente.
+    private static TimeSpan PreviewValidationDelay() =>
+        AssetPreviewValidationInterval + TimeSpan.FromMilliseconds(System.Random.Shared.Next(0, 3000));
 
 private void ProcessPreviewGenerationQueue()
     {
@@ -794,6 +601,15 @@ private bool TryGetPreviewTexture(string path, out IntPtr textureId)
             var now = DateTime.UtcNow;
             if (assetPreviewNextValidationUtc.TryGetValue(key, out DateTime nextValidation) && nextValidation > now)
             {
+                textureId = (IntPtr)cachedTexture;
+                assetPreviewFrameCache[key] = textureId;
+                return true;
+            }
+
+            // En Play no se sondea el disco (ver TryGetCachedPreviewTexture).
+            if (isPlaying)
+            {
+                assetPreviewNextValidationUtc[key] = now + PreviewValidationDelay();
                 textureId = (IntPtr)cachedTexture;
                 assetPreviewFrameCache[key] = textureId;
                 return true;
@@ -971,7 +787,7 @@ private bool TryGetShaderGraphMaterialPreviewTexture(string path, MaterialAssetD
             QueuePreviewGeneration(path);
 
         // Mantener el Project Panel ligero: no cocinamos previews ShaderGraph dentro del draw del tile.
-        // El preview normal del material se carga por cola/cache y evita caídas de FPS al mostrar muchos assets.
+        // El preview normal del material se carga por cola/cache y evita caÃ­das de FPS al mostrar muchos assets.
         assetPreviewFrameMisses.Add(key);
         return false;
 
@@ -994,31 +810,61 @@ private bool TryGetMaterialPreviewSourceCache(string path, out MaterialPreviewSo
     {
         cached = new MaterialPreviewSourceCache();
 
-        if (!MaterialAsset.IsMaterialPath(path) || !File.Exists(path))
+        if (!MaterialAsset.IsMaterialPath(path))
             return false;
 
         try
         {
-            DateTime materialWriteUtc = File.GetLastWriteTimeUtc(path);
+            // Dentro de la ventana de validaciÃ³n (o en Play) NO se toca el disco en absoluto
+            // (ni File.Exists): este mÃ©todo corre en el draw de tiles visibles y del preview
+            // del inspector. Un borrado externo se detecta en la siguiente revalidaciÃ³n.
             if (materialPreviewSourceCache.TryGetValue(path, out var existing) &&
-                existing.MaterialWriteUtc == materialWriteUtc)
+                (existing.NextValidationUtc > DateTime.UtcNow || isPlaying))
+            {
+                cached = existing;
+                return true;
+            }
+
+            if (!File.Exists(path))
+            {
+                materialPreviewSourceCache.TryRemove(path, out _);
+                return false;
+            }
+
+            DateTime materialWriteUtc = File.GetLastWriteTimeUtc(path);
+            if (existing != null && existing.MaterialWriteUtc == materialWriteUtc)
             {
                 var now = DateTime.UtcNow;
-                if (!existing.HasShaderGraph && existing.NextValidationUtc > now)
-                {
-                    cached = existing;
-                    return true;
-                }
 
+                // El .mat no cambiÃ³: revalidar SOLO las dependencias (stats de fecha), sin
+                // re-parsear el JSON (el Load periÃ³dico por material era un coste real,
+                // peor en OneDrive).
+                DateTime revalidatedStamp = materialWriteUtc;
+                AddDependencyStamp(MaterialAsset.GetAlbedo(existing.Data), ref revalidatedStamp);
+                AddDependencyStamp(existing.Data.NormalMapPath, ref revalidatedStamp);
+                AddDependencyStamp(existing.Data.RoughnessMapPath, ref revalidatedStamp);
+                AddDependencyStamp(existing.Data.MetallicMapPath, ref revalidatedStamp);
+                foreach (var texturePath in existing.Data.ShaderGraphTextures.Values)
+                    AddDependencyStamp(texturePath, ref revalidatedStamp);
                 if (existing.HasShaderGraph && File.Exists(existing.ShaderGraphPath))
                 {
-                    DateTime cachedShaderGraphWriteUtc = File.GetLastWriteTimeUtc(existing.ShaderGraphPath);
-                    if (cachedShaderGraphWriteUtc == existing.ShaderGraphWriteUtc && existing.NextValidationUtc > now)
-                    {
-                        cached = existing;
-                        return true;
-                    }
+                    DateTime sgWrite = File.GetLastWriteTimeUtc(existing.ShaderGraphPath);
+                    if (sgWrite > revalidatedStamp)
+                        revalidatedStamp = sgWrite;
                 }
+
+                cached = new MaterialPreviewSourceCache
+                {
+                    MaterialWriteUtc = existing.MaterialWriteUtc,
+                    HasShaderGraph = existing.HasShaderGraph,
+                    Data = existing.Data,
+                    ShaderGraphPath = existing.ShaderGraphPath,
+                    ShaderGraphWriteUtc = existing.ShaderGraphWriteUtc,
+                    DependencyStamp = revalidatedStamp,
+                    NextValidationUtc = now + PreviewValidationDelay()
+                };
+                materialPreviewSourceCache[path] = cached;
+                return true;
             }
 
             var data = MaterialAsset.Load(path);
@@ -1055,7 +901,7 @@ private bool TryGetMaterialPreviewSourceCache(string path, out MaterialPreviewSo
         }
         catch
         {
-            materialPreviewSourceCache.Remove(path);
+            materialPreviewSourceCache.TryRemove(path, out _);
             cached = new MaterialPreviewSourceCache();
             return false;
         }
@@ -1093,78 +939,533 @@ private System.Drawing.Bitmap? GenerateShaderGraphMaterialPreviewBitmap(Material
         }
     }
 
-private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(MaterialAssetData data, string albedoPath)
+    // â”€â”€ Esfera de material estilo Unity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // PBR real en espacio LINEAL (Cook-Torrance GGX + ambiente de estudio
+    // procedural), con albedo/normal/roughness/metallic maps, emisiÃ³n HDR,
+    // damero para transparentes y tone mapping ACES. Se rasteriza a 2x del
+    // tamaÃ±o final (SSAA) sobre un buffer bloqueado â€” cero SetPixel/GetPixel.
+    // Corre en el hilo de fondo de previews y el resultado va al cache de disco
+    // (Library/Previews): el coste por frame del editor es solo un AddImage.
+private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(MaterialAssetData data)
+    => GenerateMaterialSpherePreviewBitmap(data, 0f, 0f, null);
+
+    // yaw/pitch giran la BOLA (no la luz): la iluminaciÃ³n de estudio queda fija en cÃ¡mara,
+    // como el preview interactivo de Unity, y la textura recorre la superficie al arrastrar.
+private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(MaterialAssetData data, float yawDeg, float pitchDeg, MaterialPreviewMaps? maps)
     {
-        const int size = 128;
+        const int size = 256; // EnsureProjectAssetDiskPreview lo reduce a 128 (bicÃºbico) = SSAA 2x
         var bitmap = new System.Drawing.Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        using System.Drawing.Bitmap? albedo = LoadSmallMaterialAlbedo(albedoPath, 256);
 
-        float radius = size * 0.46f;
+        PreviewSampler? albedoMap = maps != null ? maps.Albedo : PreviewSampler.Load(MaterialAsset.GetAlbedo(data), 256);
+        PreviewSampler? normalMap = maps != null ? maps.Normal : PreviewSampler.Load(data.NormalMapPath, 256);
+        PreviewSampler? roughnessMap = maps != null ? maps.Roughness : PreviewSampler.Load(data.RoughnessMapPath, 128);
+        PreviewSampler? metallicMap = maps != null ? maps.Metallic : PreviewSampler.Load(data.MetallicMapPath, 128);
+
+        bool rotated = MathF.Abs(yawDeg) > 0.001f || MathF.Abs(pitchDeg) > 0.001f;
+        float yawCos = MathF.Cos(yawDeg * 0.017453292f), yawSin = MathF.Sin(yawDeg * 0.017453292f);
+        float pitCos = MathF.Cos(pitchDeg * 0.017453292f), pitSin = MathF.Sin(pitchDeg * 0.017453292f);
+
+        float radius = size * 0.47f;
         float cx = size * 0.50f;
-        float cy = size * 0.48f;
-        float roughness = Math.Clamp(data.Roughness, 0f, 1f);
-        float metallic = Math.Clamp(data.Metallic, 0f, 1f);
-        var light = Normalize3(-0.45f, -0.65f, 0.80f);
+        float cy = size * 0.50f;
 
-        for (int y = 0; y < size; y++)
+        // Color base y emisiÃ³n en LINEAL (los valores/Ã¡lbedo del asset estÃ¡n en sRGB).
+        float baseLinR = SrgbToLinear(Math.Clamp(data.R, 0f, 1f));
+        float baseLinG = SrgbToLinear(Math.Clamp(data.G, 0f, 1f));
+        float baseLinB = SrgbToLinear(Math.Clamp(data.B, 0f, 1f));
+        float emisR = SrgbToLinear(Math.Clamp(data.EmissionR, 0f, 1f)) * MathF.Max(0f, data.EmissionIntensity);
+        float emisG = SrgbToLinear(Math.Clamp(data.EmissionG, 0f, 1f)) * MathF.Max(0f, data.EmissionIntensity);
+        float emisB = SrgbToLinear(Math.Clamp(data.EmissionB, 0f, 1f)) * MathF.Max(0f, data.EmissionIntensity);
+
+        bool transparent = data.SurfaceType == MaterialSurfaceType.Transparent;
+        float surfaceAlpha = transparent ? Math.Clamp(data.Alpha, 0f, 1f) : 1f;
+
+        // IluminaciÃ³n de estudio (como el preview de Unity): key cÃ¡lida arriba-izquierda,
+        // fill frÃ­a suave desde la derecha, mÃ¡s ambiente/reflejo procedural.
+        var key = Normalize3(-0.42f, 0.62f, 0.66f);
+        var fill = Normalize3(0.65f, -0.10f, 0.55f);
+        const float keyIntensity = 2.6f;
+        const float fillIntensity = 0.45f;
+
+        var pixels = new byte[size * size * 4];
+
+        // Cada fila escribe un rango disjunto del buffer y solo LEE los samplers â†’
+        // paralelizable sin locks. Importa para el preview interactivo (rota a ~10 ms
+        // en vez de ~90 en Debug) y acelera el precalentado de la Library.
+        System.Threading.Tasks.Parallel.For(0, size, y =>
         {
+            int row = y * size * 4;
             for (int x = 0; x < size; x++)
             {
-                float nx = (x + 0.5f - cx) / radius;
-                float ny = (y + 0.5f - cy) / radius;
-                float r2 = nx * nx + ny * ny;
-                if (r2 > 1f)
-                {
-                    bitmap.SetPixel(x, y, System.Drawing.Color.FromArgb(0, 0, 0, 0));
-                    continue;
-                }
+                // Coordenadas de esfera; +Y arriba en mundo (la Y de pantalla crece hacia abajo).
+                float sx = (x + 0.5f - cx) / radius;
+                float sy = -((y + 0.5f - cy) / radius);
+                float r2 = sx * sx + sy * sy;
+                float coverage = Math.Clamp((1f - MathF.Sqrt(MathF.Max(r2, 1e-8f))) * radius, 0f, 1f);
+                if (coverage <= 0f)
+                    continue; // fuera de la esfera: transparente (el buffer ya estÃ¡ a cero)
 
                 float nz = MathF.Sqrt(MathF.Max(0f, 1f - r2));
-                float diffuse = Math.Clamp(nx * light.X + ny * light.Y + nz * light.Z, 0f, 1f);
-                float fresnel = MathF.Pow(1f - Math.Clamp(nz, 0f, 1f), 2.2f);
-                float spec = MathF.Pow(Math.Clamp(nx * -0.35f + ny * -0.45f + nz * 0.85f, 0f, 1f), 18f + (1f - roughness) * 70f);
+                float nx = sx, ny = sy;
 
-                SampleMaterialBase(albedo, nx, ny, nz, out float tr, out float tg, out float tb);
-                float baseR = Math.Clamp(data.R * tr, 0f, 1f);
-                float baseG = Math.Clamp(data.G * tg, 0f, 1f);
-                float baseB = Math.Clamp(data.B * tb, 0f, 1f);
+                // Normal en espacio de OBJETO: la rotaciÃ³n del usuario gira la bola bajo la
+                // cÃ¡mara fija. N_obj = Rx(-pitch) Â· Ry(-yaw) Â· N_vista.
+                float ox = nx, oy = ny, oz = nz;
+                if (rotated)
+                {
+                    float rx1 = ox * yawCos - oz * yawSin;
+                    float rz1 = ox * yawSin + oz * yawCos;
+                    ox = rx1;
+                    float ry1 = oy * pitCos + rz1 * pitSin;
+                    oz = -oy * pitSin + rz1 * pitCos;
+                    oy = ry1;
+                }
 
-                float shade = 0.58f + diffuse * 0.58f;
-                shade += fresnel * (0.16f + metallic * 0.22f);
-                float specular = spec * (0.26f + metallic * 0.48f) * (1.10f - roughness * 0.50f);
+                // UV esfÃ©rico sobre la bola rotada (como Unity: la textura envuelve la bola).
+                float u = 0.5f + MathF.Atan2(ox, oz) / (MathF.PI * 2f);
+                float v = 0.5f - oy * 0.5f;
 
-                int rr = ToByte(baseR * shade + specular + 0.035f);
-                int gg = ToByte(baseG * shade + specular + 0.035f);
-                int bb = ToByte(baseB * shade + specular + 0.035f);
-                bitmap.SetPixel(x, y, System.Drawing.Color.FromArgb(255, rr, gg, bb));
+                // Normal map en espacio tangente (T a lo largo de U, B a lo largo de V), calculado
+                // en espacio de objeto y devuelto a espacio de vista para iluminar.
+                if (normalMap is { } nm)
+                {
+                    nm.Sample(u, v, out float mr, out float mg, out float mb);
+                    float tnx = mr * 2f - 1f, tny = mg * 2f - 1f, tnz = MathF.Max(0.2f, mb * 2f - 1f);
+                    float phi = MathF.Atan2(ox, oz);
+                    float cphi = MathF.Cos(phi), sphi = MathF.Sin(phi);
+                    var t = (X: cphi, Y: 0f, Z: -sphi);
+                    var b = Normalize3(-oy * sphi, oz * cphi + ox * sphi, -oy * cphi);
+                    var pn = Normalize3(
+                        t.X * tnx + b.X * tny + ox * tnz,
+                        t.Y * tnx + b.Y * tny + oy * tnz,
+                        t.Z * tnx + b.Z * tny + oz * tnz);
+
+                    // De vuelta a vista: N_vista = Ry(yaw) Â· Rx(pitch) Â· N_obj.
+                    float px = pn.X, py = pn.Y, pz = pn.Z;
+                    if (rotated)
+                    {
+                        float ry2 = py * pitCos - pz * pitSin;
+                        float rz2 = py * pitSin + pz * pitCos;
+                        py = ry2;
+                        float rx2 = px * yawCos + rz2 * yawSin;
+                        pz = -px * yawSin + rz2 * yawCos;
+                        px = rx2;
+                    }
+                    nx = px; ny = py; nz = pz;
+                }
+
+                // ParÃ¡metros de superficie (mapas en lineal; el albedo sÃ­ es sRGB).
+                float albR = baseLinR, albG = baseLinG, albB = baseLinB;
+                if (albedoMap is { } am)
+                {
+                    am.Sample(u, v, out float tr, out float tg, out float tb);
+                    albR *= SrgbToLinear(tr); albG *= SrgbToLinear(tg); albB *= SrgbToLinear(tb);
+                }
+
+                float roughness = Math.Clamp(data.Roughness, 0f, 1f);
+                if (roughnessMap is { } rm) { rm.Sample(u, v, out float rr0, out _, out _); roughness *= rr0; }
+                roughness = Math.Clamp(roughness, 0.045f, 1f);
+
+                float metallic = Math.Clamp(data.Metallic, 0f, 1f);
+                if (metallicMap is { } mm) { mm.Sample(u, v, out float mm0, out _, out _); metallic *= mm0; }
+
+                // Cook-Torrance: F0 dielÃ©ctrico 4%, metÃ¡lico usa el albedo como F0.
+                float f0R = 0.04f + (albR - 0.04f) * metallic;
+                float f0G = 0.04f + (albG - 0.04f) * metallic;
+                float f0B = 0.04f + (albB - 0.04f) * metallic;
+                float kdR = albR * (1f - metallic);
+                float kdG = albG * (1f - metallic);
+                float kdB = albB * (1f - metallic);
+
+                float ndv = MathF.Max(nz, 1e-4f); // V = (0,0,1)
+
+                float outR = 0f, outG = 0f, outB = 0f;
+                AccumulateGgxLight(nx, ny, nz, ndv, key, keyIntensity, 1.00f, 0.98f, 0.94f, roughness, f0R, f0G, f0B, kdR, kdG, kdB, specScale: 1f, ref outR, ref outG, ref outB);
+                // El fill es solo difuso (softbox): un segundo lÃ³bulo especular pintaba "dos soles" en metales pulidos.
+                AccumulateGgxLight(nx, ny, nz, ndv, fill, fillIntensity, 0.62f, 0.70f, 0.86f, roughness, f0R, f0G, f0B, kdR, kdG, kdB, specScale: 0f, ref outR, ref outG, ref outB);
+
+                // Ambiente difuso: gradiente de estudio (cielo arriba, suelo abajo).
+                float hemi = ny * 0.5f + 0.5f;
+                float ambR = 0.055f + hemi * 0.115f;
+                float ambG = 0.060f + hemi * 0.120f;
+                float ambB = 0.070f + hemi * 0.135f;
+                outR += kdR * ambR; outG += kdG * ambG; outB += kdB * ambB;
+
+                // Reflejo especular de ambiente: R = reflect(-V, N), entorno procedural
+                // (gradiente + "ventana" de estudio) difuminado segÃºn roughness.
+                float rx = 2f * ndv * nx, ry = 2f * ndv * ny, rz = 2f * ndv * nz - 1f;
+                SampleStudioEnvironment(rx, ry, rz, roughness, out float envR, out float envG, out float envB);
+                float fresnel = MathF.Pow(1f - ndv, 5f);
+                float grazing = MathF.Max(1f - roughness, 0.04f);
+                float envSpecR = f0R + (grazing - f0R) * fresnel;
+                float envSpecG = f0G + (grazing - f0G) * fresnel;
+                float envSpecB = f0B + (grazing - f0B) * fresnel;
+                float envFade = 1f - roughness * roughness * 0.55f; // los rugosos reflejan menos definido
+                outR += envR * envSpecR * envFade;
+                outG += envG * envSpecG * envFade;
+                outB += envB * envSpecB * envFade;
+
+                outR += emisR; outG += emisG; outB += emisB;
+
+                // ACES + linealâ†’sRGB.
+                float srgbR = LinearToSrgb(TonemapAces(outR));
+                float srgbG = LinearToSrgb(TonemapAces(outG));
+                float srgbB = LinearToSrgb(TonemapAces(outB));
+
+                if (transparent)
+                {
+                    // Damero estilo Unity detrÃ¡s de la superficie transparente.
+                    bool check = (((x / 24) + (y / 24)) & 1) == 0;
+                    float checker = check ? 0.44f : 0.30f;
+                    srgbR = srgbR * surfaceAlpha + checker * (1f - surfaceAlpha);
+                    srgbG = srgbG * surfaceAlpha + checker * (1f - surfaceAlpha);
+                    srgbB = srgbB * surfaceAlpha + checker * (1f - surfaceAlpha);
+                }
+
+                int idx = row + x * 4;
+                pixels[idx + 0] = (byte)ToByte(srgbB);
+                pixels[idx + 1] = (byte)ToByte(srgbG);
+                pixels[idx + 2] = (byte)ToByte(srgbR);
+                pixels[idx + 3] = (byte)(coverage * 255f + 0.5f);
+            }
+        });
+
+        var rect = new System.Drawing.Rectangle(0, 0, size, size);
+        var locked = bitmap.LockBits(rect, System.Drawing.Imaging.ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        try
+        {
+            // El buffer propio es contiguo (size*4 por fila); el destino puede tener stride mayor.
+            if (locked.Stride == size * 4)
+            {
+                System.Runtime.InteropServices.Marshal.Copy(pixels, 0, locked.Scan0, pixels.Length);
+            }
+            else
+            {
+                for (int y = 0; y < size; y++)
+                    System.Runtime.InteropServices.Marshal.Copy(pixels, y * size * 4, locked.Scan0 + y * locked.Stride, size * 4);
             }
         }
+        finally
+        {
+            bitmap.UnlockBits(locked);
+        }
 
-        using var g = System.Drawing.Graphics.FromImage(bitmap);
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        using var rim = new System.Drawing.Pen(System.Drawing.Color.FromArgb(170, 13, 14, 16), 2f);
-        g.DrawEllipse(rim, cx - radius, cy - radius, radius * 2f, radius * 2f);
         return bitmap;
     }
 
-private static void SampleMaterialBase(System.Drawing.Bitmap? albedo, float nx, float ny, float nz, out float r, out float g, out float b)
+    // Una luz direccional con BRDF Cook-Torrance (GGX + Smith-Schlick + Fresnel-Schlick).
+private static void AccumulateGgxLight(
+        float nx, float ny, float nz, float ndv,
+        (float X, float Y, float Z) l, float intensity, float lr, float lg, float lb,
+        float roughness, float f0R, float f0G, float f0B, float kdR, float kdG, float kdB,
+        float specScale,
+        ref float outR, ref float outG, ref float outB)
     {
-        if (albedo == null)
-        {
-            r = g = b = 1f;
+        float ndl = nx * l.X + ny * l.Y + nz * l.Z;
+        if (ndl <= 0f)
             return;
+
+        // H = normalize(L + V), V = (0,0,1).
+        var h = Normalize3(l.X, l.Y, l.Z + 1f);
+        float ndh = MathF.Max(0f, nx * h.X + ny * h.Y + nz * h.Z);
+        float vdh = MathF.Max(1e-4f, h.Z); // VÂ·H = H.Z
+
+        float a = roughness * roughness;
+        float a2 = a * a;
+        float d = ndh * ndh * (a2 - 1f) + 1f;
+        float ggxD = a2 / MathF.Max(1e-6f, MathF.PI * d * d);
+
+        float k = a * 0.5f;
+        float gv = ndv / (ndv * (1f - k) + k);
+        float gl = ndl / (ndl * (1f - k) + k);
+        float vis = (gv * gl) / MathF.Max(1e-4f, 4f * ndv * ndl);
+
+        float fres = MathF.Pow(1f - vdh, 5f);
+        float fR = f0R + (1f - f0R) * fres;
+        float fG = f0G + (1f - f0G) * fres;
+        float fB = f0B + (1f - f0B) * fres;
+
+        float specCommon = ggxD * vis * ndl * intensity * specScale;
+        float diffCommon = ndl * intensity / MathF.PI;
+
+        outR += (kdR * diffCommon + fR * specCommon) * lr;
+        outG += (kdG * diffCommon + fG * specCommon) * lg;
+        outB += (kdB * diffCommon + fB * specCommon) * lb;
+    }
+
+    // Entorno de estudio procedural: gradiente vertical (sueloâ†’horizonteâ†’cielo)
+    // mÃ¡s una "ventana" suave hacia la key light; el roughness difumina ambos.
+private static void SampleStudioEnvironment(float rx, float ry, float rz, float roughness, out float r, out float g, out float b)
+    {
+        float len = MathF.Sqrt(rx * rx + ry * ry + rz * rz);
+        if (len > 1e-6f) { rx /= len; ry /= len; rz /= len; }
+
+        float upness = ry * 0.5f + 0.5f;
+        float ground = 0.050f, horizon = 0.135f, sky = 0.330f;
+        float grad = upness < 0.5f
+            ? ground + (horizon - ground) * (upness * 2f)
+            : horizon + (sky - horizon) * ((upness - 0.5f) * 2f);
+
+        // "Ventana": highlight rectangular suave (lo que hace que un metal pulido se lea como tal).
+        var wdir = Normalize3(-0.38f, 0.58f, 0.72f);
+        float towards = MathF.Max(0f, rx * wdir.X + ry * wdir.Y + rz * wdir.Z);
+        float sharpness = 2f + (1f - roughness) * (1f - roughness) * 220f;
+        float window = MathF.Pow(towards, sharpness) * (0.55f + (1f - roughness) * 1.35f);
+
+        // El roughness alto tiende el entorno a su promedio (reflejo difuminado).
+        float avg = 0.16f;
+        float t = roughness * roughness;
+        float baseEnv = grad + (avg - grad) * t;
+
+        r = baseEnv + window * 1.00f;
+        g = baseEnv + window * 0.99f;
+        b = baseEnv * 1.06f + window * 0.96f;
+    }
+
+    private static float SrgbToLinear(float c) => c <= 0.04045f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
+
+    private static float LinearToSrgb(float c)
+    {
+        c = MathF.Max(0f, c);
+        return c <= 0.0031308f ? c * 12.92f : 1.055f * MathF.Pow(c, 1f / 2.4f) - 0.055f;
+    }
+
+    // ACES aproximado (Narkowicz): mantiene los brillos especulares/emisiÃ³n sin quemar.
+    private static float TonemapAces(float x)
+    {
+        return Math.Clamp(x * (2.51f * x + 0.03f) / (x * (2.43f * x + 0.59f) + 0.14f), 0f, 1f);
+    }
+
+    // â”€â”€ Preview interactivo del inspector â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Estado de la esfera rotable: solo el preview GRANDE del inspector renderiza
+    // en vivo (y Ãºnicamente cuando cambian Ã¡ngulo o material); las tiles del panel
+    // siguen siendo la imagen estÃ¡tica del cache de disco.
+    private string? matSphereLivePath;
+    private float matSphereYaw;
+    private float matSpherePitch;
+    private int matSphereLiveTexture;
+    private float matSphereRenderedYaw = float.NaN;
+    private float matSphereRenderedPitch;
+    private DateTime matSphereRenderedStamp;
+    private MaterialPreviewMaps? matSphereLiveMaps;
+
+    // Render en HILO DE FONDO (latest-wins, mÃ¡x. 1 en vuelo): el hilo de UI solo sube la
+    // textura cuando hay un bitmap listo (~0.3 ms). Renderizar en el draw bajaba los FPS
+    // durante el arrastre (~4 ms/frame con base de 120 FPS = bajada visible).
+    private readonly object matSphereRenderLock = new();
+    private volatile bool matSphereRenderRunning;
+    private System.Drawing.Bitmap? matSphereReadyBitmap;
+    private float matSphereReadyYaw;
+    private float matSphereReadyPitch;
+    private DateTime matSphereReadyStamp;
+
+    private IntPtr GetLiveMaterialSphereTexture(string path)
+    {
+        if (!TryGetMaterialPreviewSourceCache(path, out var source))
+            return IntPtr.Zero;
+
+        // 1) Si el worker dejÃ³ un bitmap listo, subirlo a GPU (esto es lo Ãºnico que paga la UI).
+        System.Drawing.Bitmap? ready = null;
+        float readyYaw = 0f, readyPitch = 0f;
+        DateTime readyStamp = default;
+        lock (matSphereRenderLock)
+        {
+            if (matSphereReadyBitmap != null)
+            {
+                ready = matSphereReadyBitmap;
+                matSphereReadyBitmap = null;
+                readyYaw = matSphereReadyYaw;
+                readyPitch = matSphereReadyPitch;
+                readyStamp = matSphereReadyStamp;
+            }
         }
 
-        float u = 0.5f + MathF.Atan2(nx, nz) / (MathF.PI * 2f);
-        float v = 0.5f - ny * 0.50f;
-        u -= MathF.Floor(u);
-        v = Math.Clamp(v, 0f, 1f);
-        int px = Math.Clamp((int)(u * (albedo.Width - 1)), 0, albedo.Width - 1);
-        int py = Math.Clamp((int)(v * (albedo.Height - 1)), 0, albedo.Height - 1);
-        var c = albedo.GetPixel(px, py);
-        r = c.R / 255f;
-        g = c.G / 255f;
-        b = c.B / 255f;
+        if (ready != null)
+        {
+            using (ready)
+            {
+                if (CreatePreviewTextureFromBitmap(ready, out int texture))
+                {
+                    if (matSphereLiveTexture != 0)
+                        GL.DeleteTexture(matSphereLiveTexture);
+                    matSphereLiveTexture = texture;
+                    matSphereRenderedYaw = readyYaw;
+                    matSphereRenderedPitch = readyPitch;
+                    matSphereRenderedStamp = readyStamp;
+                }
+            }
+        }
+
+        // 2) Si el estado visible no coincide con el pedido, lanzar OTRO render en fondo
+        //    (como mucho uno en vuelo; si el ratÃ³n siguiÃ³ moviÃ©ndose, el siguiente lo recoge).
+        bool dirty = matSphereLiveTexture == 0 ||
+                     matSphereRenderedYaw != matSphereYaw ||
+                     matSphereRenderedPitch != matSpherePitch ||
+                     matSphereRenderedStamp != source.DependencyStamp;
+        if (dirty && !matSphereRenderRunning)
+        {
+            // Los samplers se cargan UNA vez y se reutilizan durante el arrastre; se recargan
+            // solo si el material cambiÃ³ de mapas o de contenido.
+            string mapsKey = MaterialPreviewMaps.KeyFor(source.Data);
+            if (matSphereLiveMaps == null || matSphereLiveMaps.Key != mapsKey || matSphereRenderedStamp != source.DependencyStamp)
+                matSphereLiveMaps = MaterialPreviewMaps.Load(source.Data, mapsKey);
+
+            matSphereRenderRunning = true;
+            float yaw = matSphereYaw;
+            float pitch = matSpherePitch;
+            var data = source.Data;
+            var maps = matSphereLiveMaps;
+            var stamp = source.DependencyStamp;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    var bmp = GenerateMaterialSpherePreviewBitmap(data, yaw, pitch, maps);
+                    lock (matSphereRenderLock)
+                    {
+                        matSphereReadyBitmap?.Dispose();
+                        matSphereReadyBitmap = bmp;
+                        matSphereReadyYaw = yaw;
+                        matSphereReadyPitch = pitch;
+                        matSphereReadyStamp = stamp;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    GrokoEngine.Debug.LogWarning($"[MaterialPreview] Render interactivo fallÃ³: {ex.Message}");
+                }
+                finally
+                {
+                    matSphereRenderRunning = false;
+                }
+            });
+        }
+
+        return matSphereLiveTexture != 0 ? (IntPtr)matSphereLiveTexture : IntPtr.Zero;
+    }
+
+    private void ResetLiveMaterialSphere(string path)
+    {
+        matSphereLivePath = path;
+        matSphereYaw = 0f;
+        matSpherePitch = 0f;
+        matSphereRenderedYaw = float.NaN;
+        matSphereLiveMaps = null;
+    }
+
+    // Los 4 samplers del material precargados para el render interactivo.
+    private sealed class MaterialPreviewMaps
+    {
+        public PreviewSampler? Albedo;
+        public PreviewSampler? Normal;
+        public PreviewSampler? Roughness;
+        public PreviewSampler? Metallic;
+        public string Key = string.Empty;
+
+        public static string KeyFor(MaterialAssetData data) =>
+            (MaterialAsset.GetAlbedo(data) ?? "") + "|" + (data.NormalMapPath ?? "") + "|" +
+            (data.RoughnessMapPath ?? "") + "|" + (data.MetallicMapPath ?? "");
+
+        public static MaterialPreviewMaps Load(MaterialAssetData data, string key) => new()
+        {
+            Albedo = PreviewSampler.Load(MaterialAsset.GetAlbedo(data), 256),
+            Normal = PreviewSampler.Load(data.NormalMapPath, 256),
+            Roughness = PreviewSampler.Load(data.RoughnessMapPath, 128),
+            Metallic = PreviewSampler.Load(data.MetallicMapPath, 128),
+            Key = key
+        };
+    }
+
+    // Textura pequeÃ±a bloqueada en memoria para el generador de previews:
+    // BGRA contigua + muestreo bilineal con wrap. Nada de Bitmap.GetPixel.
+    private readonly struct PreviewSampler
+    {
+        private readonly byte[] pixels;
+        private readonly int width;
+        private readonly int height;
+        private readonly int stride;
+
+        private PreviewSampler(byte[] pixels, int width, int height, int stride)
+        {
+            this.pixels = pixels;
+            this.width = width;
+            this.height = height;
+            this.stride = stride;
+        }
+
+        public static PreviewSampler? Load(string? path, int maxSize)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return null;
+
+            string? full = SceneViewportRenderer.NormalizeExistingAssetPath(path);
+            if (full == null || !File.Exists(full))
+                return null;
+
+            try
+            {
+                using var bitmap = LoadSmallMaterialAlbedo(full, maxSize);
+                if (bitmap == null || bitmap.Width <= 0 || bitmap.Height <= 0)
+                    return null;
+
+                var rect = new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height);
+                var data = bitmap.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                try
+                {
+                    var px = new byte[data.Stride * data.Height];
+                    System.Runtime.InteropServices.Marshal.Copy(data.Scan0, px, 0, px.Length);
+                    return new PreviewSampler(px, bitmap.Width, bitmap.Height, data.Stride);
+                }
+                finally
+                {
+                    bitmap.UnlockBits(data);
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // Bilineal con wrap. Devuelve canales 0..1 tal cual estÃ¡n en la textura (sRGB para
+        // albedo, lineal para mapas de datos); el llamador decide la conversiÃ³n.
+        public void Sample(float u, float v, out float r, out float g, out float b)
+        {
+            u -= MathF.Floor(u);
+            v -= MathF.Floor(v);
+            float fx = u * width - 0.5f;
+            float fy = v * height - 0.5f;
+            int x0 = (int)MathF.Floor(fx);
+            int y0 = (int)MathF.Floor(fy);
+            float tx = fx - x0;
+            float ty = fy - y0;
+            int x1 = Wrap(x0 + 1, width);
+            int y1 = Wrap(y0 + 1, height);
+            x0 = Wrap(x0, width);
+            y0 = Wrap(y0, height);
+
+            int i00 = y0 * stride + x0 * 4;
+            int i10 = y0 * stride + x1 * 4;
+            int i01 = y1 * stride + x0 * 4;
+            int i11 = y1 * stride + x1 * 4;
+
+            b = Bilerp(pixels[i00 + 0], pixels[i10 + 0], pixels[i01 + 0], pixels[i11 + 0], tx, ty);
+            g = Bilerp(pixels[i00 + 1], pixels[i10 + 1], pixels[i01 + 1], pixels[i11 + 1], tx, ty);
+            r = Bilerp(pixels[i00 + 2], pixels[i10 + 2], pixels[i01 + 2], pixels[i11 + 2], tx, ty);
+        }
+
+        private static int Wrap(int i, int n)
+        {
+            i %= n;
+            return i < 0 ? i + n : i;
+        }
+
+        private static float Bilerp(byte c00, byte c10, byte c01, byte c11, float tx, float ty)
+        {
+            float top = c00 + (c10 - c00) * tx;
+            float bottom = c01 + (c11 - c01) * tx;
+            return (top + (bottom - top) * ty) / 255f;
+        }
     }
 
 private static (float X, float Y, float Z) Normalize3(float x, float y, float z)
@@ -1182,7 +1483,7 @@ private static System.Drawing.Bitmap GenerateAssetPreviewBitmap(string path, str
         if (kind == "MESH" && TryGenerateMeshAssetPreviewBitmap(path, out var meshBitmap))
             return meshBitmap;
 
-        // Prefab: renderiza la malla real del objeto (como Unity), no un cubo genérico.
+        // Prefab: renderiza la malla real del objeto (como Unity), no un cubo genÃ©rico.
         if (kind == "PREF" && TryGetPrefabMeshPath(path, out var prefabMesh)
             && TryGenerateMeshAssetPreviewBitmap(prefabMesh, out var prefabBitmap))
             return prefabBitmap;
@@ -1605,8 +1906,8 @@ private bool LoadPreviewTextureFromDiskCache(string path, out int texture)
         if (!TryGetCurrentDiskPreview(path, out string previewPath))
             return false;
 
-        // No llamar este mismo método con previewPath: eso causa recursión.
-        // Aquí cargamos directamente el PNG pequeño guardado en Library/Previews.
+        // No llamar este mismo mÃ©todo con previewPath: eso causa recursiÃ³n.
+        // AquÃ­ cargamos directamente el PNG pequeÃ±o guardado en Library/Previews.
         return LoadPreviewTextureFile(previewPath, out texture);
     }
 
@@ -1675,15 +1976,17 @@ private static System.Drawing.Bitmap? CreateDiskPreviewBitmap(string assetPath)
     {
         if (MaterialAsset.IsTexturePath(assetPath))
         {
-            using var source = System.Drawing.Image.FromFile(assetPath);
-            using var original = new System.Drawing.Bitmap(source);
+            using var original = EditorImageLoader.LoadBitmap(assetPath);
+            if (original == null)
+                return null;
+
             return CreatePreviewBitmap(original, 128);
         }
 
         if (MaterialAsset.IsMaterialPath(assetPath))
         {
             var data = MaterialAsset.Load(assetPath);
-            return GenerateMaterialSpherePreviewBitmap(data, MaterialAsset.GetAlbedo(data));
+            return GenerateMaterialSpherePreviewBitmap(data);
         }
 
         string kind = GetAssetKind(assetPath);
@@ -1744,7 +2047,10 @@ private static bool LoadPreviewTextureFile(string path, out int texture)
 
         try
         {
-            using var source = new System.Drawing.Bitmap(path);
+            using var source = EditorImageLoader.LoadBitmap(path);
+            if (source == null)
+                return false;
+
             using var bitmap = new System.Drawing.Bitmap(
                 source.Width,
                 source.Height,
@@ -1769,58 +2075,5 @@ private static bool LoadPreviewTextureFile(string path, out int texture)
         }
     }
 
-private static void DrawMeshLikePreview(ImDrawListPtr drawList, Vector2 min, float size, string kind)
-    {
-        var cardMin = min - new Vector2(2f, 2f);
-        var cardMax = min + new Vector2(size + 2f, size + 2f);
-        drawList.AddRectFilled(cardMin, cardMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.08f, 0.09f, 0.10f, 1f)), 5f);
-        drawList.AddRectFilled(min, min + new Vector2(size, size), ImGui.GetColorU32(new System.Numerics.Vector4(0.13f, 0.145f, 0.16f, 1f)), 4f);
 
-        if (kind == "SCENE")
-        {
-            uint grid = ImGui.GetColorU32(new System.Numerics.Vector4(0.30f, 0.36f, 0.42f, 0.82f));
-            for (int i = 1; i < 4; i++)
-            {
-                float t = i / 4f;
-                drawList.AddLine(min + new Vector2(size * t, size * 0.22f), min + new Vector2(size * t, size * 0.78f), grid, 1f);
-                drawList.AddLine(min + new Vector2(size * 0.18f, size * t), min + new Vector2(size * 0.82f, size * t), grid, 1f);
-            }
-            DrawIcon(drawList, EditorIcon.Camera, min + new Vector2(size * 0.12f, size * 0.12f), size * 0.25f, ImGui.GetColorU32(new System.Numerics.Vector4(0.70f, 0.86f, 1f, 1f)));
-            DrawIcon(drawList, EditorIcon.Light, min + new Vector2(size * 0.62f, size * 0.12f), size * 0.22f, ImGui.GetColorU32(new System.Numerics.Vector4(1f, 0.78f, 0.32f, 1f)));
-            drawList.AddText(min + new Vector2(4f, size - 12f), ImGui.GetColorU32(new System.Numerics.Vector4(0.92f, 0.96f, 1f, 0.95f)), "SCENE");
-            return;
-        }
-
-        var c = min + new Vector2(size * 0.5f, size * 0.5f);
-        float s = size * 0.32f;
-        uint front = ImGui.GetColorU32(kind == "PREF"
-            ? new System.Numerics.Vector4(0.34f, 0.56f, 0.92f, 1f)
-            : new System.Numerics.Vector4(0.76f, 0.52f, 0.30f, 1f));
-        uint top = ImGui.GetColorU32(kind == "PREF"
-            ? new System.Numerics.Vector4(0.44f, 0.66f, 1f, 1f)
-            : new System.Numerics.Vector4(0.92f, 0.66f, 0.38f, 1f));
-        uint side = ImGui.GetColorU32(kind == "PREF"
-            ? new System.Numerics.Vector4(0.20f, 0.36f, 0.66f, 1f)
-            : new System.Numerics.Vector4(0.52f, 0.34f, 0.20f, 1f));
-        uint edge = ImGui.GetColorU32(new System.Numerics.Vector4(0.06f, 0.06f, 0.07f, 1f));
-        var p1 = c + new Vector2(-s, -s * 0.45f);
-        var p2 = c + new Vector2(0f, -s);
-        var p3 = c + new Vector2(s, -s * 0.45f);
-        var p4 = c + new Vector2(s, s * 0.55f);
-        var p5 = c + new Vector2(0f, s);
-        var p6 = c + new Vector2(-s, s * 0.55f);
-        drawList.AddQuadFilled(p1, p2, c, p6, top);
-        drawList.AddQuadFilled(p2, p3, p4, c, side);
-        drawList.AddQuadFilled(c, p4, p5, p6, front);
-        drawList.AddLine(p1, p2, edge, 1.4f);
-        drawList.AddLine(p2, p3, edge, 1.4f);
-        drawList.AddLine(p3, p4, edge, 1.4f);
-        drawList.AddLine(p4, p5, edge, 1.4f);
-        drawList.AddLine(p5, p6, edge, 1.4f);
-        drawList.AddLine(p6, p1, edge, 1.4f);
-        drawList.AddLine(p2, c, edge, 1.1f);
-        drawList.AddLine(c, p6, edge, 1.1f);
-        drawList.AddLine(c, p4, edge, 1.1f);
-        drawList.AddText(min + new Vector2(4f, size - 12f), ImGui.GetColorU32(new System.Numerics.Vector4(0.95f, 0.95f, 0.95f, 0.95f)), kind == "PREF" ? "PREF" : "MESH");
-    }
 }

@@ -34,6 +34,9 @@ namespace GrokoEngine
         // arrastrada desde el panel de Assets en vez de a una instancia viva de la escena.
         private const string PrefabRefPrefix = "@@prefab:";
 
+        // Prefijo para campos AudioClip (single) o colecciones de AudioClip (JSON de rutas).
+        private const string AudioRefPrefix = "@@audio:";
+
         // Índice temporal Transform/GameObject -> EditorId, vivo solo durante Serialize.
         [ThreadStatic] private static Dictionary<object, string>? _serializeOwnerIndex;
         // Referencias pendientes de resolver en el 2º pase, vivo solo durante Deserialize.
@@ -196,6 +199,7 @@ namespace GrokoEngine
                     data.Fields["Metallic"] = mat.Metallic.ToString(CultureInfo.InvariantCulture);
                     data.Fields["SurfaceType"] = mat.SurfaceType.ToString();
                     data.Fields["Alpha"] = mat.Alpha.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["AlphaClipThreshold"] = mat.AlphaClipThreshold.ToString(CultureInfo.InvariantCulture);
                     data.Fields["RefractionStrength"] = mat.RefractionStrength.ToString(CultureInfo.InvariantCulture);
                     data.Fields["DistortionStrength"] = mat.DistortionStrength.ToString(CultureInfo.InvariantCulture);
                     data.Fields["SpecularHighlights"] = mat.SpecularHighlights.ToString();
@@ -269,6 +273,16 @@ namespace GrokoEngine
                     data.Fields["Friction"] = mc.Friction.ToString(CultureInfo.InvariantCulture);
                     data.Fields["Bounciness"] = mc.Bounciness.ToString(CultureInfo.InvariantCulture);
                     return data;
+                case TerrainCollider tc:
+                    // El TerrainCollider no tenía caso → devolvía null → NO se serializaba, así que se
+                    // perdía al guardar la escena y al restaurarla tras salir de Play (el terreno
+                    // dejaba de colisionar). Lee la altura del Terrain del mismo objeto, sin campos
+                    // de tamaño propios; solo material/trigger como los demás colliders.
+                    data.Fields["IsTrigger"] = tc.IsTrigger.ToString();
+                    data.Fields["PhysicMaterial"] = tc.PhysicMaterial;
+                    data.Fields["Friction"] = tc.Friction.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["Bounciness"] = tc.Bounciness.ToString(CultureInfo.InvariantCulture);
+                    return data;
                 case CharacterController cc:
                     data.Fields["Height"] = cc.Height.ToString(CultureInfo.InvariantCulture);
                     data.Fields["Radius"] = cc.Radius.ToString(CultureInfo.InvariantCulture);
@@ -301,6 +315,7 @@ namespace GrokoEngine
                     data.Fields["BackgroundB"] = cam.BackgroundB.ToString(CultureInfo.InvariantCulture);
                     data.Fields["BackgroundA"] = cam.BackgroundA.ToString(CultureInfo.InvariantCulture);
                     data.Fields["PostProcessing"] = cam.PostProcessing.ToString();
+                    data.Fields["RenderingPath"] = ((int)cam.RenderingPath).ToString(CultureInfo.InvariantCulture);
                     data.Fields["AntiAliasing"] = cam.AntiAliasing.ToString();
                     data.Fields["AntiAliasingMode"] = ((int)cam.AntiAliasingMode).ToString(CultureInfo.InvariantCulture);
                     data.Fields["AntiAliasingSamples"] = cam.AntiAliasingSamples.ToString(CultureInfo.InvariantCulture);
@@ -456,6 +471,13 @@ namespace GrokoEngine
                     data.Fields["LayerTextures"] = JsonSerializer.Serialize(
                         terrain.LayerTextures.Select(p => SerializeAssetPath(p, baseAssetsPath)).ToArray());
                     data.Fields["LayerTiling"] = JsonSerializer.Serialize(terrain.LayerTiling);
+                    data.Fields["LayerNormalTextures"] = JsonSerializer.Serialize(
+                        terrain.LayerNormalTextures.Select(p => SerializeAssetPath(p, baseAssetsPath)).ToArray());
+                    data.Fields["BlendSharpness"] = terrain.BlendSharpness.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["TriplanarSteepSlopes"] = terrain.TriplanarSteepSlopes.ToString();
+                    data.Fields["DetailTilingBreakupDistance"] = terrain.DetailTilingBreakupDistance.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["LodDetailBalance"] = terrain.LodDetailBalance.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["DrawSkirts"] = terrain.DrawSkirts.ToString();
                     data.Fields["SplatMap"] = Convert.ToBase64String(terrain.SplatMap);
                     data.Fields["TreePrototypes"] = JsonSerializer.Serialize(
                         terrain.TreePrototypes.Select(p => SerializeAssetPath(p, baseAssetsPath)).ToArray());
@@ -463,6 +485,7 @@ namespace GrokoEngine
                     data.Fields["TreeDistance"] = terrain.TreeDistance.ToString(CultureInfo.InvariantCulture);
                     data.Fields["BillboardStart"] = terrain.BillboardStart.ToString(CultureInfo.InvariantCulture);
                     data.Fields["MaxMeshTrees"] = terrain.MaxMeshTrees.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["TreeCellSize"] = terrain.TreeCellSize.ToString(CultureInfo.InvariantCulture);
                     data.Fields["DetailPrototypes"] = JsonSerializer.Serialize(
                         terrain.DetailPrototypes.Select(p => new TerrainDetailPrototype
                         {
@@ -514,6 +537,7 @@ namespace GrokoEngine
                             mf.MaterialSlots.Select(p => SerializeAssetPath(p, baseAssetsPath)).ToArray());
                     return data;
                 case ParticleSystem:
+                case AudioSource:
                 case Canvas:
                 case UIElement:
                 case UILayoutElement:
@@ -521,6 +545,8 @@ namespace GrokoEngine
                 case UIContentSizeFitter:
                 case UIAspectRatioFitter:
                 case BoneAttachment:
+                case LodGroup:
+                case ReflectionProbe:
                     // Serialización genérica por reflexión (campos públicos simples).
                     // Cubre ParticleSystem y todo el sistema UI propio de GrokoEngine.
                     foreach (var field in comp.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
@@ -558,6 +584,18 @@ namespace GrokoEngine
                         {
                             if (!string.IsNullOrWhiteSpace(so.AssetPath))
                                 data.Fields[field.Name] = AssetRefPrefix + SerializeAssetPath(so.AssetPath, baseAssetsPath);
+                        }
+                        else if (value is AudioClip clip)
+                        {
+                            if (clip.IsValid)
+                                data.Fields[field.Name] = AudioRefPrefix + SerializeAssetPath(clip.Path, baseAssetsPath);
+                        }
+                        else if (IsAudioClipCollection(field.FieldType) && value is System.Collections.IEnumerable clips)
+                        {
+                            var paths = new List<string>();
+                            foreach (var item in clips)
+                                paths.Add(item is AudioClip c && c.IsValid ? SerializeAssetPath(c.Path, baseAssetsPath) : "");
+                            data.Fields[field.Name] = AudioRefPrefix + JsonSerializer.Serialize(paths);
                         }
                         else if (IsReferenceType(field.FieldType))
                         {
@@ -639,9 +677,12 @@ namespace GrokoEngine
                 nameof(PostProcessSettings) => obj.AddComponent<PostProcessSettings>(),
                 nameof(MeshFilter) => obj.AddComponent<MeshFilter>(),
                 nameof(MeshRenderer) => obj.AddComponent<MeshRenderer>(),
+                nameof(LodGroup) => obj.AddComponent<LodGroup>(),
+                nameof(ReflectionProbe) => obj.AddComponent<ReflectionProbe>(),
                 nameof(Terrain) => obj.AddComponent<Terrain>(),
                 nameof(TerrainCollider) => obj.AddComponentWithEngine<TerrainCollider>(physicsEngine),
                 nameof(ParticleSystem) => obj.AddComponent<ParticleSystem>(),
+                nameof(AudioSource) => obj.AddComponent<AudioSource>(),
                 nameof(Canvas) => obj.AddComponent<Canvas>(),
                 nameof(UIPanel) => obj.AddComponent<UIPanel>(),
                 nameof(UIImage) => obj.AddComponent<UIImage>(),
@@ -722,6 +763,19 @@ namespace GrokoEngine
                     if (tiling != null && tiling.Length == terrain.LayerTiling.Length)
                         terrain.LayerTiling = tiling;
                 }
+                if (fields.TryGetValue("LayerNormalTextures", out var layerNormalsJson) && !string.IsNullOrWhiteSpace(layerNormalsJson))
+                {
+                    var normals = JsonSerializer.Deserialize<string[]>(layerNormalsJson);
+                    if (normals != null && normals.Length == terrain.LayerNormalTextures.Length)
+                        terrain.LayerNormalTextures = normals.Select(p => ResolveAssetPath(p, baseAssetsPath) ?? "").ToArray();
+                }
+                terrain.BlendSharpness = GetFloat(fields, "BlendSharpness", terrain.BlendSharpness);
+                if (fields.TryGetValue("TriplanarSteepSlopes", out var triplanarStr) && bool.TryParse(triplanarStr, out bool triplanar))
+                    terrain.TriplanarSteepSlopes = triplanar;
+                terrain.DetailTilingBreakupDistance = GetFloat(fields, "DetailTilingBreakupDistance", terrain.DetailTilingBreakupDistance);
+                terrain.LodDetailBalance = GetFloat(fields, "LodDetailBalance", terrain.LodDetailBalance);
+                if (fields.TryGetValue("DrawSkirts", out var skirtsStr) && bool.TryParse(skirtsStr, out bool skirts))
+                    terrain.DrawSkirts = skirts;
                 if (fields.TryGetValue("SplatMap", out var splatMapBase64) && !string.IsNullOrWhiteSpace(splatMapBase64))
                 {
                     var splatMap = Convert.FromBase64String(splatMapBase64);
@@ -744,6 +798,7 @@ namespace GrokoEngine
                 terrain.TreeDistance = GetFloat(fields, "TreeDistance", terrain.TreeDistance);
                 terrain.BillboardStart = GetFloat(fields, "BillboardStart", terrain.BillboardStart);
                 terrain.MaxMeshTrees = GetInt(fields, "MaxMeshTrees", terrain.MaxMeshTrees);
+                terrain.TreeCellSize = GetFloat(fields, "TreeCellSize", terrain.TreeCellSize);
                 if (fields.TryGetValue("DetailPrototypes", out var detailProtosJson) && !string.IsNullOrWhiteSpace(detailProtosJson))
                 {
                     var protos = JsonSerializer.Deserialize<TerrainDetailPrototype[]>(detailProtosJson, JsonOptions);
@@ -769,6 +824,7 @@ namespace GrokoEngine
                 if (fields.TryGetValue("BottomNeighborId", out var bottomNId)) terrain.BottomNeighborId = string.IsNullOrEmpty(bottomNId) ? null : bottomNId;
                 terrain.Version++;
                 terrain.SplatVersion++;
+                terrain.CollisionVersion++;
             }
 
             if (comp is BoxCollider bc)
@@ -816,6 +872,14 @@ namespace GrokoEngine
                 mc.Bounciness = GetFloat(fields, "Bounciness", mc.Bounciness);
             }
 
+            if (comp is TerrainCollider tc)
+            {
+                tc.IsTrigger = GetBool(fields, "IsTrigger", tc.IsTrigger);
+                tc.PhysicMaterial = fields.TryGetValue("PhysicMaterial", out var terrainPhysicMaterial) && !string.IsNullOrWhiteSpace(terrainPhysicMaterial) ? terrainPhysicMaterial : tc.PhysicMaterial;
+                tc.Friction = GetFloat(fields, "Friction", tc.Friction);
+                tc.Bounciness = GetFloat(fields, "Bounciness", tc.Bounciness);
+            }
+
             if (comp is CharacterController cc)
             {
                 cc.Height = GetFloat(fields, "Height", cc.Height);
@@ -857,6 +921,7 @@ namespace GrokoEngine
                 if (fields.TryGetValue("SurfaceType", out var surfaceType) && Enum.TryParse(surfaceType, out MaterialSurfaceType parsedSurfaceType))
                     mat.SurfaceType = parsedSurfaceType;
                 mat.Alpha = Math.Clamp(GetFloat(fields, "Alpha", mat.Alpha), 0f, 1f);
+                mat.AlphaClipThreshold = Math.Clamp(GetFloat(fields, "AlphaClipThreshold", mat.AlphaClipThreshold), 0f, 1f);
                 mat.RefractionStrength = Math.Clamp(GetFloat(fields, "RefractionStrength", mat.RefractionStrength), 0f, 1f);
                 mat.DistortionStrength = Math.Clamp(GetFloat(fields, "DistortionStrength", mat.DistortionStrength), 0f, 1f);
                 mat.SpecularHighlights = GetBool(fields, "SpecularHighlights", mat.SpecularHighlights);
@@ -886,6 +951,7 @@ namespace GrokoEngine
                 cam.BackgroundB = GetFloat(fields, "BackgroundB", cam.BackgroundB);
                 cam.BackgroundA = GetFloat(fields, "BackgroundA", cam.BackgroundA);
                 cam.PostProcessing = GetBool(fields, "PostProcessing", cam.PostProcessing);
+                cam.RenderingPath = (CameraRenderingPath)GetInt(fields, "RenderingPath", (int)cam.RenderingPath);
                 cam.AntiAliasing = GetBool(fields, "AntiAliasing", cam.AntiAliasing);
                 cam.AntiAliasingMode = (CameraAntiAliasingMode)GetInt(fields, "AntiAliasingMode", (int)cam.AntiAliasingMode);
                 cam.AntiAliasingSamples = GetInt(fields, "AntiAliasingSamples", cam.AntiAliasingSamples);
@@ -1062,6 +1128,24 @@ namespace GrokoEngine
                     }
                     continue;
                 }
+                if (raw.StartsWith(AudioRefPrefix, StringComparison.Ordinal))
+                {
+                    string payload = raw.Substring(AudioRefPrefix.Length);
+                    if (field.FieldType == typeof(AudioClip))
+                    {
+                        field.SetValue(comp, new AudioClip(ResolveAssetPath(payload, baseAssetsPath) ?? payload));
+                    }
+                    else if (IsAudioClipCollection(field.FieldType))
+                    {
+                        var rel = JsonSerializer.Deserialize<string[]>(payload) ?? Array.Empty<string>();
+                        var made = rel.Select(p => new AudioClip(string.IsNullOrEmpty(p) ? "" : (ResolveAssetPath(p, baseAssetsPath) ?? p))).ToArray();
+                        if (field.FieldType.IsArray)
+                            field.SetValue(comp, made);
+                        else
+                            field.SetValue(comp, new List<AudioClip>(made));
+                    }
+                    continue;
+                }
                 if (raw.StartsWith(AssetRefPrefix, StringComparison.Ordinal))
                 {
                     if (typeof(ScriptableObject).IsAssignableFrom(field.FieldType))
@@ -1225,6 +1309,16 @@ namespace GrokoEngine
         private static bool IsSimple(Type type)
         {
             return type == typeof(string) || type == typeof(float) || type == typeof(double) || type == typeof(int) || type == typeof(bool) || type.IsEnum;
+        }
+
+        // AudioClip[] o List<AudioClip> (para permitir "public AudioClip[] pasos;" en scripts).
+        internal static bool IsAudioClipCollection(Type type)
+        {
+            if (type.IsArray)
+                return type.GetElementType() == typeof(AudioClip);
+            return type.IsGenericType
+                && type.GetGenericTypeDefinition() == typeof(List<>)
+                && type.GetGenericArguments()[0] == typeof(AudioClip);
         }
 
         // ── Referencias entre objetos de la escena (campos GameObject/Transform/Component) ──

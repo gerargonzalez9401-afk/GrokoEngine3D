@@ -1,6 +1,7 @@
 using GrokoEngine;
 using ImGuiNET;
 using System;
+using System.IO;
 using System.Linq;
 using Vector2 = System.Numerics.Vector2;
 using Vector4 = System.Numerics.Vector4;
@@ -40,14 +41,33 @@ internal sealed partial class ImGuiEditorApp
         }
         TrackToolWindowMouse();
 
-        var animator = selected?.GetComponent<Animator>();
-        if (animator == null || string.IsNullOrWhiteSpace(animator.ControllerPath))
+        var selectedAnimator = selected?.GetComponent<Animator>();
+        string controllerPath = !string.IsNullOrWhiteSpace(animatorGraphControllerAssetPath)
+            ? animatorGraphControllerAssetPath!
+            : selectedAnimator?.ControllerPath ?? string.Empty;
+        var animator = selectedAnimator != null &&
+                       string.Equals(selectedAnimator.ControllerPath, controllerPath, StringComparison.OrdinalIgnoreCase)
+            ? selectedAnimator
+            : new Animator { ControllerPath = controllerPath };
+
+        if (string.IsNullOrWhiteSpace(controllerPath))
         {
-            ImGui.TextDisabled(animator == null
+            ImGui.TextDisabled(selectedAnimator == null
                 ? "Selecciona un objeto con un componente Animator."
                 : "El Animator no tiene un Animator Controller asignado.\nAsígnalo en el Inspector (slot Controller).");
             ImGui.End();
             return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(animatorGraphControllerAssetPath))
+        {
+            ImGui.TextDisabled(Path.GetFileName(animatorGraphControllerAssetPath));
+            ImGui.SameLine();
+            if (selectedAnimator != null && !string.IsNullOrWhiteSpace(selectedAnimator.ControllerPath) && ImGui.SmallButton("Use Selected Animator"))
+            {
+                animatorGraphControllerAssetPath = null;
+                animator = selectedAnimator;
+            }
         }
 
         var ctrl = animator.GetController();
@@ -78,6 +98,21 @@ internal sealed partial class ImGuiEditorApp
     }
 
     // ───────────────────────── Parámetros ─────────────────────────
+    private void OpenAnimatorControllerAsset(string path)
+    {
+        if (!AnimatorControllerAsset.IsControllerPath(path))
+            return;
+
+        animatorGraphControllerAssetPath = path;
+        animGraphSelectedState = string.Empty;
+        animGraphSelTransFrom = string.Empty;
+        animGraphSelTransIndex = -1;
+        animGraphMakeTransitionFrom = string.Empty;
+        animGraphPan = new Vector2(40f, 40f);
+        showAnimatorGraph = true;
+        statusMessage = "Animator Controller opened: " + Path.GetFileName(path);
+    }
+
     private void DrawAnimatorParametersPanel(Animator animator, AnimatorControllerData ctrl, Vector2 size)
     {
         ImGui.BeginChild("##animParams", size, ImGuiChildFlags.None);

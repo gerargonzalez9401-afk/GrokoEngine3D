@@ -537,6 +537,11 @@ namespace GrokoEngine
             if (collider != null && collider.IsTrigger)
                 return;
 
+            // Collider DESMARCADO en el inspector = sin colisión (como en Unity). Antes Bepu lo
+            // añadía igual y el objeto seguía siendo sólido con el collider desactivado.
+            if (collider != null && !collider.Enabled)
+                return;
+
             // Terrain / Mesh → malla de triángulos ESTÁTICA en Bepu (las cajas caen encima).
             if (collider is TerrainCollider) { AddTerrainStatic(obj); return; }
             if (collider is MeshCollider) { AddMeshStatic(obj); return; }
@@ -1122,10 +1127,16 @@ namespace GrokoEngine
             for (int t = 0; t < triCount; t++)
             {
                 int b = t * 9;
+                // Winding INVERTIDO respecto a la malla de render (se intercambian el 2º y 3er
+                // vértice). Las mallas de Bepu son de UNA cara: generan contactos solo por el lado
+                // hacia el que apunta el orden de sus vértices. Con el orden de render, esa cara
+                // quedaba por DEBAJO del terreno y los Rigidbody lo atravesaban desde arriba en
+                // caída libre. Invertido, la cara de colisión mira hacia el lado del normal de
+                // render (arriba en el terreno, afuera en un MeshCollider), y los cuerpos se apoyan.
                 tris[t] = new Triangle(
                     new NVector3(p[b], p[b + 1], p[b + 2]),
-                    new NVector3(p[b + 3], p[b + 4], p[b + 5]),
-                    new NVector3(p[b + 6], p[b + 7], p[b + 8]));
+                    new NVector3(p[b + 6], p[b + 7], p[b + 8]),
+                    new NVector3(p[b + 3], p[b + 4], p[b + 5]));
             }
             mesh = new Mesh(tris, new NVector3(scale.X, scale.Y, scale.Z), _pool);
             return true;
@@ -1136,7 +1147,13 @@ namespace GrokoEngine
             var terrain = obj.GetComponent<Terrain>();
             if (terrain == null)
                 return;
-            var pm = TerrainMeshGenerator.Generate(terrain);
+            // Malla de colisión decimada a como mucho ~513 muestras por lado: a resolución 2049
+            // la malla completa serían ~8.4M de triángulos (segundos de build + cientos de MB en
+            // el pool de Bepu). El raycast/colisión pierde detalle sub-métrico a resoluciones
+            // altas; el CharacterController y SampleHeight siguen leyendo el heightmap exacto.
+            int res = Math.Max(2, terrain.Resolution);
+            int stride = Math.Max(1, (res - 2) / 512 + 1);
+            var pm = TerrainMeshGenerator.Generate(terrain, stride: stride);
             DecomposeWorld(obj, out var npos, out var orient, out var scale);
             if (!TryBuildBepuMesh(pm, scale, out var mesh))
                 return;

@@ -31,6 +31,18 @@ internal sealed partial class SceneViewportRenderer
     {
         if (mesh == null || string.IsNullOrWhiteSpace(filter.MeshPath)) return;
 
+        // Hijo que apunta a una variante LOD1+: fuera ANTES de calcular bounds/animator/sombras.
+        // Con árboles importados "con hijos" hay decenas de estos por frame y no dibujan nada.
+        bool hierarchyLodMesh = _activeHierarchyLod.HasValue && TryGetHierarchyLodLevel(obj.Name, out _);
+        if (ShouldUseSubmeshLodSelection() &&
+            !_activeHierarchyLod.HasValue &&
+            !hierarchyLodMesh &&
+            IsLodVariantSubmesh(mesh, filter.SubmeshIndex))
+            return;
+
+        // "Culled" del LodGroup: objeto demasiado pequeño en pantalla → no se dibuja.
+        if (IsLodGroupCulled(mesh, filter, transform, filter.ImportScale <= 0f ? 1f : filter.ImportScale)) return;
+
         Vector4 fallbackColor = new Vector4(0.62f, 0.72f, 1f, 1f);
         Vector4 color = GetObjectColor(obj, fallbackColor);
         Vector4 lineColor = selected ? new Vector4(1f, 0.78f, 0.12f, 1f) : color;
@@ -71,26 +83,48 @@ internal sealed partial class SceneViewportRenderer
 
         if (mesh.Submeshes.Count > 1)
         {
+            var lodInfo = ShouldUseSubmeshLodSelection() ? GetMeshLodInfo(mesh) : MeshLodInfo.Empty;
             for (int i = 0; i < mesh.Submeshes.Count; i++)
             {
                 if (filter.SubmeshIndex >= 0 && i != filter.SubmeshIndex) continue;
-                var sub = mesh.Submeshes[i];
+
+                // LOD automático por nombre: la submalla i es el nivel LOD0 de una cadena →
+                // se dibuja la variante elegida por distancia (geometría), manteniendo el
+                // material del slot LÓGICO del objeto. Las variantes LOD1+ NUNCA se dibujan
+                // directamente — ni cuando el objeto dibuja el modelo entero ni cuando un
+                // hijo del FBX importado apunta a esa submalla (un FBX importado "con hijos"
+                // trae un hijo por variante: sin esto, los 4 niveles se pintaban superpuestos
+                // y cada árbol costaba el doble + 4 capas de hojas).
+                int drawIndex = i;
+                if (ShouldUseSubmeshLodSelection() &&
+                    lodInfo.HasChains &&
+                    !hierarchyLodMesh &&
+                    !_activeHierarchyLod.HasValue)
+                {
+                    if (lodInfo.IsLodVariant[i])
+                        continue;
+                    drawIndex = SelectLodSubmesh(mesh, lodInfo, i, transform, scale);
+                    if (drawIndex < 0)
+                        continue;   // culled por LodGroup
+                }
+
+                var sub = mesh.Submeshes[drawIndex];
                 string? slotPath = i < filter.MaterialSlots.Count ? filter.MaterialSlots[i] : null;
                 if (!string.IsNullOrWhiteSpace(PreviewMaterialAssetPath) && PreviewMaterialObjectId == obj.EditorId && PreviewMaterialSubmeshIndex == i)
                     slotPath = PreviewMaterialAssetPath;
                 var surf = GetSubmeshSurface(slotPath, sub, fallbackColor);
-                if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
+                if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength, alphaClip: surf.Transparency.IsCutout, alphaClipThreshold: surf.Transparency.AlphaClipThreshold, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
                 {
                     // GPU skinning path.
                 }
                 else if (skinned)
                 {
-                    AddSolidRange(surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures,
+                    AddSolidRange(surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, surf.Transparency.IsCutout, surf.Transparency.AlphaClipThreshold,
                         () => AddSkinnedMeshTriangles(mesh, skinMats!, transform, surf.Color, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, skinKey));
                 }
-                else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
+                else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength, alphaClip: surf.Transparency.IsCutout, alphaClipThreshold: surf.Transparency.AlphaClipThreshold, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
                 {
-                    AddSolidRange(surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures,
+                    AddSolidRange(surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, surf.Transparency.IsCutout, surf.Transparency.AlphaClipThreshold,
                         () => AddMeshTriangles(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount));
                 }
             }
@@ -104,18 +138,18 @@ internal sealed partial class SceneViewportRenderer
             string? shaderGraphPath = GetObjectShaderGraphPath(obj);
             var shaderGraphProperties = GetObjectShaderGraphProperties(obj);
             var shaderGraphTextures = GetObjectShaderGraphTextures(obj);
-            if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
+            if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength, alphaClip: transparency.IsCutout, alphaClipThreshold: transparency.AlphaClipThreshold, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
             {
                 // GPU skinning path.
             }
             else if (skinned)
             {
-                AddSolidRange(texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures,
+                AddSolidRange(texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparency.IsCutout, transparency.AlphaClipThreshold,
                     () => AddSkinnedMeshTriangles(mesh, skinMats!, transform, color, material, emission, 0, mesh.Positions.Length / 3, skinKey));
             }
-            else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
+            else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength, alphaClip: transparency.IsCutout, alphaClipThreshold: transparency.AlphaClipThreshold, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
             {
-                AddSolidRange(texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures,
+                AddSolidRange(texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparency.IsCutout, transparency.AlphaClipThreshold,
                     () => AddMeshTriangles(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3));
             }
         }
@@ -339,6 +373,8 @@ internal sealed partial class SceneViewportRenderer
         float alpha = 1f,
         float refractionStrength = 0f,
         float distortionStrength = 0f,
+        bool alphaClip = false,
+        float alphaClipThreshold = 0.5f,
         bool castShadows = true,
         bool receiveShadows = true,
         bool twoSidedShadows = false,
@@ -375,6 +411,10 @@ internal sealed partial class SceneViewportRenderer
         }
 
         var target = transparent ? refractiveMeshDraws : dynamicMeshDraws;
+        if (transparent)
+            _statsTransparentDynamicMeshes++;
+        else
+            _statsOpaqueDynamicMeshes++;
         target.Add(new DynamicMeshDraw(
             gpuMesh,
             transform,
@@ -390,6 +430,8 @@ internal sealed partial class SceneViewportRenderer
             Math.Clamp(alpha, 0f, 1f),
             Math.Clamp(refractionStrength, 0f, 1f),
             Math.Clamp(distortionStrength, 0f, 1f),
+            alphaClip && !transparent,
+            Math.Clamp(alphaClipThreshold, 0f, 1f),
             transparent ? false : castShadows,
             transparent ? false : receiveShadows,
             transparent ? false : twoSidedShadows,
@@ -419,6 +461,8 @@ internal sealed partial class SceneViewportRenderer
         float alpha = 1f,
         float refractionStrength = 0f,
         float distortionStrength = 0f,
+        bool alphaClip = false,
+        float alphaClipThreshold = 0.5f,
         bool castShadows = true,
         bool receiveShadows = true,
         bool twoSidedShadows = false,
@@ -456,6 +500,8 @@ internal sealed partial class SceneViewportRenderer
         }
 
         var target = transparent ? refractiveSkinnedMeshDraws : skinnedMeshDraws;
+        if (transparent)
+            _statsTransparentSkinnedMeshes++;
         target.Add(new SkinnedMeshDraw(
             gpuMesh,
             transform,
@@ -472,6 +518,8 @@ internal sealed partial class SceneViewportRenderer
             Math.Clamp(alpha, 0f, 1f),
             Math.Clamp(refractionStrength, 0f, 1f),
             Math.Clamp(distortionStrength, 0f, 1f),
+            alphaClip && !transparent,
+            Math.Clamp(alphaClipThreshold, 0f, 1f),
             transparent ? false : castShadows,
             transparent ? false : receiveShadows,
             transparent ? false : twoSidedShadows,

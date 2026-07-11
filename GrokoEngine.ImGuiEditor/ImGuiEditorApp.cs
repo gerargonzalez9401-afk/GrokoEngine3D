@@ -67,9 +67,14 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private readonly Dictionary<string, DateTime> assetPreviewNextValidationUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IntPtr> assetPreviewFrameCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> assetPreviewFrameMisses = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, MaterialPreviewSourceCache> materialPreviewSourceCache = new(StringComparer.OrdinalIgnoreCase);
+    // Compartido entre el hilo de UI y los jobs de fondo de previews (los .mat calculan su
+    // dependency stamp desde el worker): ConcurrentDictionary para evitar corrupción.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, MaterialPreviewSourceCache> materialPreviewSourceCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextureMetadata> textureMetadataCache = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly TimeSpan AssetPreviewValidationInterval = TimeSpan.FromSeconds(1);
+    // Los cambios hechos EN el editor invalidan el preview al momento (InvalidateAssetPreview);
+    // este intervalo solo detecta ediciones externas (Photoshop, explorador). Con 1 s, decenas
+    // de tiles visibles hacían stats de disco constantes (carísimo en carpetas OneDrive).
+    private static readonly TimeSpan AssetPreviewValidationInterval = TimeSpan.FromSeconds(6);
 
     // Project Browser cache + virtualized drawing.
     // Similar philosophy to Unity: the UI draws only visible items, while previews are generated lazily.
@@ -132,6 +137,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         set => selection.SelectSingle(value);
     }
     private EditorCameraState camera = new();
+    private OpenALAudioBackend? audioBackend;
+    private bool showStats = true;   // overlay de FPS/Stats del viewport (toggle en el toolbar)
     private bool vsync;
     // Anchos/altos de los paneles — se pueden arrastrar con los splitters
     private const float PremiumToolbarHeight = 34f;
@@ -221,6 +228,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private bool showShaderGraph;
     private bool showAnimationWindow;
     private bool showAnimatorGraph;
+    private string? animatorGraphControllerAssetPath;
     private bool toolWindowMouseCapture; // true si el ratón está sobre una ventana flotante (Animator/Animation/ShaderGraph/etc.)
     private ShaderGraphModel? shaderGraphModel;
     private string? shaderGraphAssetPath;
@@ -322,6 +330,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private float iblSpecularStrength;
     private string hdriPath = "";
     private EnvironmentMode environmentMode = EnvironmentMode.Hdri;
+    private StaticHierarchyLodMode staticHierarchyLodMode = StaticHierarchyLodMode.Performance120;
     private readonly EditorProfiler profiler = new();
     private bool showProfiler;
     private bool consoleShowInfo = true;
@@ -349,7 +358,14 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private bool viewportAssetDropArmed;
     private bool inspectorAssetDropArmed;
     private string hierarchyFilter = string.Empty;
+    private string? hierarchyMouseDownObjectId;
     private string? hierarchyDragObjectId;
+    private bool hierarchyDropPending;
+    private GameObject? hierarchyDropParent;
+    private int hierarchyDropIndex;
+    private System.Numerics.Vector2 hierarchyPressPos;
+    private bool hierarchyMouseWasDown;
+    private int hierarchyDropIntent; // 0 = antes, 1 = como hijo, 2 = después
     private string? inlineRenameObjectId;
     private string inlineRenameObjectName = string.Empty;
     private bool inlineRenameObjectFocusPending;
@@ -574,6 +590,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         BuildProjectPreviewCacheDuringLoad();
         Program.UpdateSplash("Starting asset watchers", 0.94f);
         StartScriptWatcher();
+        Program.UpdateSplash("Initializing audio", 0.97f);
+        EnsureAudioBackend();   // abre OpenAL ahora: confirma la DLL nativa y evita tirón al primer sonido
         Program.UpdateSplash("Ready", 1f);
         Program.CloseSplash();
 
@@ -614,6 +632,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneTarget.Dispose();
         gamePreviewTarget.Dispose();
         scriptCompiler.Dispose();
+        AudioEngine.Backend = null;
+        audioBackend?.Dispose();
         base.OnUnload();
     }
 
@@ -651,6 +671,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             gameModeEscapeHeld = escapeDown;
             FeedEngineInput();
             StepRuntime(args.Time);
+            UpdateAudio();
             ApplyEngineCursorState();
             Input.Flush();
             profiler.SampleUpdate(EditorProfiler.ElapsedMs(updateStart));
@@ -699,6 +720,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             StepAnimationPreview(args.Time);
         }
 
+        UpdateAudio();
         profiler.SampleUpdate(EditorProfiler.ElapsedMs(updateStart));
     }
 
@@ -830,8 +852,12 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         // La UI usa esta misma cámara para Screen Space - Camera y World Space.
         activeUiCameraState = activeCam;
 
-        bool depthTextureActive = ResolveCameraTextureMode(gameCameraComponent?.DepthTexture, depthTextureEnabled);
-        bool opaqueTextureActive = ResolveCameraTextureMode(gameCameraComponent?.OpaqueTexture, opaqueTextureEnabled);
+        Camera? viewportCameraSettings = gameView
+            ? gameCameraComponent
+            : selected?.GetComponent<Camera>();
+
+        bool depthTextureActive = ResolveCameraTextureMode(viewportCameraSettings?.DepthTexture, depthTextureEnabled);
+        bool opaqueTextureActive = ResolveCameraTextureMode(viewportCameraSettings?.OpaqueTexture, opaqueTextureEnabled);
 
         int samples = activeCam.AntiAliasing ? activeCam.AntiAliasingSamples : 1;
         if (!gameView)
@@ -846,12 +872,14 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.DebugView = (int)lightingDebugView;
         sceneRenderer.ShadowQuality = shadowQuality;
         sceneRenderer.ShadowBias = shadowBias;
+        sceneRenderer.RenderingPath = ResolveRendererRenderingPath(viewportCameraSettings);
         sceneRenderer.ColorSpace = colorSpace;
         sceneRenderer.ImageBasedLighting = iblEnabled;
         sceneRenderer.IblDiffuseStrength = iblDiffuseStrength;
         sceneRenderer.IblSpecularStrength = iblSpecularStrength;
         sceneRenderer.EnvironmentHdriPath = hdriPath;
         sceneRenderer.EnvironmentMode = environmentMode;
+        sceneRenderer.StaticHierarchyLodMode = staticHierarchyLodMode;
         sceneRenderer.DrawEnvironmentBackground = !gameView || gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
         sceneRenderer.RenderRealtimeShadows = gameView;
         sceneRenderer.ShadowUpdateIntervalFrames = gameView ? ShadowUpdateIntervalForQuality(shadowQuality) : 1;
@@ -880,24 +908,25 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneTarget.Resolve();
         sceneTarget.CaptureOpaqueTexture();
         var postSettings = FindActiveComponent<PostProcessSettings>(objects);
-        bool postEnabled = postSettings?.PostProcessEnabled ?? false;
-        sceneTarget.FxaaEnabled = fxaaEnabled;
+        bool diagnosticDebugView = lightingDebugView != LightingDebugView.Final;
+        bool postEnabled = !diagnosticDebugView && (postSettings?.PostProcessEnabled ?? false);
+        sceneTarget.FxaaEnabled = !diagnosticDebugView && fxaaEnabled;
         // Si no hay PostProcess activo, no envíes calidades altas al shader: evita que
         // una configuración global dispare loops de bloom/AO innecesarios por accidente.
         sceneTarget.BloomQuality = postEnabled ? bloomQuality : 0;
         sceneTarget.AmbientOcclusionQuality = postEnabled && depthTextureActive && ssaoEnabled ? ambientOcclusionQuality : 0;
         // God rays del sol (independiente del PostProcess): el renderer calculo la pos del sol en pantalla.
-        sceneTarget.GodRaysEnabled = depthTextureActive && sceneRenderer.SunGodRaysActive;
+        sceneTarget.GodRaysEnabled = !diagnosticDebugView && depthTextureActive && sceneRenderer.SunGodRaysActive;
         sceneTarget.GodRaySunU = sceneRenderer.SunScreenUv.X;
         sceneTarget.GodRaySunV = sceneRenderer.SunScreenUv.Y;
         sceneTarget.GodRayStrength = sceneRenderer.SunGodRaysStrength;
-        sceneTarget.ContactShadowsEnabled = depthTextureActive && sceneRenderer.SunContactShadowsActive;
+        sceneTarget.ContactShadowsEnabled = !diagnosticDebugView && depthTextureActive && sceneRenderer.SunContactShadowsActive;
         sceneTarget.ContactShadowSunU = sceneRenderer.SunScreenUv.X;
         sceneTarget.ContactShadowSunV = sceneRenderer.SunScreenUv.Y;
         sceneTarget.ContactShadowLength = sceneRenderer.SunContactShadowLength;
         sceneTarget.ContactShadowSamples = sceneRenderer.SunContactShadowSamples;
         long postProcessStart = EditorProfiler.Timestamp();
-        sceneTarget.ApplyPostProcess(postSettings);
+        sceneTarget.ApplyPostProcess(diagnosticDebugView ? null : postSettings);
         profiler.SamplePostProcess(EditorProfiler.ElapsedMs(postProcessStart));
         if (dualViewport)
             RenderGamePreviewTexture(postSettings);
@@ -939,12 +968,14 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.DebugView = (int)lightingDebugView;
         sceneRenderer.ShadowQuality = shadowQuality;
         sceneRenderer.ShadowBias = shadowBias;
+        sceneRenderer.RenderingPath = ResolveRendererRenderingPath(gameCameraComponent);
         sceneRenderer.ColorSpace = colorSpace;
         sceneRenderer.ImageBasedLighting = iblEnabled;
         sceneRenderer.IblDiffuseStrength = iblDiffuseStrength;
         sceneRenderer.IblSpecularStrength = iblSpecularStrength;
         sceneRenderer.EnvironmentHdriPath = hdriPath;
         sceneRenderer.EnvironmentMode = environmentMode;
+        sceneRenderer.StaticHierarchyLodMode = staticHierarchyLodMode;
         sceneRenderer.DrawEnvironmentBackground = gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
         sceneRenderer.RenderRealtimeShadows = gameCameraComponent?.RenderShadows ?? true;
         sceneRenderer.ShadowUpdateIntervalFrames = ShadowUpdateIntervalForQuality(shadowQuality);
@@ -968,20 +999,21 @@ internal sealed partial class ImGuiEditorApp : GameWindow
 
         gamePreviewTarget.Resolve();
         gamePreviewTarget.CaptureOpaqueTexture();
-        bool postEnabled = (postSettings?.PostProcessEnabled ?? false) && (gameCameraComponent?.PostProcessing ?? true);
-        gamePreviewTarget.FxaaEnabled = fxaaEnabled && (gameCameraComponent?.AntiAliasingMode != CameraAntiAliasingMode.None);
+        bool diagnosticDebugView = lightingDebugView != LightingDebugView.Final;
+        bool postEnabled = !diagnosticDebugView && (postSettings?.PostProcessEnabled ?? false) && (gameCameraComponent?.PostProcessing ?? true);
+        gamePreviewTarget.FxaaEnabled = !diagnosticDebugView && fxaaEnabled && (gameCameraComponent?.AntiAliasingMode != CameraAntiAliasingMode.None);
         gamePreviewTarget.BloomQuality = postEnabled ? bloomQuality : 0;
         gamePreviewTarget.AmbientOcclusionQuality = postEnabled && depthTextureActive && ssaoEnabled ? ambientOcclusionQuality : 0;
-        gamePreviewTarget.GodRaysEnabled = depthTextureActive && sceneRenderer.SunGodRaysActive;
+        gamePreviewTarget.GodRaysEnabled = !diagnosticDebugView && depthTextureActive && sceneRenderer.SunGodRaysActive;
         gamePreviewTarget.GodRaySunU = sceneRenderer.SunScreenUv.X;
         gamePreviewTarget.GodRaySunV = sceneRenderer.SunScreenUv.Y;
         gamePreviewTarget.GodRayStrength = sceneRenderer.SunGodRaysStrength;
-        gamePreviewTarget.ContactShadowsEnabled = depthTextureActive && sceneRenderer.SunContactShadowsActive;
+        gamePreviewTarget.ContactShadowsEnabled = !diagnosticDebugView && depthTextureActive && sceneRenderer.SunContactShadowsActive;
         gamePreviewTarget.ContactShadowSunU = sceneRenderer.SunScreenUv.X;
         gamePreviewTarget.ContactShadowSunV = sceneRenderer.SunScreenUv.Y;
         gamePreviewTarget.ContactShadowLength = sceneRenderer.SunContactShadowLength;
         gamePreviewTarget.ContactShadowSamples = sceneRenderer.SunContactShadowSamples;
-        gamePreviewTarget.ApplyPostProcess(postSettings);
+        gamePreviewTarget.ApplyPostProcess(diagnosticDebugView ? null : postSettings);
     }
 
     // Cada cuantos frames se regenera el shadow map en Play/Game (1 = cada frame, sin salto
@@ -1004,6 +1036,27 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             CameraTextureMode.Off => false,
             _ => pipelineEnabled
         };
+
+    private RendererRenderingPath ResolveRendererRenderingPath(Camera? cam)
+    {
+        CameraRenderingPath path = cam?.RenderingPath ?? CameraRenderingPath.UseProjectSettings;
+        if (path == CameraRenderingPath.UseProjectSettings)
+        {
+            path = renderingPath switch
+            {
+                "Forward" => CameraRenderingPath.Forward,
+                "Deferred" => CameraRenderingPath.Deferred,
+                _ => CameraRenderingPath.ForwardPlus
+            };
+        }
+
+        return path switch
+        {
+            CameraRenderingPath.Forward => RendererRenderingPath.Forward,
+            CameraRenderingPath.Deferred => RendererRenderingPath.Deferred,
+            _ => RendererRenderingPath.ForwardPlus
+        };
+    }
 
     private (int Width, int Height) GetViewportRenderSize()
     {
@@ -1253,7 +1306,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             fxaaEnabled = settings.FxaaEnabled;
             renderPipelineAssetName = string.IsNullOrWhiteSpace(settings.RenderPipelineAssetName) ? "Groko Render Pipeline Asset" : settings.RenderPipelineAssetName;
             rendererDataName = string.IsNullOrWhiteSpace(settings.RendererDataName) ? "PC_Renderer" : settings.RendererDataName;
-            renderingPath = settings.RenderingPath is "Forward" or "Forward+" ? settings.RenderingPath : "Forward+";
+            renderingPath = settings.RenderingPath is "Forward" or "Forward+" or "Deferred" ? settings.RenderingPath : "Forward+";
             depthTextureEnabled = settings.DepthTextureEnabled;
             opaqueTextureEnabled = settings.OpaqueTextureEnabled;
             opaqueDownsampling = settings.OpaqueDownsampling is "None" or "2x Bilinear" or "4x Box" or "4x Bilinear"
@@ -1287,6 +1340,9 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             iblSpecularStrength = Math.Clamp(settings.IblSpecularStrength <= 0f ? 0.16f : settings.IblSpecularStrength, 0f, 0.35f);
             hdriPath = settings.HdriPath ?? "";
             environmentMode = Enum.TryParse<EnvironmentMode>(settings.EnvironmentMode, out var envMode) ? envMode : EnvironmentMode.Hdri;
+            staticHierarchyLodMode = Enum.TryParse<StaticHierarchyLodMode>(settings.StaticHierarchyLodMode, out var staticLodMode)
+                ? staticLodMode
+                : StaticHierarchyLodMode.Performance120;
             projectListView = settings.ProjectListView;
             projectTileScale = Math.Clamp(settings.ProjectTileScale, ProjectTileScaleMin, ProjectTileScaleMax);
             projectSortMode = Enum.TryParse<AssetSortMode>(settings.ProjectSortMode, out var mode) ? mode : AssetSortMode.Name;
@@ -1368,6 +1424,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
                 IblSpecularStrength = iblSpecularStrength,
                 HdriPath = hdriPath,
                 EnvironmentMode = environmentMode.ToString(),
+                StaticHierarchyLodMode = staticHierarchyLodMode.ToString(),
                 ProjectListView = projectListView,
                 ProjectTileScale = projectTileScale,
                 ProjectSortMode = projectSortMode.ToString(),
@@ -1577,6 +1634,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         [EditorIcon.Settings] = "settings_64.png",
         [EditorIcon.ShaderGraph] = "shader_64.png",
         [EditorIcon.CameraGizmo] = "cinecamera_64.png",
+        [EditorIcon.AudioSource] = "audiosource_64.png",
+        [EditorIcon.AudioClip] = "audioclip_64.png",
     };
 
     // Bliteo el PNG blanco del pack en la celda del atlas. Devuelve false si no hay archivo
@@ -1634,7 +1693,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
 
         long statusStart = EditorProfiler.Timestamp();
         DrawStatusBar();
-        DrawStats();
+        if (showStats)
+            DrawStats();
         profiler.SampleUiStatus(EditorProfiler.ElapsedMs(statusStart));
 
         long toolsStart = EditorProfiler.Timestamp();
@@ -1717,6 +1777,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         long inspectorStart = EditorProfiler.Timestamp();
         DrawInspectorPanel(new Vector2(_panelRightW, totalH));
         profiler.SampleUiInspector(EditorProfiler.ElapsedMs(inspectorStart));
+        ClearHierarchyDragIfReleased();
         if (designerShowGuides)
             DrawLayoutGuides(new Vector2(totalW, totalH), menuH);
 
@@ -2003,8 +2064,19 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         if (DrawIconButton(EditorIcon.Step, "Step one frame", false, new Vector2(30f, 24f)) && isPlaying)
             StepRuntime(1.0 / 60.0);
 
-        float rightX = MathF.Max(ImGui.GetCursorPosX() + 24f, ClientSize.X - 310f);
+        float rightX = MathF.Max(ImGui.GetCursorPosX() + 24f, ClientSize.X - 378f);
         ImGui.SameLine(rightX);
+        // Botón Stats: muestra/oculta el overlay de FPS del editor (como el "Stats" de Unity).
+        ImGui.PushStyleColor(ImGuiCol.Button, showStats
+            ? new System.Numerics.Vector4(0.160f, 0.205f, 0.250f, 1f)
+            : new System.Numerics.Vector4(0.080f, 0.088f, 0.100f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new System.Numerics.Vector4(0.150f, 0.175f, 0.205f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new System.Numerics.Vector4(0.180f, 0.230f, 0.275f, 1f));
+        if (ImGui.Button("Stats", new Vector2(58f, 24f)))
+            showStats = !showStats;
+        ImGui.PopStyleColor(3);
+        DrawTooltip(showStats ? "Ocultar FPS / Stats" : "Mostrar FPS / Stats");
+        ImGui.SameLine();
         DrawToolbarDropdown("Build Windows", 118f);
         ImGui.SameLine();
         DrawToolbarDropdown("Default", 88f);
@@ -2200,8 +2272,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     {
         // Overlay en esquina superior-derecha del viewport (estilo Unity Stats)
         float menuH = ImGui.GetFrameHeight() + PremiumToolbarHeight;
-        const float statsW = 188f;
-        const float statsH = 100f;
+        const float statsW = 232f;
+        const float statsH = 154f;
         float statsX = _panelLeftW + (ClientSize.X - _panelLeftW - _panelRightW) - statsW - 8f;
         float statsY = menuH + 36f;
         ImGui.SetNextWindowPos(new Vector2(statsX, statsY), ImGuiCond.Always);
@@ -2221,6 +2293,13 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         ImGui.Spacing();
         ImGui.TextDisabled($"Objects  {GetCachedObjectCount()}");
         ImGui.TextDisabled($"Mem  {GC.GetTotalMemory(false) / (1024f * 1024f):F1} MB");
+        var renderStats = sceneRenderer.LastStats;
+        if (renderStats.DeferredGBufferActive)
+            ImGui.TextColored(new System.Numerics.Vector4(0.35f, 0.78f, 1f, 1f), $"Path  {renderStats.RenderingPath} | GBuffer ON");
+        else
+            ImGui.TextDisabled($"Path  {renderStats.RenderingPath} | GBuffer Off");
+        if (lightingDebugView != LightingDebugView.Final)
+            ImGui.TextColored(new System.Numerics.Vector4(1.00f, 0.78f, 0.25f, 1f), $"Debug  {LightingDebugViewLabel(lightingDebugView)}");
         ImGui.TextDisabled(isPlaying ? (playPaused ? "● Paused" : "▶ Play") : "Edit mode");
         ImGui.End();
         ImGui.PopStyleColor();

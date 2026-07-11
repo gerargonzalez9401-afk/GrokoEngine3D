@@ -148,6 +148,29 @@ namespace GrokoEngine
             return path;
         }
 
+        // Los clips importados de FBX (Mixamo, etc.) suelen llamarse "Armature|Idle" o
+        // "metarig|Walk". La barra vertical '|' —y otros caracteres como \ / : * ? " < > |—
+        // son ILEGALES en nombres de archivo de Windows, así que File.WriteAllText reventaba
+        // el editor al extraer el clip. Se descarta el prefijo de la armadura (lo de antes del
+        // último '|', convención de Mixamo/Unity) y se sustituye cualquier carácter inválido.
+        private static string SanitizeClipFileName(string name, string fallback)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                name = fallback;
+
+            int bar = name.LastIndexOf('|');
+            if (bar >= 0 && bar < name.Length - 1)
+                name = name.Substring(bar + 1);
+
+            foreach (char invalid in Path.GetInvalidFileNameChars())
+                name = name.Replace(invalid, '_');
+            name = name.Trim().Trim('.');
+
+            return string.IsNullOrWhiteSpace(name)
+                ? (string.IsNullOrWhiteSpace(fallback) ? "Clip" : fallback)
+                : name;
+        }
+
         public static string CreateFromModelClip(string directory, string modelPath, string clipName, string avatarPath, bool humanoid, ModelImportSettings settings)
         {
             Directory.CreateDirectory(directory);
@@ -155,6 +178,7 @@ namespace GrokoEngine
             string safeName = string.IsNullOrWhiteSpace(clipName)
                 ? Path.GetFileNameWithoutExtension(modelPath)
                 : clipName;
+            safeName = SanitizeClipFileName(safeName, Path.GetFileNameWithoutExtension(modelPath));
             string path = GetUniquePath(Path.Combine(directory, safeName + ".anim"));
             var data = new AnimationClipData
             {

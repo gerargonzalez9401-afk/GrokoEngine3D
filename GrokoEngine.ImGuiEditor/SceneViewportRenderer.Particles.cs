@@ -508,6 +508,11 @@ private void CollectParticleMeshDraws(IReadOnlyList<GameObject> objects, Vector3
         {
             if (!obj.IsActive)
                 continue;
+
+            if (obj.GetComponent<LodGroup>() is { Enabled: true } &&
+                HasHierarchyLodChildren(obj))
+                continue;
+
             if (!LayerMask.Contains(_activeCullingMask, obj.Layer))
             {
                 CollectParticleMeshDraws(obj.Children, cameraPosition);

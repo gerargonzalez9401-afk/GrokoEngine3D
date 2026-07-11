@@ -662,7 +662,11 @@ private void DrawParticlePresetAssetTools(GrokoEngine.ParticleSystem ps)
         DrawAssetSlot("Preset##pspresetasset", particlePresetAssetPath, "Drop .particlepreset", path =>
         {
             if (string.IsNullOrWhiteSpace(path) || IsParticlePresetPath(path))
+            {
                 particlePresetAssetPath = path ?? "";
+                if (!string.IsNullOrWhiteSpace(particlePresetAssetPath) && File.Exists(particlePresetAssetPath))
+                    ApplyParticlePresetAsset(ps, particlePresetAssetPath);
+            }
         }, IsParticlePresetPath);
         ImGui.SameLine();
         ImGui.BeginDisabled(string.IsNullOrWhiteSpace(particlePresetAssetPath) || !File.Exists(particlePresetAssetPath));

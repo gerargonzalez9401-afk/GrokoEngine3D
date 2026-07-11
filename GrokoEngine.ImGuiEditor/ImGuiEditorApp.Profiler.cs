@@ -130,6 +130,9 @@ internal sealed partial class ImGuiEditorApp
 
             var stats = profiler.RenderStats;
             DrawProfilerBar("  Build/Collect", stats.BuildSceneMs, frameBudget);
+            DrawProfilerBar("    Build Grid", stats.BuildGridMs, frameBudget);
+            DrawProfilerBar("    Scene Walk", stats.BuildWalkMs, frameBudget);
+            DrawProfilerBar("    Particle Collect", stats.BuildParticleCollectMs, frameBudget);
             DrawProfilerBar("  Shadows Total", stats.ShadowMs, frameBudget);
             DrawProfilerBar("    Directional", stats.DirectionalShadowMs, frameBudget);
             DrawProfilerBar("    Spot", stats.SpotShadowMs, frameBudget);
@@ -143,6 +146,8 @@ internal sealed partial class ImGuiEditorApp
             DrawProfilerBar("  Particles", stats.ParticlesMs, frameBudget);
             DrawProfilerBar("  Occlusion", stats.OcclusionMs, frameBudget);
             DrawProfilerBar("  Other / Driver", stats.RenderOtherMs, frameBudget);
+            DrawProfilerMetric("Rendering Path", stats.RenderingPath.ToString());
+            DrawProfilerMetric("Deferred GBuffer", stats.DeferredGBufferActive ? "Active" : "Off");
             DrawProfilerMetric("Resolution", $"{profiler.RenderWidth} x {profiler.RenderHeight}");
             DrawProfilerMetric("Render Scale", $"{profiler.RenderScale:F2}x");
             DrawProfilerMetric("Draw Calls", stats.DrawCalls.ToString());
@@ -150,6 +155,24 @@ internal sealed partial class ImGuiEditorApp
             DrawProfilerMetric("Triangles", FormatLarge(stats.Triangles));
             DrawProfilerMetric("Instanced Draws", stats.InstancedDrawCalls.ToString());
             DrawProfilerMetric("Instances", stats.Instances.ToString());
+            DrawProfilerMetric("Dynamic Groups", stats.DynamicMeshGroups.ToString());
+            DrawProfilerMetric("Dynamic Singles", stats.DynamicMeshSingles.ToString());
+            DrawProfilerMetric("Largest Group", stats.DynamicMeshLargestGroup.ToString());
+            DrawProfilerMetric("Opaque Dynamic", stats.OpaqueDynamicMeshes.ToString());
+            DrawProfilerMetric("Transparent Dynamic", stats.TransparentDynamicMeshes.ToString());
+            DrawProfilerMetric("Transparent Skinned", stats.TransparentSkinnedMeshes.ToString());
+            DrawProfilerMetric("Tree Mesh", stats.TerrainTreeMeshCount.ToString());
+            DrawProfilerMetric("Tree Billboards", stats.TerrainTreeBillboardCount.ToString());
+            DrawProfilerMetric("Tree Culled", stats.TerrainTreeCulledCount.ToString());
+            DrawProfilerMetric("Tree Cells", stats.TerrainTreeVisibleCells.ToString());
+            DrawProfilerMetric("Hierarchy LOD 0/1", $"{stats.HierarchyLod0Count}/{stats.HierarchyLod1Count}");
+            DrawProfilerMetric("Hierarchy LOD 2/3", $"{stats.HierarchyLod2Count}/{stats.HierarchyLod3Count}");
+            DrawProfilerMetric("Hierarchy LOD Skipped", stats.HierarchyLodSkippedCount.ToString());
+            DrawProfilerMetric("Hierarchy LOD Culled", stats.HierarchyLodCulledCount.ToString());
+            DrawProfilerMetric("Static LOD Fast", stats.StaticHierarchyLodFastCount.ToString());
+            DrawProfilerMetric("LOD GPU Replay/Miss", $"{stats.HierarchyLodGpuReplays}/{stats.HierarchyLodGpuMisses}");
+            DrawProfilerMetric("LOD GPU Frustum", stats.HierarchyLodGpuFrustumCulled.ToString());
+            DrawProfilerMetric("LOD GPU Parts", stats.HierarchyLodGpuParts.ToString());
             DrawProfilerMetric("Static Ranges", stats.StaticRanges.ToString());
             DrawProfilerMetric("Dynamic Ranges", stats.DynamicRanges.ToString());
             DrawProfilerMetric("Textures Cached", stats.TextureCacheCount.ToString());

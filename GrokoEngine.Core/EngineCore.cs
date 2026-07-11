@@ -181,6 +181,7 @@ namespace GrokoEngine
     public enum MaterialSurfaceType
     {
         Opaque,
+        Cutout,
         Transparent
     }
 
@@ -201,6 +202,7 @@ namespace GrokoEngine
         public float Metallic { get; set; } = 0f;
         public MaterialSurfaceType SurfaceType { get; set; } = MaterialSurfaceType.Opaque;
         public float Alpha { get; set; } = 1f;
+        public float AlphaClipThreshold { get; set; } = 0.5f;
         public float RefractionStrength { get; set; } = 0f;
         public float DistortionStrength { get; set; } = 0f;
         public bool SpecularHighlights { get; set; } = true;
@@ -218,6 +220,7 @@ namespace GrokoEngine
     public enum CameraClearFlags { Skybox, SolidColor }
     public enum CameraProjection { Perspective, Orthographic }
     public enum CameraFieldOfViewAxis { Vertical, Horizontal }
+    public enum CameraRenderingPath { UseProjectSettings, Forward, ForwardPlus, Deferred }
     public enum CameraAntiAliasingMode { None, FXAA, SMAA, TAA }
     public enum CameraTextureMode { Pipeline, On, Off }
 
@@ -310,6 +313,7 @@ namespace GrokoEngine
         public float BackgroundB = 0.120f;
         public float BackgroundA = 1f;
         public bool PostProcessing { get; set; } = true;
+        public CameraRenderingPath RenderingPath { get; set; } = CameraRenderingPath.UseProjectSettings;
         public bool AntiAliasing { get; set; } = true;
         public CameraAntiAliasingMode AntiAliasingMode { get; set; } = CameraAntiAliasingMode.FXAA;
 
@@ -379,6 +383,78 @@ namespace GrokoEngine
         public bool DynamicOcclusion = true;
         public string RenderingLayerMask = "Default";
         public int Priority = 0;
+    }
+
+    public enum ReflectionProbeMode
+    {
+        Baked = 0,
+        Realtime = 1,
+        Custom = 2
+    }
+
+    public enum ReflectionProbeRefreshMode
+    {
+        OnAwake = 0,
+        EveryFrame = 1,
+        ViaScripting = 2
+    }
+
+    public enum ReflectionProbeTimeSlicing
+    {
+        NoTimeSlicing = 0,
+        IndividualFaces = 1,
+        AllFacesAtOnce = 2
+    }
+
+    // Reflection Probe estilo Unity. Por ahora define el volumen, el modo y los assets
+    // de cubemap que usara el renderer cuando conectemos la captura/aplicacion real.
+    public class ReflectionProbe : Component
+    {
+        public ReflectionProbeMode Mode = ReflectionProbeMode.Baked;
+        public string BakedCubemapPath = "";
+        public string CustomCubemapPath = "";
+
+        public float Intensity = 1f;
+        public float BlendDistance = 1f;
+        public float SizeX = 10f;
+        public float SizeY = 10f;
+        public float SizeZ = 10f;
+        public float CenterX = 0f;
+        public float CenterY = 0f;
+        public float CenterZ = 0f;
+
+        public int Resolution = 128;
+        public float NearClip = 0.1f;
+        public float FarClip = 100f;
+        public int Importance = 1;
+        public bool BoxProjection = true;
+        public bool HDR = true;
+
+        public ReflectionProbeRefreshMode RefreshMode = ReflectionProbeRefreshMode.OnAwake;
+        public ReflectionProbeTimeSlicing TimeSlicing = ReflectionProbeTimeSlicing.IndividualFaces;
+
+        public string EffectiveCubemapPath =>
+            Mode == ReflectionProbeMode.Custom ? CustomCubemapPath : BakedCubemapPath;
+
+        public bool NeedsBake =>
+            Mode == ReflectionProbeMode.Baked && string.IsNullOrWhiteSpace(BakedCubemapPath);
+    }
+
+    // =====================================================
+    // LOD GROUP
+    // =====================================================
+    // Como el LOD Group de Unity: controla a qué "tamaño relativo en pantalla" (radio del objeto
+    // / distancia a la cámara, × Bias) cambia de nivel la malla. Aplica al objeto y a TODOS sus
+    // descendientes (el LodGroup más cercano en la jerarquía gana). Los niveles de geometría son
+    // las submallas "X_LOD0/X_LOD1/..." que el modelo trae de fábrica; si el modelo no trae LODs,
+    // solo aplica el ocultado por distancia (CulledBelow).
+    public class LodGroup : Component
+    {
+        public float Lod0 = 0.12f;         // por encima → nivel 0 (máximo detalle)
+        public float Lod1 = 0.055f;        // entre Lod0 y Lod1 → nivel 1
+        public float Lod2 = 0.025f;        // entre Lod1 y Lod2 → nivel 2; por debajo → último nivel
+        public float CulledBelow = 0.005f; // más pequeño que esto → no se dibuja (0 = nunca ocultar)
+        public float Bias = 1f;            // >1 mantiene el detalle a más distancia
     }
 
     // =====================================================

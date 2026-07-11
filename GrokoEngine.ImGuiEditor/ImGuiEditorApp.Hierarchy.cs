@@ -36,6 +36,7 @@ internal sealed partial class ImGuiEditorApp
     {
         BeginPanel("##HierarchyPanel", size);
         DrawPanelHeader("Hierarchy", $"{GetCachedObjectCount()} objects");
+        BeginHierarchyDropFrame();
 
         ImGui.SetNextItemWidth(-1f);
         ImGui.InputTextWithHint("##HierarchySearch", "Search hierarchy", ref hierarchyFilter, 128);
@@ -68,13 +69,46 @@ internal sealed partial class ImGuiEditorApp
         ImGui.PopStyleVar(); // WindowPadding
 
         ImGui.Separator();
+        bool rootBtnHot = !isPlaying && hierarchyDragObjectId != null;
         ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.22f, 0.22f, 0.22f, 1f));
         ImGui.Button("Drop here to move to root", new Vector2(-1f, 24f));
         ImGui.PopStyleColor();
-        DrawHierarchyRootDropTarget();
+        if (rootBtnHot && ImGui.IsItemHovered())
+        {
+            var dragged = sceneGraph.FindById(hierarchyDragObjectId!);
+            if (dragged != null && CanDropHierarchyTargets(GetHierarchyDragTargets(dragged), null))
+            {
+                hierarchyDropPending = true;
+                hierarchyDropParent = null;
+                hierarchyDropIndex = objects.Count;
+                hierarchyDropIntent = 1;
+            }
+        }
+        CommitHierarchyDropFrame();   // aplica el drop pendiente al soltar (ratón crudo)
         ImGui.PopStyleColor();
 
         ImGui.EndChild();
+    }
+
+    private void BeginHierarchyDropFrame()
+    {
+        hierarchyDropPending = false;
+        hierarchyDropParent = null;
+        hierarchyDropIndex = 0;
+    }
+
+    private void CommitHierarchyDropFrame()
+    {
+        // Detección de "soltar" con el estado CRUDO del ratón (no ImGui.IsMouseReleased): un
+        // drag NATIVO activo consume IsMouseReleased y por eso el commit nunca disparaba. Esto
+        // sí funciona siempre y evita que un drag quede "pegado" (síntoma tipo modo Play).
+        bool released = hierarchyMouseWasDown && !ImGui.IsMouseDown(ImGuiMouseButton.Left);
+        if (released && hierarchyDropPending && hierarchyDragObjectId != null)
+        {
+            DropHierarchyObject(hierarchyDropParent, hierarchyDropIndex);
+            hierarchyMouseDownObjectId = null;
+        }
+        hierarchyMouseWasDown = ImGui.IsMouseDown(ImGuiMouseButton.Left);
     }
 
     private void DrawHierarchyRootDropSpace()
@@ -91,23 +125,24 @@ internal sealed partial class ImGuiEditorApp
             selection.Clear();
             ImGui.OpenPopup("HierarchyEmptyMenu");
         }
-        if (ImGui.IsItemHovered() && ImGui.IsMouseDragging(ImGuiMouseButton.Left) && hierarchyDragObjectId != null)
+        // Soltar en el área vacía de abajo = mover a la raíz (destino MANUAL, ver CommitHierarchyDropFrame).
+        if (ImGui.IsItemHovered() && hierarchyDragObjectId != null)
         {
-            var min = ImGui.GetItemRectMin();
-            var max = ImGui.GetItemRectMax();
-            var drawList = ImGui.GetWindowDrawList();
-            uint color = ImGui.GetColorU32(new System.Numerics.Vector4(0.70f, 0.70f, 0.66f, 0.85f));
-            drawList.AddRect(min + new Vector2(3f, 3f), max - new Vector2(3f, 3f), color, 3f, ImDrawFlags.None, 1.5f);
+            var dragged = sceneGraph.FindById(hierarchyDragObjectId);
+            if (dragged != null && CanDropHierarchyTargets(GetHierarchyDragTargets(dragged), null))
+            {
+                hierarchyDropPending = true;
+                hierarchyDropParent = null;
+                hierarchyDropIndex = objects.Count;
+                hierarchyDropIntent = 1;
+
+                var min = ImGui.GetItemRectMin();
+                var max = ImGui.GetItemRectMax();
+                var drawList = ImGui.GetWindowDrawList();
+                uint color = ImGui.GetColorU32(new System.Numerics.Vector4(0.55f, 0.86f, 0.62f, 0.85f));
+                drawList.AddRect(min + new Vector2(3f, 3f), max - new Vector2(3f, 3f), color, 3f, ImDrawFlags.None, 1.5f);
+            }
         }
-
-        if (!ImGui.BeginDragDropTarget())
-            return;
-
-        bool delivered = AcceptDragDropOnRelease("GROKO_HIERARCHY_OBJECT");
-        if (delivered && hierarchyDragObjectId != null)
-            DropHierarchyObject(null, objects.Count);
-
-        ImGui.EndDragDropTarget();
     }
 
     private void DrawHierarchyRootDropTarget()
@@ -115,44 +150,23 @@ internal sealed partial class ImGuiEditorApp
         DrawHierarchyInsertDropTarget(null, objects.Count, "root_footer");
     }
 
+    private void ClearHierarchyDragIfReleased()
+    {
+        if (hierarchyDragObjectId == null && hierarchyMouseDownObjectId == null)
+            return;
+
+        if (!ImGui.IsMouseDown(ImGuiMouseButton.Left))
+        {
+            hierarchyDragObjectId = null;
+            hierarchyMouseDownObjectId = null;
+        }
+    }
+
+    // Los huecos de inserción ya no se usan: el reordenar (antes/después) lo resuelven las ZONAS
+    // de la fila (30% superior = antes, 30% inferior = después, centro = como hijo). Sin ítems
+    // fantasma de 6px la lista queda compacta. Se deja como no-op para no tocar los llamadores.
     private void DrawHierarchyInsertDropTarget(GameObject? parent, int index, string id)
     {
-        // Este hueco de 6px entre cada fila solo hace falta como blanco para soltar un drag de
-        // reordenar. En reposo (que es la mayoría del tiempo) no reservarlo: la Hierarchy queda
-        // compacta como en Play, en vez de con un hueco fantasma en cada fila. En cuanto arrancás
-        // a arrastrar un objeto reaparecen para poder soltar entre ítems.
-        bool activeDrag = hierarchyDragObjectId != null && ImGui.IsMouseDragging(ImGuiMouseButton.Left);
-        if (isPlaying || !string.IsNullOrWhiteSpace(hierarchyFilter) || !activeDrag)
-            return;
-
-        ImGui.PushID(id);
-        Vector2 min = ImGui.GetCursorScreenPos();
-        ImGui.InvisibleButton("##HierarchyInsertDrop", new Vector2(-1f, 6f));
-        bool hovered = ImGui.IsItemHovered();
-
-        if (hovered && ImGui.IsMouseDragging(ImGuiMouseButton.Left) && hierarchyDragObjectId != null)
-        {
-            var max = ImGui.GetItemRectMax();
-            var drawList = ImGui.GetWindowDrawList();
-            uint color = ImGui.GetColorU32(new System.Numerics.Vector4(0.76f, 0.72f, 0.56f, 1f));
-            float y = min.Y + 3f;
-            drawList.AddLine(new Vector2(min.X + 4f, y), new Vector2(max.X - 4f, y), color, 2f);
-        }
-
-        if (!ImGui.BeginDragDropTarget())
-        {
-            ImGui.PopID();
-            return;
-        }
-
-        bool delivered = AcceptDragDropOnRelease("GROKO_HIERARCHY_OBJECT");
-        if (delivered && hierarchyDragObjectId != null)
-        {
-            DropHierarchyObject(parent, index);
-        }
-
-        ImGui.EndDragDropTarget();
-        ImGui.PopID();
     }
 
     private void DropHierarchyObject(GameObject? parent, int index)
@@ -162,7 +176,26 @@ internal sealed partial class ImGuiEditorApp
         if (dragged == null)
             return;
 
-        ReparentObject(dragged, parent, index);
+        var targets = GetHierarchyDragTargets(dragged);
+        if (targets.Count == 1)
+            ReparentObject(targets[0], parent, index);
+        else
+            ReparentObjects(targets, parent, index);
+    }
+
+    private List<GameObject> GetHierarchyDragTargets(GameObject dragged)
+    {
+        if (!selection.Selected.Contains(dragged))
+            return new List<GameObject> { dragged };
+
+        var selectedTopLevel = GetTopLevelSelectionTargets();
+        if (selectedTopLevel.Count <= 1)
+            return new List<GameObject> { dragged };
+
+        var selectedSet = selectedTopLevel.ToHashSet();
+        return sceneGraph.Flatten()
+            .Where(selectedSet.Contains)
+            .ToList();
     }
 
     private void DrawHierarchyNode(GameObject obj)
@@ -172,7 +205,7 @@ internal sealed partial class ImGuiEditorApp
             return;
 
         bool isSelected = selection.Selected.Contains(obj);
-        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth;
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.SpanFullWidth;
         if (isSelected) flags |= ImGuiTreeNodeFlags.Selected;
         if (obj.Children.Count == 0) flags |= ImGuiTreeNodeFlags.Leaf;
         if (filtering) flags |= ImGuiTreeNodeFlags.DefaultOpen;
@@ -205,7 +238,14 @@ internal sealed partial class ImGuiEditorApp
         ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new System.Numerics.Vector4(0.72f, 0.72f, 0.72f, 0.10f));
         ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(2f, 3f));
 
-        DrawInlineIcon(GetObjectIcon(obj), GetObjectIconTooltip(obj), 18f);
+        // Icono con Dummy (NO InvisibleButton): un botón robaría el hover del target de drop
+        // en la zona del icono. Dummy reserva el espacio sin capturar hover, así el TreeNode
+        // (SpanFullWidth) es target de fila completa y se puede soltar sobre el nombre.
+        {
+            var iconMin = ImGui.GetCursorScreenPos();
+            ImGui.Dummy(new Vector2(18f, 18f));
+            DrawAtlasIconOrFallback(ImGui.GetWindowDrawList(), GetObjectIcon(obj), iconMin + new Vector2(1f, 1f), 16f, ImGui.GetColorU32(UiIcon));
+        }
         ImGui.SameLine(0f, 6f);
 
         bool prefab = !string.IsNullOrWhiteSpace(obj.PrefabAssetPath);
@@ -273,6 +313,7 @@ internal sealed partial class ImGuiEditorApp
         if (!renaming)
         {
             DrawHierarchyDragDrop(obj);
+            HandleHierarchyRowDrop(obj, rowHovered, rowRectMin, rowRectMax);
             DrawHierarchyContextMenu(obj);
         }
 
@@ -293,6 +334,156 @@ internal sealed partial class ImGuiEditorApp
     private static void DrawHierarchyBranchLine()
     {
         // Sin líneas de guía ni subrayado de hover: la fila se resalta con el rect redondeado.
+    }
+
+    private void HandleHierarchyRowDrop(GameObject target, bool rowHovered, Vector2 rowRectMin, Vector2 rowRectMax)
+    {
+        if (isPlaying || !string.IsNullOrWhiteSpace(hierarchyFilter) || hierarchyDragObjectId == null || !rowHovered)
+            return;
+
+        var dragged = sceneGraph.FindById(hierarchyDragObjectId);
+        if (dragged == null)
+        {
+            hierarchyDragObjectId = null;
+            return;
+        }
+
+        var targets = GetHierarchyDragTargets(dragged);
+        float rowHeight = Math.Max(1f, rowRectMax.Y - rowRectMin.Y);
+        float mouseY = ImGui.GetMousePos().Y;
+        float topZone = rowRectMin.Y + rowHeight * 0.25f;
+        float bottomZone = rowRectMin.Y + rowHeight * 0.75f;
+
+        GameObject? dropParent;
+        int dropIndex;
+        HierarchyDropIntent intent;
+
+        bool targetIsEmptyContainer = target.Children.Count == 0;
+
+        if (targetIsEmptyContainer)
+        {
+            intent = HierarchyDropIntent.AsChild;
+            dropParent = target;
+            dropIndex = 0;
+        }
+        else if (mouseY < topZone)
+        {
+            intent = HierarchyDropIntent.Before;
+            dropParent = target.Parent;
+            dropIndex = sceneGraph.IndexOf(target);
+        }
+        else if (mouseY > bottomZone)
+        {
+            intent = HierarchyDropIntent.After;
+            dropParent = target.Parent;
+            dropIndex = sceneGraph.IndexOf(target) + 1;
+        }
+        else
+        {
+            intent = HierarchyDropIntent.AsChild;
+            dropParent = target;
+            dropIndex = target.Children.Count;
+        }
+
+        bool valid = CanDropHierarchyTargets(targets, dropParent);
+        if (valid)
+        {
+            hierarchyDropPending = true;
+            hierarchyDropParent = dropParent;
+            hierarchyDropIndex = dropIndex;
+            hierarchyDropIntent = (int)intent;
+        }
+
+        var drawList = ImGui.GetWindowDrawList();
+        // Sin texto: solo el recuadro/línea. Verde = destino válido, rojo tenue = inválido.
+        uint border = ImGui.GetColorU32(valid
+            ? new System.Numerics.Vector4(0.42f, 0.86f, 0.55f, 0.95f)
+            : new System.Numerics.Vector4(0.92f, 0.42f, 0.42f, 0.85f));
+
+        if (intent == HierarchyDropIntent.AsChild)
+        {
+            // Pastilla redondeada limpia: relleno verde suave + borde a juego (estilo Unity).
+            uint fill = ImGui.GetColorU32(valid
+                ? new System.Numerics.Vector4(0.26f, 0.55f, 0.36f, 0.22f)
+                : new System.Numerics.Vector4(0.46f, 0.18f, 0.18f, 0.20f));
+            drawList.AddRectFilled(rowRectMin, rowRectMax, fill, 6f);
+            drawList.AddRect(rowRectMin, rowRectMax, border, 6f, ImDrawFlags.None, 1.8f);
+        }
+        else
+        {
+            // Línea de inserción con topes redondos en ambos extremos.
+            float y = intent == HierarchyDropIntent.Before ? rowRectMin.Y + 1f : rowRectMax.Y - 2f;
+            float x0 = rowRectMin.X + 8f, x1 = rowRectMax.X - 8f;
+            drawList.AddLine(new Vector2(x0, y), new Vector2(x1, y), border, 2.4f);
+            drawList.AddCircleFilled(new Vector2(x0, y), 3.2f, border, 12);
+            drawList.AddCircleFilled(new Vector2(x1, y), 3.2f, border, 12);
+        }
+    }
+
+    private enum HierarchyDropIntent
+    {
+        Before,
+        AsChild,
+        After
+    }
+
+    private void UpdateHierarchyManualDragSource(GameObject obj, bool rowHovered)
+    {
+        if (isPlaying || !string.IsNullOrWhiteSpace(hierarchyFilter))
+            return;
+
+        if (rowHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            hierarchyMouseDownObjectId = obj.EditorId;
+            hierarchyDragObjectId = null;
+        }
+
+        if (hierarchyMouseDownObjectId == obj.EditorId &&
+            ImGui.IsMouseDown(ImGuiMouseButton.Left) &&
+            ImGui.IsMouseDragging(ImGuiMouseButton.Left, 3f))
+        {
+            hierarchyDragObjectId = obj.EditorId;
+            DrawHierarchyDragPreview(obj);
+        }
+    }
+
+    private void DrawHierarchyDragPreview(GameObject obj)
+    {
+        string text = selection.Selected.Contains(obj) && selection.Selected.Count > 1
+            ? $"{GetTopLevelSelectionTargets().Count} objects"
+            : obj.Name;
+
+        var mouse = ImGui.GetMousePos();
+        var textSize = ImGui.CalcTextSize(text);
+        var min = mouse + new Vector2(14f, 14f);
+        var max = min + textSize + new Vector2(18f, 10f);
+        var drawList = ImGui.GetForegroundDrawList();
+        uint bg = ImGui.GetColorU32(new System.Numerics.Vector4(0.08f, 0.09f, 0.10f, 0.92f));
+        uint border = ImGui.GetColorU32(new System.Numerics.Vector4(0.52f, 0.72f, 0.95f, 0.88f));
+        uint fg = ImGui.GetColorU32(new System.Numerics.Vector4(0.92f, 0.95f, 0.98f, 1f));
+        drawList.AddRectFilled(min, max, bg, 6f);
+        drawList.AddRect(min, max, border, 6f, ImDrawFlags.None, 1.2f);
+        drawList.AddText(min + new Vector2(9f, 4f), fg, text);
+    }
+
+    private bool CanDropHierarchyTargets(IReadOnlyList<GameObject> targets, GameObject? newParent)
+    {
+        if (targets.Count == 0)
+            return false;
+
+        if (newParent == null)
+            return true;
+
+        foreach (var target in targets)
+        {
+            if (ReferenceEquals(target, newParent))
+                return false;
+
+            if (sceneGraph.IsDescendantOf(newParent, target))
+                return false;
+        }
+
+        return true;
     }
 
     private static void DrawHierarchyRowBadges(GameObject obj, Vector2 rowMax)
@@ -378,25 +569,29 @@ internal sealed partial class ImGuiEditorApp
         return obj.Children.Any(HierarchyMatchesFilter);
     }
 
+    // Drag-drop NATIVO de ImGui (fiable): la fila es a la vez source y target.
+    // Antes esto convivía con un sistema MANUAL (rect + release propios) que peleaba por el
+    // release del ratón, y soltar sobre la fila de un GameObject VACÍO para emparentarlo no
+    // cuajaba. Ahora el target de la fila usa AcceptDragDropOnRelease → DropHierarchyObject
+    // como hijo, que es el mecanismo que sí funciona (el mismo de los huecos de reordenar).
     private void DrawHierarchyDragDrop(GameObject obj)
     {
         if (isPlaying || !string.IsNullOrWhiteSpace(hierarchyFilter))
             return;
 
+        // SOLO source nativo: publica el payload "GROKO_HIERARCHY_OBJECT" para que OTROS paneles
+        // (inspector, project→prefab) puedan aceptar el objeto. DENTRO de la jerarquía el destino
+        // es MANUAL por zonas (HandleHierarchyRowDrop) con commit por estado crudo del ratón, que
+        // no depende de la entrega nativa (esa era la causa de que soltara al root o no soltara).
         if (ImGui.BeginDragDropSource())
         {
             hierarchyDragObjectId = obj.EditorId;
             ImGui.SetDragDropPayload("GROKO_HIERARCHY_OBJECT", IntPtr.Zero, 0);
-            ImGui.Text(obj.Name);
+            if (selection.Selected.Contains(obj) && selection.Selected.Count > 1)
+                ImGui.Text($"{GetTopLevelSelectionTargets().Count} objects");
+            else
+                ImGui.Text(obj.Name);
             ImGui.EndDragDropSource();
-        }
-
-        if (ImGui.BeginDragDropTarget())
-        {
-            bool delivered = AcceptDragDropOnRelease("GROKO_HIERARCHY_OBJECT");
-            if (delivered && hierarchyDragObjectId != null)
-                DropHierarchyObject(obj, obj.Children.Count);
-            ImGui.EndDragDropTarget();
         }
     }
 

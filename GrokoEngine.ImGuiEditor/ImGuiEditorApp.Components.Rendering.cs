@@ -214,6 +214,7 @@ private static void DrawComponentSummary(Component component)
             AmbientLight al => $"Intensity {al.Intensity:F2}  Sky {al.SkyStrength:F2}",
             AreaLight area => $"Intensity {area.Intensity:F2}  Size {area.Size:F1}",
             RectangleLight rect => $"Intensity {rect.Intensity:F2}  {rect.Width:F1}x{rect.Height:F1}",
+            ReflectionProbe rp => $"{rp.Mode}  Size {rp.SizeX:F1}, {rp.SizeY:F1}, {rp.SizeZ:F1}",
             PostProcessSettings pp => $"Post FX {(pp.PostProcessEnabled ? "Enabled" : "Disabled")}",
             _ => component.GetType().Name
         };
@@ -395,6 +396,96 @@ private void DrawMeshRendererInspector(GameObject obj, MeshRenderer mr)
             ImGui.Dummy(new Vector2(0f, 2f));
             ImGui.TextDisabled("Lighting/Ray Tracing: ajustes visuales (las sombras del motor son globales).");
         }
+    }
+
+private void DrawReflectionProbeInspector(GameObject obj, ReflectionProbe probe)
+    {
+        if (Section("Type"))
+        {
+            string[] modes = { "Baked", "Realtime", "Custom" };
+            int mode = Math.Clamp((int)probe.Mode, 0, modes.Length - 1);
+            DrawComboRow("Type", modes, mode, v => probe.Mode = (ReflectionProbeMode)v);
+
+            switch (probe.Mode)
+            {
+                case ReflectionProbeMode.Baked:
+                    ImGui.TextDisabled("Baked: captura reflejos en editor. Es el modo mas rapido para escenarios estaticos.");
+                    DrawAssetSlot("Baked Cubemap", probe.BakedCubemapPath, "None (.cubemap/.hdr)",
+                        p => probe.BakedCubemapPath = p ?? "", IsReflectionProbeCubemapPath);
+                    FieldRow("");
+                    if (ImGui.Button("Bake Reflection Probe", new Vector2(-1f, 0f)))
+                    {
+                        BakeReflectionProbe(obj, probe);
+                    }
+                    break;
+
+                case ReflectionProbeMode.Realtime:
+                    ImGui.TextDisabled("Realtime: actualiza durante el juego. Usalo solo donde haga falta porque cuesta rendimiento.");
+                    DrawComboRow("Refresh Mode", new[] { "On Awake", "Every Frame", "Via Scripting" },
+                        (int)probe.RefreshMode, v => probe.RefreshMode = (ReflectionProbeRefreshMode)v);
+                    DrawComboRow("Time Slicing", new[] { "No Time Slicing", "Individual Faces", "All Faces At Once" },
+                        (int)probe.TimeSlicing, v => probe.TimeSlicing = (ReflectionProbeTimeSlicing)v);
+                    break;
+
+                case ReflectionProbeMode.Custom:
+                    ImGui.TextDisabled("Custom: usa un Cubemap creado o seleccionado manualmente.");
+                    DrawAssetSlot("Custom Cubemap", probe.CustomCubemapPath, "None (.cubemap/.hdr)",
+                        p => probe.CustomCubemapPath = p ?? "", IsReflectionProbeCubemapPath);
+                    break;
+            }
+        }
+
+        if (Section("Runtime Settings"))
+        {
+            float intensity = probe.Intensity;
+            if (DrawUnitySliderFloat("Intensity", ref intensity, 0f, 4f, 0.01f))
+                probe.Intensity = intensity;
+            DrawFloat("Blend Distance", probe.BlendDistance, v => probe.BlendDistance = Math.Max(0f, v), 0.05f, 0f, 1000f);
+            DrawInt("Resolution", probe.Resolution, v => probe.Resolution = ClampReflectionProbeResolution(v), 1f, 16, 2048);
+            DrawInt("Importance", probe.Importance, v => probe.Importance = Math.Clamp(v, -1000, 1000), 1f, -1000, 1000);
+            DrawCheckRow("Box Projection", probe.BoxProjection, v => probe.BoxProjection = v);
+            DrawCheckRow("HDR", probe.HDR, v => probe.HDR = v);
+        }
+
+        if (Section("Box Projection"))
+        {
+            DrawFloat("Size X", probe.SizeX, v => probe.SizeX = Math.Max(0.01f, v), 0.05f, 0.01f, 10000f);
+            DrawFloat("Size Y", probe.SizeY, v => probe.SizeY = Math.Max(0.01f, v), 0.05f, 0.01f, 10000f);
+            DrawFloat("Size Z", probe.SizeZ, v => probe.SizeZ = Math.Max(0.01f, v), 0.05f, 0.01f, 10000f);
+            DrawFloat("Center X", probe.CenterX, v => probe.CenterX = v, 0.05f, -10000f, 10000f);
+            DrawFloat("Center Y", probe.CenterY, v => probe.CenterY = v, 0.05f, -10000f, 10000f);
+            DrawFloat("Center Z", probe.CenterZ, v => probe.CenterZ = v, 0.05f, -10000f, 10000f);
+        }
+
+        if (Section("Clipping Planes"))
+        {
+            DrawFloat("Near", probe.NearClip, v => probe.NearClip = Math.Max(0.001f, v), 0.01f, 0.001f, 1000f);
+            DrawFloat("Far", probe.FarClip, v => probe.FarClip = Math.Max(probe.NearClip + 0.01f, v), 0.5f, 0.01f, 100000f);
+        }
+    }
+
+private static int ClampReflectionProbeResolution(int value)
+    {
+        int[] allowed = { 16, 32, 64, 128, 256, 512, 1024, 2048 };
+        int best = allowed[0];
+        int bestDelta = Math.Abs(value - best);
+        for (int i = 1; i < allowed.Length; i++)
+        {
+            int delta = Math.Abs(value - allowed[i]);
+            if (delta < bestDelta)
+            {
+                best = allowed[i];
+                bestDelta = delta;
+            }
+        }
+        return best;
+    }
+
+private static bool IsReflectionProbeCubemapPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return true;
+        return CubemapAsset.IsCubemapPath(path) || HdrLoader.IsHdr(path);
     }
 
 private void DrawMaterialHealthWarnings(GameObject obj, ParsedMesh mesh)
@@ -612,5 +703,142 @@ private void EnsureMaterialSlots(MeshFilter mf, ParsedMesh mesh)
             string baseName = $"{meshBaseName}_{sub.Name}";
             mf.MaterialSlots[i] = MaterialAsset.CreateFromImported(meshDir, baseName, sub.DiffuseR, sub.DiffuseG, sub.DiffuseB, sub.TexturePath);
         }
+    }
+
+    // ── LOD Group (estilo Unity) ─────────────────────────────────────────────
+    // Barra de niveles con divisores arrastrables: LOD0 | LOD1 | LOD2 | LOD3 | Culled.
+    // Los umbrales son "tamaño relativo en pantalla" (radio/distancia); el eje de la barra
+    // usa raíz cuadrada para que los umbrales pequeños tengan espacio manejable.
+    private const float LodBarDisplayMax = 0.40f;   // umbral mostrado en el extremo izquierdo (40%)
+
+    private static float LodThresholdToX(float threshold, float width) =>
+        width * (1f - MathF.Sqrt(Math.Clamp(threshold / LodBarDisplayMax, 0f, 1f)));
+
+    private static float LodXToThreshold(float x, float width)
+    {
+        float t = 1f - Math.Clamp(x / MathF.Max(1f, width), 0f, 1f);
+        return t * t * LodBarDisplayMax;
+    }
+
+private void DrawLodGroupInspector(GameObject obj, LodGroup lod)
+    {
+        var drawList = ImGui.GetWindowDrawList();
+        float width = MathF.Max(120f, ImGui.GetContentRegionAvail().X - 4f);
+        const float barHeight = 30f;
+        var barMin = ImGui.GetCursorScreenPos() + new Vector2(2f, 2f);
+        var barMax = barMin + new Vector2(width, barHeight);
+
+        // Reservar el área de la barra en el layout.
+        ImGui.Dummy(new Vector2(width, barHeight + 6f));
+
+        // Segmentos (de izquierda=cerca a derecha=lejos). Colores como Unity.
+        Span<float> cuts = stackalloc float[4] { lod.Lod0, lod.Lod1, lod.Lod2, lod.CulledBelow };
+        var segColors = new uint[]
+        {
+            ImGui.GetColorU32(new System.Numerics.Vector4(0.38f, 0.49f, 0.10f, 1f)),   // LOD 0 verde oliva
+            ImGui.GetColorU32(new System.Numerics.Vector4(0.30f, 0.38f, 0.48f, 1f)),   // LOD 1 azul grisáceo
+            ImGui.GetColorU32(new System.Numerics.Vector4(0.26f, 0.44f, 0.44f, 1f)),   // LOD 2 verde azulado
+            ImGui.GetColorU32(new System.Numerics.Vector4(0.47f, 0.33f, 0.28f, 1f)),   // LOD 3 marrón
+            ImGui.GetColorU32(new System.Numerics.Vector4(0.42f, 0.10f, 0.10f, 1f))    // Culled rojo oscuro
+        };
+        string[] segNames = { "LOD 0", "LOD 1", "LOD 2", "LOD 3", "Culled" };
+
+        uint textCol = ImGui.GetColorU32(new System.Numerics.Vector4(0.94f, 0.94f, 0.94f, 1f));
+        float prevX = 0f;
+        for (int s = 0; s < 5; s++)
+        {
+            float endX = s < 4 ? LodThresholdToX(cuts[s], width) : width;
+            if (endX < prevX) endX = prevX;
+            var segA = new Vector2(barMin.X + prevX, barMin.Y);
+            var segB = new Vector2(barMin.X + endX, barMax.Y);
+            if (endX - prevX > 0.5f)
+            {
+                drawList.AddRectFilled(segA, segB, segColors[s]);
+                if (endX - prevX > 46f)
+                {
+                    string label = s < 4 ? segNames[s] : segNames[4];
+                    string pct = s < 4 ? $"{cuts[s] * 100f:0.#}%" : "";
+                    drawList.AddText(segA + new Vector2(5f, 3f), textCol, label);
+                    if (pct.Length > 0)
+                        drawList.AddText(segA + new Vector2(5f, 15f), textCol, pct);
+                }
+            }
+            prevX = endX;
+        }
+        drawList.AddRect(barMin, barMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.08f, 0.08f, 0.09f, 1f)), 2f);
+
+        // Divisores arrastrables (uno por umbral). El 4º (Culled) puede llevarse a 0 (nunca ocultar).
+        bool changed = false;
+        for (int d = 0; d < 4; d++)
+        {
+            float x = LodThresholdToX(cuts[d], width);
+            var handleMin = new Vector2(barMin.X + x - 4f, barMin.Y);
+            ImGui.SetCursorScreenPos(handleMin);
+            ImGui.InvisibleButton($"##lodcut{d}", new Vector2(8f, barHeight));
+            bool active = ImGui.IsItemActive();
+            if (ImGui.IsItemHovered() || active)
+                ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEW);
+
+            drawList.AddLine(
+                new Vector2(barMin.X + x, barMin.Y),
+                new Vector2(barMin.X + x, barMax.Y),
+                ImGui.GetColorU32(active ? new System.Numerics.Vector4(1f, 1f, 1f, 1f) : new System.Numerics.Vector4(0.85f, 0.85f, 0.85f, 0.55f)),
+                active ? 2.5f : 1.5f);
+
+            if (active)
+            {
+                float newT = LodXToThreshold(ImGui.GetMousePos().X - barMin.X, width);
+                float upper = d == 0 ? LodBarDisplayMax : cuts[d - 1] - 0.001f;
+                float lower = d == 3 ? 0f : (d < 3 ? cuts[d + 1] + 0.001f : 0f);
+                newT = Math.Clamp(newT, lower, MathF.Max(lower, upper));
+                if (MathF.Abs(newT - cuts[d]) > 0.00005f)
+                {
+                    cuts[d] = newT;
+                    changed = true;
+                }
+            }
+        }
+
+        if (changed)
+        {
+            lod.Lod0 = cuts[0];
+            lod.Lod1 = cuts[1];
+            lod.Lod2 = cuts[2];
+            lod.CulledBelow = cuts[3] <= 0.0011f ? 0f : cuts[3];
+            sceneRenderer.InvalidateStaticBatch();   // los draws cacheados usan estos umbrales
+            sceneDirty = true;
+        }
+
+        ImGui.Spacing();
+        DrawFloat("Bias", lod.Bias, v => { lod.Bias = MathF.Max(0.01f, v); sceneRenderer.InvalidateStaticBatch(); }, 0.02f, 0.1f, 8f);
+
+        // Info: ¿el modelo trae niveles LOD de fábrica?
+        var lodMeshFilter = obj.GetComponent<MeshFilter>() ?? obj.Children
+            .Select(c => c.GetComponent<MeshFilter>())
+            .FirstOrDefault(c => c != null && !string.IsNullOrWhiteSpace(c.MeshPath));
+        int lodLevels = CountModelLodLevels(lodMeshFilter?.MeshPath);
+        if (lodLevels > 1)
+            ImGui.TextDisabled($"Model provides {lodLevels} LOD levels (auto-detected by name).");
+        else
+            ImGui.TextDisabled("Model has no baked LOD meshes: only distance culling applies.");
+    }
+
+    private static int CountModelLodLevels(string? meshPath)
+    {
+        if (string.IsNullOrWhiteSpace(meshPath))
+            return 0;
+        string? full = SceneViewportRenderer.NormalizeExistingAssetPath(meshPath);
+        if (full == null || ObjLoader.Load(full) is not { } mesh)
+            return 0;
+
+        int maxLevels = 0;
+        foreach (var sub in mesh.Submeshes)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(sub.MeshName ?? "", @"LOD(\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success && int.TryParse(match.Groups[1].Value, out int level))
+                maxLevels = Math.Max(maxLevels, level + 1);
+        }
+
+        return maxLevels;
     }
 }

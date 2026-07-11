@@ -7,6 +7,7 @@ using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -329,8 +330,12 @@ private void DrawProjectAssetListRowVirtual(ProjectAssetEntry entry, IReadOnlyLi
                 scriptCompiler.OpenInEditor(actionPath);
             else if (actionPath.EndsWith(".shadergraph", StringComparison.OrdinalIgnoreCase))
                 OpenShaderGraphAsset(actionPath);
+            else if (AnimatorControllerAsset.IsControllerPath(actionPath))
+                OpenAnimatorControllerAsset(actionPath);
             else if (IsParticlePresetPath(actionPath))
                 ApplyParticlePresetAssetToSelection(actionPath);
+            else if (IsAudioAssetPath(actionPath))
+                PreviewAudioAsset(actionPath);
         }
 
         if (!entry.IsVirtualSubAsset || !string.IsNullOrWhiteSpace(entry.SourceMaterialPath) || !string.IsNullOrWhiteSpace(entry.SourceAvatarPath))
@@ -376,6 +381,10 @@ private void DrawProjectAssetListRowVirtual(ProjectAssetEntry entry, IReadOnlyLi
         else if (!isDirectory && entry.Kind == "PART")
         {
             DrawParticlePresetAssetPreview(drawList, rowMin + new Vector2(4f + indent, 2f), 16f);
+        }
+        else if (!isDirectory && entry.Kind == "CTRL")
+        {
+            DrawAnimatorControllerAssetPreview(drawList, rowMin + new Vector2(3f + indent, 2f), 17f);
         }
         else
         {
@@ -457,6 +466,10 @@ private void DrawProjectAssetListRow(ProjectAssetEntry entry, IReadOnlyList<Proj
         {
             DrawParticlePresetAssetPreview(drawList, rowMin + new Vector2(5f + indent, 3f), 16f);
         }
+        else if (!isDirectory && entry.Kind == "CTRL")
+        {
+            DrawAnimatorControllerAssetPreview(drawList, rowMin + new Vector2(4f + indent, 3f), 17f);
+        }
         else
         {
             DrawAtlasIconOrFallback(drawList, icon, rowMin + new Vector2(5f + indent, 4f), 14f, iconColor);
@@ -480,8 +493,12 @@ private void DrawProjectAssetListRow(ProjectAssetEntry entry, IReadOnlyList<Proj
                 scriptCompiler.OpenInEditor(actionPath);
             else if (actionPath.EndsWith(".shadergraph", StringComparison.OrdinalIgnoreCase))
                 OpenShaderGraphAsset(actionPath);
+            else if (AnimatorControllerAsset.IsControllerPath(actionPath))
+                OpenAnimatorControllerAsset(actionPath);
             else if (IsParticlePresetPath(actionPath))
                 ApplyParticlePresetAssetToSelection(actionPath);
+            else if (IsAudioAssetPath(actionPath))
+                PreviewAudioAsset(actionPath);
         }
 
         if (!entry.IsVirtualSubAsset || !string.IsNullOrWhiteSpace(entry.SourceMaterialPath) || !string.IsNullOrWhiteSpace(entry.SourceAvatarPath))
@@ -572,8 +589,12 @@ private void DrawProjectAssetTile(ProjectAssetEntry entry, IReadOnlyList<Project
                 scriptCompiler.OpenInEditor(actionPath);
             else if (actionPath.EndsWith(".shadergraph", StringComparison.OrdinalIgnoreCase))
                 OpenShaderGraphAsset(actionPath);
+            else if (AnimatorControllerAsset.IsControllerPath(actionPath))
+                OpenAnimatorControllerAsset(actionPath);
             else if (IsParticlePresetPath(actionPath))
                 ApplyParticlePresetAssetToSelection(actionPath);
+            else if (IsAudioAssetPath(actionPath))
+                PreviewAudioAsset(actionPath);
         }
 
         if (!entry.IsVirtualSubAsset || !string.IsNullOrWhiteSpace(entry.SourceMaterialPath) || !string.IsNullOrWhiteSpace(entry.SourceAvatarPath))
@@ -677,7 +698,7 @@ private void DrawProjectFolderDropTarget(string targetDirectory)
         }
 
         // Arrastrar un objeto de la jerarquía al panel de Assets → crear un prefab.
-        bool prefabDelivered = AcceptDragDropOnRelease("GROKO_HIERARCHY_OBJECT");
+        bool prefabDelivered = AcceptDragDropDelivered("GROKO_HIERARCHY_OBJECT");
         if (prefabDelivered && hierarchyDragObjectId != null)
         {
             CreatePrefabFromHierarchyObject(targetDirectory);
@@ -690,18 +711,22 @@ private void DrawProjectFolderDropTarget(string targetDirectory)
 private void CreatePrefabFromHierarchyObject(string targetDirectory)
     {
         var obj = hierarchyDragObjectId != null ? sceneGraph.FindById(hierarchyDragObjectId) : null;
-        if (obj == null) return;
+        if (obj == null)
+        {
+            if (selected != null)
+                CreatePrefabFromObject(selected, targetDirectory);
+            return;
+        }
 
+        CreatePrefabFromObject(obj, targetDirectory);
+    }
+
+private void CreatePrefabFromObject(GameObject obj, string targetDirectory)
+    {
         try
         {
             Directory.CreateDirectory(targetDirectory);
-            string baseName = string.IsNullOrWhiteSpace(obj.Name) ? "Prefab" : obj.Name;
-            string path = Path.Combine(targetDirectory, baseName + ".prefab");
-            int i = 1;
-            while (File.Exists(path))
-                path = Path.Combine(targetDirectory, $"{baseName}_{i++}.prefab");
-
-            SceneSerializer.SavePrefab(path, obj);
+            string path = assetService.CreatePrefab(targetDirectory, obj);
             obj.PrefabAssetPath = path; // la instancia queda vinculada al prefab
             selectedAssetPath = path;
             statusMessage = "Prefab creado: " + Path.GetFileName(path);
@@ -821,6 +846,7 @@ private static System.Numerics.Vector4 ProjectAssetColorForKind(string kind) => 
         "SUBMESH" => new System.Numerics.Vector4(0.48f, 0.78f, 0.92f, 1f),
         "AVATAR" => new System.Numerics.Vector4(0.42f, 0.78f, 0.74f, 1f),
         "ANIM" => new System.Numerics.Vector4(0.38f, 0.82f, 0.70f, 1f),
+        "CTRL" => new System.Numerics.Vector4(0.36f, 0.70f, 1.00f, 1f),
         "PART" => new System.Numerics.Vector4(0.84f, 0.46f, 1.00f, 1f),
         "PREF" => new System.Numerics.Vector4(0.38f, 0.62f, 0.96f, 1f),
         "SCENE" => new System.Numerics.Vector4(0.56f, 0.72f, 0.92f, 1f),
@@ -835,7 +861,9 @@ private static string GetAssetKind(string path)
         if (ObjLoader.IsSupportedMesh(path)) return "MESH";
         if (AvatarAsset.IsAvatarPath(path)) return "AVATAR";
         if (AnimationClipAsset.IsAnimationPath(path)) return "ANIM";
+        if (AnimatorControllerAsset.IsControllerPath(path)) return "CTRL";
         if (IsParticlePresetPath(path)) return "PART";
+        if (IsAudioFileExtension(path)) return "AUDIO";
         if (path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)) return "PREF";
         if (path.EndsWith(".gscene", StringComparison.OrdinalIgnoreCase)) return "SCENE";
         if (path.EndsWith(".shadergraph", StringComparison.OrdinalIgnoreCase)) return "SHDR";
@@ -854,7 +882,9 @@ private static EditorIcon IconForAssetKind(string kind) => kind switch
         "SUBMESH" => EditorIcon.Mesh,
         "AVATAR" => EditorIcon.Asset,
         "ANIM" => EditorIcon.Asset,
+        "CTRL" => EditorIcon.ShaderGraph,
         "PART" => EditorIcon.Asset,
+        "AUDIO" => EditorIcon.AudioClip,
         "PREF" => EditorIcon.Prefab,
         "SCENE" => EditorIcon.Asset,
         "CS" => EditorIcon.Script,
@@ -912,6 +942,12 @@ private void DrawProjectContextMenu(string path)
         }
 
         ImGui.Separator();
+        if (ImGui.MenuItem(isDirectory ? "Abrir carpeta" : "Abrir"))
+            OpenProjectAssetInShell(path);
+        if (ImGui.MenuItem("Mostrar en Explorador"))
+            RevealProjectAssetInExplorer(path);
+
+        ImGui.Separator();
         if (ImGui.MenuItem("Rename"))
             BeginRenameAsset(path);
         if (ImGui.MenuItem("Delete"))
@@ -919,6 +955,79 @@ private void DrawProjectContextMenu(string path)
 
         ImGui.EndPopup();
         PopContextMenuStyle();
+    }
+
+private void OpenProjectAssetInShell(string path)
+    {
+        try
+        {
+            string fullPath = Path.GetFullPath(path);
+            if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
+            {
+                statusMessage = "Asset no encontrado.";
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = fullPath,
+                UseShellExecute = true
+            });
+            statusMessage = Directory.Exists(fullPath) ? "Carpeta abierta." : "Asset abierto.";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"No se pudo abrir el asset: {ex.Message}";
+        }
+    }
+
+private void RevealProjectAssetInExplorer(string path)
+    {
+        try
+        {
+            string fullPath = Path.GetFullPath(path);
+            if (File.Exists(fullPath))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"/select,\"{fullPath}\"",
+                    UseShellExecute = true
+                });
+                statusMessage = "Asset mostrado en Explorador.";
+                return;
+            }
+
+            if (Directory.Exists(fullPath))
+            {
+                string? parent = Directory.GetParent(fullPath)?.FullName;
+                if (!string.IsNullOrWhiteSpace(parent))
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"/select,\"{fullPath}\"",
+                        UseShellExecute = true
+                    });
+                }
+                else
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = fullPath,
+                        UseShellExecute = true
+                    });
+                }
+                statusMessage = "Carpeta mostrada en Explorador.";
+                return;
+            }
+
+            statusMessage = "Asset no encontrado.";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"No se pudo mostrar en Explorador: {ex.Message}";
+        }
     }
 
 private void DrawProjectBackgroundContextMenu(string? targetDirectory)
@@ -945,6 +1054,10 @@ private void DrawProjectBackgroundContextMenu(string? targetDirectory)
         ImGui.Separator();
         if (ImGui.MenuItem("Show In Assets"))
             currentProjectDirectory = rootAssetsPath;
+        if (ImGui.MenuItem("Abrir carpeta"))
+            OpenProjectAssetInShell(directory);
+        if (ImGui.MenuItem("Mostrar en Explorador"))
+            RevealProjectAssetInExplorer(directory);
 
         ImGui.EndPopup();
         PopContextMenuStyle();
@@ -1007,6 +1120,40 @@ private void DrawProjectCreateMenuItems(string targetDirectory)
             selectedAssetPath = path;
             BeginRenameAsset(path);
             statusMessage = "Shader Graph created";
+        }
+
+        if (ImGui.BeginMenu("Particles"))
+        {
+            if (ImGui.MenuItem("Install Professional Particle Library"))
+                CreateProfessionalParticleLibrary(targetDirectory);
+            if (ImGui.MenuItem("Import Unity VFX Pack (D:/Recursos Motor)"))
+                ImportUnityVfxPackFromDefaultFolder(targetDirectory);
+            ImGui.Separator();
+            if (ImGui.MenuItem("Fire Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "fire");
+            if (ImGui.MenuItem("Smoke Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "smoke");
+            if (ImGui.MenuItem("Sparks Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "sparks");
+            if (ImGui.MenuItem("Magic Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "magic");
+            if (ImGui.MenuItem("Explosion Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "explosion");
+            if (ImGui.MenuItem("Dust Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "dust");
+            if (ImGui.MenuItem("Rain Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "rain");
+            if (ImGui.MenuItem("Snow Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "snow");
+            if (ImGui.MenuItem("Muzzle Flash Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "muzzle_flash");
+            if (ImGui.MenuItem("Hit Impact Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "hit_impact");
+            if (ImGui.MenuItem("Energy Orb Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "energy_orb");
+            if (ImGui.MenuItem("Heat Distortion Preset"))
+                CreateProfessionalParticlePresetAsset(targetDirectory, "heat_distortion");
+            ImGui.EndMenu();
         }
 
         if (scriptCompiler.ScriptableObjectTypes.Count > 0 && ImGui.BeginMenu("ScriptableObject"))
@@ -1140,8 +1287,10 @@ private void DrawAssetActions()
             string target = Directory.Exists(selectedAssetPath)
                 ? selectedAssetPath
                 : Path.GetDirectoryName(selectedAssetPath) ?? rootAssetsPath;
-            selectedAssetPath = assetService.CreatePrefab(target, selected);
-            statusMessage = "Prefab created";
+            string path = assetService.CreatePrefab(target, selected);
+            selected.PrefabAssetPath = path;
+            selectedAssetPath = path;
+            statusMessage = "Prefab creado: " + Path.GetFileName(path);
         }
     }
 

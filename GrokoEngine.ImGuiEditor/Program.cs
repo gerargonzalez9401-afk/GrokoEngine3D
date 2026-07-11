@@ -282,7 +282,7 @@ internal static class Program
             using var cyan = new SolidBrush(Color.FromArgb(170, 0, 150, 255));
             using var white = new SolidBrush(Color.FromArgb(210, 235, 245, 255));
             using var dark = new SolidBrush(Color.FromArgb(90, 18, 28, 42));
-            var rnd = new Random(42);
+            var rnd = new System.Random(42);
             for (int i = 0; i < 72; i++)
             {
                 int x = rnd.Next(-40, ClientSize.Width);

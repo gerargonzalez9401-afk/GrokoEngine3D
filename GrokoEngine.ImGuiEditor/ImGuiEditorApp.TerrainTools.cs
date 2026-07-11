@@ -47,12 +47,12 @@ internal sealed partial class ImGuiEditorApp
     // ── Trees ──────────────────────────────────────────────────────
     private int terrainTreePrototypeIndex;
     private float terrainTreeDensity = 2f;
-    private readonly Random terrainTreeRng = new();
+    private readonly System.Random terrainTreeRng = new();
 
     // ── Details/pasto ──────────────────────────────────────────────
     private int terrainDetailPrototypeIndex;
     private float terrainDetailDensity = 40f;
-    private readonly Random terrainDetailRng = new();
+    private readonly System.Random terrainDetailRng = new();
 
     private void HandleTerrainSculpting(float deltaTime)
     {
@@ -149,16 +149,13 @@ internal sealed partial class ImGuiEditorApp
                 _ => "Sculpt Terrain "
             };
             PushSceneState(label + selected.Name, terrainSculptUndoStart.Value, CaptureSceneState());
+            // El terreno ya no vive en el batch estático (pase CDLOD propio): esculpir/pintar un
+            // Terrain Static se ve en vivo y no hay que invalidar/reconstruir nada al soltar.
 
-            // Un Terrain Static (el default al crearlo, como en Unity) vive horneado en el batch
-            // estático general junto con el resto de la geometría estática de la escena. Si lo
-            // invalidáramos en CADA frame mientras se arrastra el pincel, cada trazo forzaría
-            // reconstruir TODO ese batch (no solo el terreno) 60 veces por segundo — así que se
-            // invalida una vez, al soltar el mouse, cuando ya termina el trazo completo. Mientras
-            // se sculpea/pinta/planta en vivo, un Terrain Static no se actualiza visualmente
-            // hasta soltar (uno no-Static sí, porque pasa por el pase dinámico normal cada frame).
-            if (selected.IsStatic)
-                sceneRenderer.InvalidateStaticBatch();
+            // La física recién ahora reconstruye la malla de colisión (una vez por trazo, no por
+            // frame): CollisionVersion es lo único que mira la firma de Bepu para el terreno.
+            if (terrainEditMode == TerrainEditMode.Sculpt && selected.GetComponent<Terrain>() is { } sculpted)
+                sculpted.CollisionVersion++;
         }
 
         terrainSculptUndoStart = null;
@@ -167,14 +164,31 @@ internal sealed partial class ImGuiEditorApp
 
     // La matematica de las brochas (celdas afectadas, sculpt, paint) vive en GrokoEngine.Core
     // (TerrainBrush.cs), testeable sin ImGui/OpenGL. Aqui solo se traduce el hit de raycast a
-    // localX/localZ y se aplica el resultado (Version/SplatVersion los sube el propio helper de Core).
+    // localX/localZ y se marca la region tocada como sucia (MarkDirtyRegion bumpea Version y el
+    // renderer sube SOLO ese rect del heightmap con glTexSubImage2D — clave para esculpir a
+    // 60 fps en resoluciones altas).
+    private static (int MinX, int MinZ, int MaxX, int MaxZ) BrushCellRect(Terrain terrain, float localX, float localZ, float radius)
+    {
+        int res = Math.Max(2, terrain.Resolution);
+        float halfX = terrain.SizeX * 0.5f;
+        float halfZ = terrain.SizeZ * 0.5f;
+        int minX = (int)MathF.Floor((localX - radius + halfX) / terrain.SizeX * (res - 1)) - 1;
+        int maxX = (int)MathF.Ceiling((localX + radius + halfX) / terrain.SizeX * (res - 1)) + 1;
+        int minZ = (int)MathF.Floor((localZ - radius + halfZ) / terrain.SizeZ * (res - 1)) - 1;
+        int maxZ = (int)MathF.Ceiling((localZ + radius + halfZ) / terrain.SizeZ * (res - 1)) + 1;
+        return (minX, minZ, maxX, maxZ);
+    }
+
     private void ApplyTerrainSculptBrush(Terrain terrain, float localX, float localZ, float deltaTime)
     {
         bool changed = TerrainBrush.ApplySculpt(terrain, terrainBrushTool, localX, localZ,
             terrainBrushRadius, terrainBrushStrength, deltaTime, terrainNoiseSeed, ref terrainFlattenHeight,
             terrainBrushFalloff);
         if (changed)
-            terrain.Version++;
+        {
+            var (minX, minZ, maxX, maxZ) = BrushCellRect(terrain, localX, localZ, terrainBrushRadius);
+            terrain.MarkDirtyRegion(minX, minZ, maxX, maxZ);
+        }
     }
 
     private void ApplyTerrainPaintBrush(Terrain terrain, float localX, float localZ, float deltaTime)
@@ -182,7 +196,10 @@ internal sealed partial class ImGuiEditorApp
         bool changed = TerrainBrush.ApplyPaint(terrain, terrainPaintLayer, localX, localZ,
             terrainBrushRadius, terrainBrushStrength, deltaTime);
         if (changed)
-            terrain.SplatVersion++;
+        {
+            var (minX, minZ, maxX, maxZ) = BrushCellRect(terrain, localX, localZ, terrainBrushRadius);
+            terrain.MarkSplatDirtyRegion(minX, minZ, maxX, maxZ);
+        }
     }
 
     // Lista de prototipos de árbol (mesh/prefab), estilo Unity "Tree Prototypes": un slot de
@@ -436,10 +453,9 @@ internal sealed partial class ImGuiEditorApp
 
         var before = CaptureSceneState();
         TerrainHeightmapImport.Apply(terrain, gray, width, height);
-        terrain.Version++;
+        terrain.Version++; // sin dirty-rect: el renderer re-sube el heightmap completo
+        terrain.CollisionVersion++;
         PushSceneState("Import Heightmap " + (selected?.Name ?? terrain.gameObject.Name), before, CaptureSceneState());
-        if (terrain.gameObject.IsStatic)
-            sceneRenderer.InvalidateStaticBatch();
         statusMessage = $"Heightmap importado desde {Path.GetFileName(imagePath)}";
     }
 

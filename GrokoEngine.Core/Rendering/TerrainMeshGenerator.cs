@@ -3,14 +3,24 @@ using MiMotor.Mathematics;
 
 namespace GrokoEngine
 {
-    // Genera un ParsedMesh procedural (grilla de quads) a partir del heightmap de un Terrain,
-    // en el mismo formato que usa ObjLoader para mallas importadas.
+    // Genera un ParsedMesh procedural (grilla de quads) a partir del heightmap de un Terrain.
+    // Desde la reconstrucción CDLOD del render (que desplaza una rejilla en GPU y ya no usa esta
+    // malla), este generador queda SOLO para la colisión estática de Bepu.
+    // 'stride' > 1 decima la malla (muestrea 1 de cada N celdas): a resoluciones altas la
+    // colisión no necesita el detalle completo y una malla de millones de triángulos tarda
+    // segundos en construirse en Bepu.
     public static class TerrainMeshGenerator
     {
-        public static ParsedMesh Generate(Terrain terrain, Terrain? left = null, Terrain? right = null, Terrain? top = null, Terrain? bottom = null)
+        public static ParsedMesh Generate(Terrain terrain, Terrain? left = null, Terrain? right = null, Terrain? top = null, Terrain? bottom = null, int stride = 1)
         {
-            int res = Math.Max(2, terrain.Resolution);
+            int fullRes = Math.Max(2, terrain.Resolution);
             terrain.EnsureHeightmapSize();
+
+            stride = Math.Max(1, stride);
+            if (stride > 1)
+                return GenerateDecimated(terrain, fullRes, stride);
+
+            int res = fullRes;
 
             int vertexCount = res * res;
             var positions = new float[vertexCount * 3];
@@ -129,6 +139,80 @@ namespace GrokoEngine
                 DiffuseB = 0.35f
             });
 
+            return mesh;
+        }
+
+        // Malla decimada para colisión: rejilla de ((fullRes-1)/stride)+1 muestras que SIEMPRE
+        // incluye la fila/columna del borde (clampeando el índice), para que la colisión cubra
+        // exactamente el mismo rectángulo SizeX×SizeZ que el render.
+        private static ParsedMesh GenerateDecimated(Terrain terrain, int fullRes, int stride)
+        {
+            int quads = Math.Max(1, (fullRes - 1 + stride - 1) / stride);
+            int res = quads + 1;
+
+            float halfX = terrain.SizeX * 0.5f;
+            float halfZ = terrain.SizeZ * 0.5f;
+
+            var positions = new float[res * res * 3];
+            var normals = new float[res * res * 3];
+            var uvs = new float[res * res * 2];
+
+            for (int z = 0; z < res; z++)
+            {
+                int cellZ = Math.Min(z * stride, fullRes - 1);
+                float pz = (float)cellZ / (fullRes - 1) * terrain.SizeZ - halfZ;
+                for (int x = 0; x < res; x++)
+                {
+                    int cellX = Math.Min(x * stride, fullRes - 1);
+                    int i = z * res + x;
+                    positions[i * 3 + 0] = (float)cellX / (fullRes - 1) * terrain.SizeX - halfX;
+                    positions[i * 3 + 1] = terrain.GetHeight(cellX, cellZ) * terrain.HeightScale;
+                    positions[i * 3 + 2] = pz;
+                    normals[i * 3 + 1] = 1f; // la colisión no usa normales de vértice
+                    uvs[i * 2 + 0] = (float)cellX / (fullRes - 1);
+                    uvs[i * 2 + 1] = (float)cellZ / (fullRes - 1);
+                }
+            }
+
+            int quadCount = (res - 1) * (res - 1);
+            int triangleCount = quadCount * 2;
+            var trianglePositions = new float[triangleCount * 3 * 3];
+            var triangleNormals = new float[triangleCount * 3 * 3];
+            var triangleUvs = new float[triangleCount * 3 * 2];
+
+            int t = 0;
+            for (int z = 0; z < res - 1; z++)
+            {
+                for (int x = 0; x < res - 1; x++)
+                {
+                    int i00 = z * res + x;
+                    int i10 = z * res + (x + 1);
+                    int i01 = (z + 1) * res + x;
+                    int i11 = (z + 1) * res + (x + 1);
+
+                    WriteTriangle(trianglePositions, triangleNormals, triangleUvs, ref t, positions, normals, uvs, i00, i11, i10);
+                    WriteTriangle(trianglePositions, triangleNormals, triangleUvs, ref t, positions, normals, uvs, i00, i01, i11);
+                }
+            }
+
+            var mesh = new ParsedMesh
+            {
+                Positions = trianglePositions,
+                Normals = triangleNormals,
+                UVs = triangleUvs,
+                TriangleCount = triangleCount,
+                BoundsMin = new Vector3(-halfX, 0f, -halfZ),
+                BoundsMax = new Vector3(halfX, terrain.HeightScale, halfZ)
+            };
+            mesh.Submeshes.Add(new MeshSubmesh
+            {
+                Name = "Terrain",
+                VertexStart = 0,
+                VertexCount = triangleCount * 3,
+                DiffuseR = 0.45f,
+                DiffuseG = 0.55f,
+                DiffuseB = 0.35f
+            });
             return mesh;
         }
 

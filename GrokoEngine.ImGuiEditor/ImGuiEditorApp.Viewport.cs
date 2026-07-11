@@ -96,6 +96,7 @@ internal sealed partial class ImGuiEditorApp
                 "Scene is empty");
 
         DrawSelectedObjectBounds(drawList);
+        DrawReflectionProbeGizmo(drawList);
         DrawSelectionBoxOverlay(drawList);
         DrawViewportStatusToast(drawList);
         DrawAnimatorDebugOverlay(drawList);
@@ -318,6 +319,7 @@ internal sealed partial class ImGuiEditorApp
                 drawList.AddText(viewportContentMin + new Vector2(56f, 38f), accent, selected.Name);
             HandleViewportAssetDrop();
             DrawSelectedObjectBounds(drawList);
+            DrawReflectionProbeGizmo(drawList);
             DrawSelectionBoxOverlay(drawList);
             DrawViewportStatusToast(drawList);
             DrawAnimatorDebugOverlay(drawList);
@@ -379,6 +381,165 @@ internal sealed partial class ImGuiEditorApp
             var iconMin = center - new Vector2(size * 0.5f, size * 0.5f);
             drawList.AddImage((IntPtr)iconAtlasTexture, iconMin, iconMin + new Vector2(size, size), region.Uv0, region.Uv1, tint);
         }
+    }
+
+    private void DrawReflectionProbeGizmo(ImDrawListPtr drawList)
+    {
+        if (selected == null || isPlaying || gameViewActive || !viewportGizmosVisible)
+            return;
+
+        var probe = selected.GetComponent<ReflectionProbe>();
+        if (probe == null || viewportContentSize.X <= 1f || viewportContentSize.Y <= 1f)
+            return;
+
+        var pos = selected.GlobalPosition;
+        var center = new Vector3(pos.X + probe.CenterX, pos.Y + probe.CenterY, pos.Z + probe.CenterZ);
+        DrawReflectionProbeInfluenceBox(drawList, probe, center);
+        DrawReflectionProbePreviewSphere(drawList, probe, center);
+    }
+
+    private void DrawReflectionProbeInfluenceBox(ImDrawListPtr drawList, ReflectionProbe probe, Vector3 center)
+    {
+        float hx = Math.Max(0.01f, probe.SizeX) * 0.5f;
+        float hy = Math.Max(0.01f, probe.SizeY) * 0.5f;
+        float hz = Math.Max(0.01f, probe.SizeZ) * 0.5f;
+
+        var corners = new[]
+        {
+            new Vector3(center.X - hx, center.Y - hy, center.Z - hz),
+            new Vector3(center.X + hx, center.Y - hy, center.Z - hz),
+            new Vector3(center.X + hx, center.Y + hy, center.Z - hz),
+            new Vector3(center.X - hx, center.Y + hy, center.Z - hz),
+            new Vector3(center.X - hx, center.Y - hy, center.Z + hz),
+            new Vector3(center.X + hx, center.Y - hy, center.Z + hz),
+            new Vector3(center.X + hx, center.Y + hy, center.Z + hz),
+            new Vector3(center.X - hx, center.Y + hy, center.Z + hz)
+        };
+
+        var projected = new Vector2?[8];
+        for (int i = 0; i < corners.Length; i++)
+        {
+            if (TryProject(corners[i], out var local))
+                projected[i] = viewportContentMin + local;
+        }
+
+        uint glow = ImGui.GetColorU32(new System.Numerics.Vector4(0.22f, 0.78f, 1.00f, 0.18f));
+        uint line = ImGui.GetColorU32(new System.Numerics.Vector4(0.32f, 0.84f, 1.00f, 0.92f));
+
+        DrawReflectionProbeBoxEdges(drawList, projected, glow, 5.5f);
+        DrawReflectionProbeBoxEdges(drawList, projected, line, 1.6f);
+    }
+
+    private static void DrawReflectionProbeBoxEdges(ImDrawListPtr drawList, Vector2?[] projected, uint color, float thickness)
+    {
+        DrawProjectedEdge(drawList, projected, 0, 1, color, thickness);
+        DrawProjectedEdge(drawList, projected, 1, 2, color, thickness);
+        DrawProjectedEdge(drawList, projected, 2, 3, color, thickness);
+        DrawProjectedEdge(drawList, projected, 3, 0, color, thickness);
+        DrawProjectedEdge(drawList, projected, 4, 5, color, thickness);
+        DrawProjectedEdge(drawList, projected, 5, 6, color, thickness);
+        DrawProjectedEdge(drawList, projected, 6, 7, color, thickness);
+        DrawProjectedEdge(drawList, projected, 7, 4, color, thickness);
+        DrawProjectedEdge(drawList, projected, 0, 4, color, thickness);
+        DrawProjectedEdge(drawList, projected, 1, 5, color, thickness);
+        DrawProjectedEdge(drawList, projected, 2, 6, color, thickness);
+        DrawProjectedEdge(drawList, projected, 3, 7, color, thickness);
+    }
+
+    private void DrawReflectionProbePreviewSphere(ImDrawListPtr drawList, ReflectionProbe probe, Vector3 center)
+    {
+        if (!TryProject(center, out var local))
+            return;
+
+        var screen = viewportContentMin + local;
+        float maxSize = Math.Max(0.25f, Math.Max(probe.SizeX, Math.Max(probe.SizeY, probe.SizeZ)));
+        float distance = Math.Max(0.35f, Distance(camera.Position, center));
+        float radius = Math.Clamp(26f + MathF.Sqrt(maxSize) * 5.5f - MathF.Sqrt(distance) * 2.0f, 20f, 52f);
+
+        var sphereCenter = ClampToViewport(screen + new Vector2(radius * 1.25f, -radius * 1.15f));
+        float safeRadius = Math.Min(radius, Math.Min(
+            Math.Min(sphereCenter.X - viewportContentMin.X, viewportContentMin.X + viewportContentSize.X - sphereCenter.X),
+            Math.Min(sphereCenter.Y - viewportContentMin.Y, viewportContentMin.Y + viewportContentSize.Y - sphereCenter.Y)));
+        radius = Math.Max(14f, safeRadius);
+
+        uint shadow = ImGui.GetColorU32(new System.Numerics.Vector4(0.00f, 0.00f, 0.00f, 0.35f));
+        uint baseColor = ImGui.GetColorU32(new System.Numerics.Vector4(0.05f, 0.10f, 0.14f, 0.92f));
+        uint sky = ImGui.GetColorU32(new System.Numerics.Vector4(0.62f, 0.86f, 1.00f, 0.92f));
+        uint ground = ImGui.GetColorU32(new System.Numerics.Vector4(0.35f, 0.44f, 0.36f, 0.82f));
+        uint ring = ImGui.GetColorU32(new System.Numerics.Vector4(0.76f, 0.94f, 1.00f, 0.96f));
+        uint hot = ImGui.GetColorU32(new System.Numerics.Vector4(1.00f, 1.00f, 1.00f, 0.95f));
+        uint warm = ImGui.GetColorU32(new System.Numerics.Vector4(1.00f, 0.84f, 0.45f, 0.75f));
+
+        drawList.AddCircleFilled(sphereCenter + new Vector2(2f, 3f), radius + 2f, shadow, 48);
+        if (TryGetReflectionProbePreviewTexture(probe, out var previewTexture))
+        {
+            var min = sphereCenter - new Vector2(radius, radius);
+            var max = sphereCenter + new Vector2(radius, radius);
+            drawList.AddImageRounded(previewTexture, min, max, new Vector2(0f, 0f), new Vector2(1f, 1f),
+                ImGui.GetColorU32(new System.Numerics.Vector4(1f, 1f, 1f, 0.95f)), radius);
+            drawList.AddCircleFilled(sphereCenter + new Vector2(-radius * 0.36f, -radius * 0.40f), radius * 0.18f, hot, 32);
+        }
+        else
+        {
+            drawList.AddCircleFilled(sphereCenter, radius, baseColor, 64);
+            drawList.AddCircleFilled(sphereCenter + new Vector2(-radius * 0.16f, -radius * 0.22f), radius * 0.78f, sky, 48);
+            drawList.AddCircleFilled(sphereCenter + new Vector2(radius * 0.12f, radius * 0.35f), radius * 0.72f, ground, 48);
+            drawList.AddCircleFilled(sphereCenter + new Vector2(-radius * 0.36f, -radius * 0.40f), radius * 0.20f, hot, 32);
+            drawList.AddCircleFilled(sphereCenter + new Vector2(radius * 0.28f, -radius * 0.08f), radius * 0.10f, warm, 24);
+        }
+        drawList.AddLine(sphereCenter + new Vector2(-radius * 0.88f, radius * 0.02f), sphereCenter + new Vector2(radius * 0.88f, -radius * 0.05f), ImGui.GetColorU32(new System.Numerics.Vector4(1f, 1f, 1f, 0.45f)), 1.4f);
+        drawList.AddCircle(sphereCenter, radius, ring, 64, 1.6f);
+
+        var label = probe.Mode switch
+        {
+            ReflectionProbeMode.Baked => probe.NeedsBake ? "Reflection Probe  Baked *" : "Reflection Probe  Baked",
+            ReflectionProbeMode.Realtime => "Reflection Probe  Realtime",
+            ReflectionProbeMode.Custom => "Reflection Probe  Custom",
+            _ => "Reflection Probe"
+        };
+        var labelSize = ImGui.CalcTextSize(label);
+        var labelPos = sphereCenter + new Vector2(-labelSize.X * 0.5f, radius + 8f);
+        var labelMin = labelPos - new Vector2(8f, 4f);
+        var labelMax = labelPos + labelSize + new Vector2(8f, 5f);
+        drawList.AddRectFilled(labelMin, labelMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.03f, 0.05f, 0.07f, 0.82f)), 8f);
+        drawList.AddRect(labelMin, labelMax, ImGui.GetColorU32(new System.Numerics.Vector4(0.28f, 0.70f, 1.00f, 0.65f)), 8f, ImDrawFlags.None, 1f);
+        drawList.AddText(labelPos, ImGui.GetColorU32(new System.Numerics.Vector4(0.86f, 0.94f, 1.00f, 0.96f)), label);
+    }
+
+    private bool TryGetReflectionProbePreviewTexture(ReflectionProbe probe, out IntPtr textureId)
+    {
+        textureId = IntPtr.Zero;
+        string path = probe.EffectiveCubemapPath;
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        string? resolved = SceneViewportRenderer.NormalizeExistingAssetPath(path);
+        if (string.IsNullOrWhiteSpace(resolved))
+            return false;
+
+        string previewPath = resolved;
+        if (CubemapAsset.IsCubemapPath(resolved))
+        {
+            var data = CubemapAsset.Load(resolved);
+            previewPath = !string.IsNullOrWhiteSpace(data.PreviewTexturePath)
+                ? data.PreviewTexturePath
+                : !string.IsNullOrWhiteSpace(data.PositiveZPath)
+                    ? data.PositiveZPath
+                    : data.SourceTexturePath;
+        }
+
+        if (string.IsNullOrWhiteSpace(previewPath) || !File.Exists(previewPath))
+            return false;
+
+        if (TryGetCachedPreviewTexture(previewPath, out textureId))
+            return true;
+
+        // Los cubemaps baked acaban de crear PNGs nuevos; si el preview todavia no estaba
+        // en cache, lo construimos al vuelo para que la esfera cambie inmediatamente.
+        if (BuildAndLoadPreviewNow(previewPath) && TryGetCachedPreviewTexture(previewPath, out textureId))
+            return true;
+
+        return false;
     }
 
     private void ComputeViewportImageRect(Vector2 panelMin, Vector2 panelSize, out Vector2 imageMin, out Vector2 imageSize)
@@ -1016,6 +1177,16 @@ internal sealed partial class ImGuiEditorApp
     {
         ImGui.AcceptDragDropPayload(payloadType);
         return ImGui.IsMouseReleased(ImGuiMouseButton.Left);
+    }
+
+    // Comprueba la ENTREGA real del payload a ESTE target (no solo "hubo release"). Es lo correcto
+    // cuando varios targets se solapan (fila vs zona raíz): ImGui entrega solo al que está bajo el
+    // ratón, así que el drop va al destino correcto. AcceptDragDropOnRelease devuelve IsMouseReleased
+    // global y hacía que ganara el target equivocado (p. ej. la jerarquía soltaba al root).
+    private static unsafe bool AcceptDragDropDelivered(string payloadType)
+    {
+        var payload = ImGui.AcceptDragDropPayload(payloadType);
+        return payload.NativePtr != null && payload.IsDelivery();
     }
 
     private void DrawToolButton(string label, TransformTool tool)

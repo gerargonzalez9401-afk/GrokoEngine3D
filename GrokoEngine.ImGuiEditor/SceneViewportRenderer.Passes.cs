@@ -4,6 +4,12 @@ namespace GrokoEngine.ImGuiEditor;
 
 internal sealed partial class SceneViewportRenderer
 {
+    private readonly record struct RenderPassDescriptor(
+        SceneRenderPass Pass,
+        string Name,
+        string Stage,
+        string Description);
+
     private enum SceneRenderPass
     {
         BuildScene,
@@ -17,6 +23,34 @@ internal sealed partial class SceneViewportRenderer
         LinesGizmos,
         Particles
     }
+
+    // Fuente unica del orden del pipeline. El render loop debe seguir este orden para mantener
+    // profiler, Render Debug y futuras opciones de pipeline sincronizadas.
+    private static readonly RenderPassDescriptor[] RenderPipelineLayout =
+    [
+        new(SceneRenderPass.BuildScene, "Build/Collect", "CPU",
+            "Recolecta objetos visibles, rutas de malla, instancias, terrenos, particulas y lineas."),
+        new(SceneRenderPass.Shadows, "Shadow Pass", "Depth",
+            "Genera mapas de sombra direccionales, spot, point y depth del terreno."),
+        new(SceneRenderPass.Skybox, "Skybox", "Background",
+            "Dibuja HDRI o cielo procedural antes de la geometria opaca."),
+        new(SceneRenderPass.StaticOpaque, "Static Opaque", "Opaque",
+            "Dibuja batches estaticos opacos."),
+        new(SceneRenderPass.DynamicOpaque, "Dynamic/Skinned Opaque", "Opaque",
+            "Dibuja mallas dinamicas, skinned meshes y rangos opacos no estaticos."),
+        new(SceneRenderPass.ShaderGraph, "Shader Graph", "Material",
+            "Dibuja materiales custom generados por Shader Graph y su prepass de depth si aplica."),
+        new(SceneRenderPass.Terrain, "Terrain/CDLOD", "Terrain",
+            "Dibuja terrenos CDLOD, arboles billboard y detalles."),
+        new(SceneRenderPass.Occlusion, "Occlusion Queries", "Visibility",
+            "Actualiza consultas de oclusion despues de la geometria opaca."),
+        new(SceneRenderPass.LinesGizmos, "Gizmos/Lines", "Editor",
+            "Dibuja gizmos, bounds, helpers de editor y lineas."),
+        new(SceneRenderPass.Particles, "Particles/Transparent", "Transparent",
+            "Dibuja particulas transparentes ordenadas y efectos con distorsion/refraction.")
+    ];
+
+    private static IReadOnlyList<RenderPassDescriptor> GetRenderPipelineLayout() => RenderPipelineLayout;
 
     private static long BeginRenderPass(SceneRenderPass pass) => RenderTimestamp();
 

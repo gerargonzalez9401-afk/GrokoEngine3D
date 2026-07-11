@@ -21,6 +21,36 @@ namespace GrokoEngine
         Hard
     }
 
+    // Mascara de pincel cargada de una imagen (blanco/alfa = fuerza, 0..1). Cuando esta presente,
+    // la FORMA del pincel es la de la imagen y reemplaza al circulo con falloff, como las brochas
+    // de Unity. El editor la carga de EditorIcons/Brushes (o de cualquier PNG del proyecto).
+    public sealed class TerrainBrushMask
+    {
+        public readonly float[] Samples;
+        public readonly int Size;
+
+        public TerrainBrushMask(float[] samples, int size)
+        {
+            if (samples.Length != size * size)
+                throw new ArgumentException("La mascara debe ser cuadrada (size*size muestras).");
+            Samples = samples;
+            Size = size;
+        }
+
+        // Bilineal con clamp; u/v en 0..1 sobre el cuadrado del pincel.
+        public float Sample(float u, float v)
+        {
+            float fx = Math.Clamp(u, 0f, 1f) * (Size - 1);
+            float fy = Math.Clamp(v, 0f, 1f) * (Size - 1);
+            int x0 = (int)fx, y0 = (int)fy;
+            int x1 = Math.Min(x0 + 1, Size - 1), y1 = Math.Min(y0 + 1, Size - 1);
+            float tx = fx - x0, ty = fy - y0;
+            float top = Samples[y0 * Size + x0] + (Samples[y0 * Size + x1] - Samples[y0 * Size + x0]) * tx;
+            float bottom = Samples[y1 * Size + x0] + (Samples[y1 * Size + x1] - Samples[y1 * Size + x0]) * tx;
+            return top + (bottom - top) * ty;
+        }
+    }
+
     // Matematica pura de las brochas de Terrain (sculpt/paint), extraida del editor para que sea
     // testeable desde GrokoEngine.Tests sin ImGui/OpenGL. El editor (ImGuiEditorApp.TerrainTools.cs)
     // solo se encarga de raycast/mouse/undo y llama a estos metodos con el mismo resultado de antes.
@@ -74,7 +104,7 @@ namespace GrokoEngine
         // Devuelve true si modifico alguna celda (el llamador debe incrementar terrain.Version en ese caso).
         public static bool ApplySculpt(Terrain terrain, TerrainBrushTool tool, float localX, float localZ,
             float radius, float strength, float deltaTime, int noiseSeed, ref float? flattenHeight,
-            TerrainBrushFalloff falloffMode = TerrainBrushFalloff.Soft)
+            TerrainBrushFalloff falloffMode = TerrainBrushFalloff.Soft, TerrainBrushMask? mask = null)
         {
             if (!ComputeBrushCells(terrain, localX, localZ, radius, out float gx, out float gz, out float stepX, out float stepZ,
                 out int minX, out int maxX, out int minZ, out int maxZ))
@@ -98,11 +128,26 @@ namespace GrokoEngine
                     float dx = (x - gx) * stepX;
                     float dz = (z - gz) * stepZ;
                     float dist = MathF.Sqrt(dx * dx + dz * dz);
-                    if (dist > radius)
-                        continue;
 
                     float falloff;
-                    if (falloffMode == TerrainBrushFalloff.Hard)
+                    if (mask != null)
+                    {
+                        // Con mascara, la FORMA la pone la imagen: se muestrea el cuadrado
+                        // completo del pincel (las esquinas cuentan, p. ej. una estrella)
+                        // y el falloff circular/duro deja de aplicar.
+                        float u = dx / radius * 0.5f + 0.5f;
+                        float v = dz / radius * 0.5f + 0.5f;
+                        if (u < 0f || u > 1f || v < 0f || v > 1f)
+                            continue;
+                        falloff = mask.Sample(u, v);
+                        if (falloff <= 0.004f)
+                            continue;
+                    }
+                    else if (dist > radius)
+                    {
+                        continue;
+                    }
+                    else if (falloffMode == TerrainBrushFalloff.Hard)
                     {
                         falloff = 1f;
                     }
@@ -146,7 +191,10 @@ namespace GrokoEngine
                             break;
                         }
                         case TerrainBrushTool.Extrude:
-                            terrain.Heightmap[index] = Math.Clamp(terrain.Heightmap[index] + strength * deltaTime, -2f, 2f);
+                            // Sin mascara empuja parejo (meseta); con mascara respeta su forma →
+                            // Extrude + mascara = herramienta de SELLO (estampa la imagen).
+                            terrain.Heightmap[index] = Math.Clamp(
+                                terrain.Heightmap[index] + strength * deltaTime * (mask != null ? falloff : 1f), -2f, 2f);
                             changed = true;
                             break;
                     }
@@ -160,7 +208,7 @@ namespace GrokoEngine
         // otras 3 proporcionalmente para mantener la suma en ~255). Devuelve true si cambio algo
         // (el llamador debe incrementar terrain.SplatVersion en ese caso).
         public static bool ApplyPaint(Terrain terrain, int activeLayer, float localX, float localZ,
-            float radius, float strength, float deltaTime)
+            float radius, float strength, float deltaTime, TerrainBrushMask? mask = null)
         {
             if (!ComputeBrushCells(terrain, localX, localZ, radius, out float gx, out float gz, out float stepX, out float stepZ,
                 out int minX, out int maxX, out int minZ, out int maxZ))
@@ -177,11 +225,27 @@ namespace GrokoEngine
                     float dx = (x - gx) * stepX;
                     float dz = (z - gz) * stepZ;
                     float dist = MathF.Sqrt(dx * dx + dz * dz);
-                    if (dist > radius)
-                        continue;
 
-                    float t = 1f - dist / radius;
-                    float falloff = t * t * (3f - 2f * t);
+                    float falloff;
+                    if (mask != null)
+                    {
+                        float u = dx / radius * 0.5f + 0.5f;
+                        float v = dz / radius * 0.5f + 0.5f;
+                        if (u < 0f || u > 1f || v < 0f || v > 1f)
+                            continue;
+                        falloff = mask.Sample(u, v);
+                        if (falloff <= 0.004f)
+                            continue;
+                    }
+                    else if (dist > radius)
+                    {
+                        continue;
+                    }
+                    else
+                    {
+                        float t = 1f - dist / radius;
+                        falloff = t * t * (3f - 2f * t);
+                    }
                     int pixel = (z * resolution + x) * 4;
 
                     float increase = falloff * strength * deltaTime * 255f;

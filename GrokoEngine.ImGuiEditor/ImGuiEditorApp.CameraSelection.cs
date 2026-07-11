@@ -327,6 +327,16 @@ internal sealed partial class ImGuiEditorApp
         if (gizmoDragging || gizmoMouseCaptured || colliderEditDragging || colliderEditMouseCaptured || viewGizmoMouseCaptured)
             return;
 
+        // Editando un elemento de UI con el Rect Tool (mover/redimensionar desde el rect o un handle):
+        // ese arrastre es para el propio elemento, no para (re)seleccionar. Sin esto, arrastrar desde
+        // un handle que cae FUERA del rect no activaba PointerOverUI y el rubber-band deseleccionaba
+        // el elemento al soltar (se sentía como si el click arrastrara la selección).
+        if (activeUiRectToolObject != null)
+        {
+            selectionBoxActive = false;
+            return;
+        }
+
         // Si hay un Terrain seleccionado y el click cae sobre su plano, ese click es para el
         // pincel de sculpt/paint/árboles/detalles (HandleTerrainSculpting, que corre DESPUÉS en
         // el mismo frame), no para (re)seleccionar. Sin esto, soltar el mouse tras cada trazo

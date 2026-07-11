@@ -57,7 +57,9 @@ internal sealed partial class ImGuiEditorApp
         Shadows,
         ShadowCascades,
         IblSpecular,
-        MaterialHealth
+        MaterialHealth,
+        DirectLights,
+        ReflectionProbe
     }
 
     private enum SceneGridAxis
@@ -147,7 +149,9 @@ internal sealed partial class ImGuiEditorApp
         TerrainExtrude,
         TerrainPaint,
         TerrainTrees,
-        TerrainDetails
+        TerrainDetails,
+        AudioSource,
+        AudioClip
     }
 
     private readonly struct DisabledScope : IDisposable
@@ -242,6 +246,7 @@ internal sealed partial class ImGuiEditorApp
         public float IblSpecularStrength { get; set; } = 0f;
         public string HdriPath { get; set; } = "";
         public string EnvironmentMode { get; set; } = nameof(GrokoEngine.ImGuiEditor.EnvironmentMode.Hdri);
+        public string StaticHierarchyLodMode { get; set; } = nameof(GrokoEngine.ImGuiEditor.StaticHierarchyLodMode.Performance120);
         public bool ConsoleShowInfo { get; set; } = true;
         public bool ConsoleShowWarnings { get; set; } = true;
         public bool ConsoleShowErrors { get; set; } = true;

@@ -83,6 +83,7 @@ private void EnterPlayMode()
         simulatePhysics = false;
         previousRightMouseDown = false;
         previousLeftMouseDown = false;
+        TriggerAudioPlayOnAwake();   // arranca los AudioSource con PlayOnAwake (como Unity)
         // Durante el juego pedimos al GC que difiera las recolecciones gen2 (las que más pausan):
         // reduce los "tirones". Se restaura a Interactive al salir de Play.
         System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency;
@@ -186,6 +187,7 @@ private void RestorePlayModeSnapshot(string message)
         isPlaying = false;
         playPaused = false;
         simulatePhysics = false;
+        StopAllAudio();   // detiene y libera todas las fuentes: la escena se va a reconstruir
         // Ciclo de vida completo: al parar Play llamamos OnDisable + OnDestroy a los scripts que
         // estuvieron vivos (Awoke), para que limpien (desuscribir eventos, guardar estado…) ANTES
         // de descartar la escena de juego. Se hace mientras RuntimeScene SIGUE listo (antes de

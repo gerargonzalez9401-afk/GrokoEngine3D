@@ -650,7 +650,7 @@ internal sealed partial class ImGuiEditorApp
                 {
                     obj.RemoveComponent<MeshFilter>(physicsEngine); // la raíz será un contenedor
                     ApplyImportScale(obj, mesh, meshPath);          // la raíz lleva la escala; los hijos la heredan
-                    BuildModelHierarchy(obj, meshPath, mesh);
+                    BuildModelHierarchyGrouped(obj, meshPath, mesh);
                     return obj;
                 }
 
@@ -758,6 +758,16 @@ internal sealed partial class ImGuiEditorApp
             return;
         }
 
+        if (IsAudioAssetPath(assetPath))
+        {
+            var audioTarget = PickObjectAt(localMouse.X, localMouse.Y);
+            if (audioTarget != null)
+                AddAudioSourceToObject(audioTarget, assetPath);
+            else
+                CreateAudioObjectAt(assetPath, GetViewportDropPosition(localMouse));
+            return;
+        }
+
         var target = PickObjectAt(localMouse.X, localMouse.Y) ?? selected;
         if (target == null)
         {
@@ -813,7 +823,7 @@ internal sealed partial class ImGuiEditorApp
                 {
                     obj.RemoveComponent<MeshFilter>(physicsEngine); // la raíz será un contenedor
                     ApplyImportScale(obj, mesh, meshPath);          // la raíz lleva la escala; los hijos la heredan
-                    BuildModelHierarchy(obj, meshPath, mesh);
+                    BuildModelHierarchyGrouped(obj, meshPath, mesh);
                     statusMessage = $"Mesh dropped (hierarchy): {obj.Name}";
                     return obj;
                 }
@@ -844,6 +854,68 @@ internal sealed partial class ImGuiEditorApp
         // static render cache by default. Animated/skinned characters stay dynamic.
         if (!mesh.HasSkin)
             obj.IsStatic = true;
+
+        // Modelo con cadena LOD de fábrica (submallas "X_LOD0/X_LOD1/..."): añade el
+        // LOD Group automáticamente, como Unity al importar, para que el cambio de nivel
+        // por distancia quede configurable desde el inspector sin ningún paso manual.
+        if (obj.GetComponent<LodGroup>() == null && MeshHasLodChains(mesh))
+            obj.AddComponent<LodGroup>();
+    }
+
+    // Índices de submalla que son variantes LOD1+ de una cadena por nombre (o null si no hay).
+    private static HashSet<int>? GetLodVariantSubmeshes(ParsedMesh mesh)
+    {
+        Dictionary<string, List<(int Level, int Index)>>? groups = null;
+        for (int i = 0; i < mesh.Submeshes.Count; i++)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                mesh.Submeshes[i].MeshName ?? "", @"^(.*?)[_\s]?LOD(\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!match.Success || !int.TryParse(match.Groups[2].Value, out int level) || level > 30)
+                continue;
+            groups ??= new Dictionary<string, List<(int, int)>>(StringComparer.OrdinalIgnoreCase);
+            if (!groups.TryGetValue(match.Groups[1].Value, out var list))
+                groups[match.Groups[1].Value] = list = new List<(int, int)>();
+            list.Add((level, i));
+        }
+
+        if (groups == null)
+            return null;
+
+        HashSet<int>? variants = null;
+        foreach (var list in groups.Values)
+        {
+            if (list.Count < 2 || !list.Exists(e => e.Level == 0))
+                continue;
+            foreach (var (level, index) in list)
+            {
+                if (level > 0)
+                    (variants ??= new HashSet<int>()).Add(index);
+            }
+        }
+
+        return variants;
+    }
+
+    // ¿El modelo trae al menos una cadena LOD por nombre (mismo base con LOD0 y LOD1)?
+    private static bool MeshHasLodChains(ParsedMesh mesh)
+    {
+        Dictionary<string, int>? levelMasks = null;
+        foreach (var sub in mesh.Submeshes)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                sub.MeshName ?? "", @"^(.*?)[_\s]?LOD(\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!match.Success || !int.TryParse(match.Groups[2].Value, out int level) || level > 30)
+                continue;
+
+            levelMasks ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            levelMasks.TryGetValue(match.Groups[1].Value, out int mask);
+            mask |= 1 << level;
+            if ((mask & 0b11) == 0b11)
+                return true;   // el mismo base tiene LOD0 y LOD1 → cadena real
+            levelMasks[match.Groups[1].Value] = mask;
+        }
+
+        return false;
     }
 
     private void ApplyImportScale(GameObject obj, ParsedMesh mesh, string meshPath)
@@ -973,13 +1045,110 @@ internal sealed partial class ImGuiEditorApp
     // Crea un GameObject hijo por cada parte del modelo. Cada hijo dibuja solo SU submalla (SubmeshIndex)
     // reutilizando el mismo ImportScale que el objeto único, así el conjunto se ve idéntico pero como
     // objetos separados. La escala de importación la lleva la raíz (los hijos la heredan al estar parentados).
+    private void BuildModelHierarchyGrouped(GameObject root, string meshPath, ParsedMesh mesh)
+    {
+        float importScale = ComputeMeshImportScale(mesh);
+        int created = 0;
+        var lodVariants = GetLodVariantSubmeshes(mesh);
+        bool keepSeparateLodObjects = mesh.SeparateObjectCount > 1;
+        var visibleSubmeshes = new List<(int Index, MeshSubmesh Submesh)>();
+
+        for (int i = 0; i < mesh.Submeshes.Count; i++)
+        {
+            if (!keepSeparateLodObjects && lodVariants != null && lodVariants.Contains(i))
+                continue;
+
+            visibleSubmeshes.Add((i, mesh.Submeshes[i]));
+        }
+
+        var groups = visibleSubmeshes
+            .GroupBy(item => GetImportedObjectName(item.Submesh, item.Index), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var group in groups)
+        {
+            var parts = group.ToList();
+            if (parts.Count == 1)
+            {
+                CreateImportedSubmeshObject(root, meshPath, mesh, importScale, parts[0].Index, group.Key);
+                created++;
+                continue;
+            }
+
+            var objectNode = new GameObject { Name = group.Key, Parent = root };
+            objectNode.SetLocalTRS(
+                new Vector3(0, 0, 0),
+                new MiMotor.Mathematics.Quaternion(0, 0, 0, 1),
+                new Vector3(1, 1, 1));
+            if (!mesh.HasSkin)
+                objectNode.IsStatic = true;
+            created++;
+
+            for (int p = 0; p < parts.Count; p++)
+            {
+                string partName = GetImportedPartName(parts[p].Submesh, p);
+                CreateImportedSubmeshObject(objectNode, meshPath, mesh, importScale, parts[p].Index, partName);
+                created++;
+            }
+        }
+
+        statusMessage = $"{groups.Count} objetos importados ({created} nodos) como hijos de {root.Name}";
+    }
+
+    private static string GetImportedObjectName(MeshSubmesh submesh, int index)
+    {
+        if (!string.IsNullOrWhiteSpace(submesh.MeshName))
+            return submesh.MeshName.Trim();
+        if (!string.IsNullOrWhiteSpace(submesh.Name))
+            return submesh.Name.Trim();
+        return $"Part {index + 1}";
+    }
+
+    private static string GetImportedPartName(MeshSubmesh submesh, int partIndex)
+    {
+        string name = !string.IsNullOrWhiteSpace(submesh.Name)
+            ? submesh.Name.Trim()
+            : $"Material {partIndex + 1}";
+
+        return string.Equals(name, submesh.MeshName, StringComparison.OrdinalIgnoreCase)
+            ? $"Material {partIndex + 1}"
+            : name;
+    }
+
+    private void CreateImportedSubmeshObject(GameObject parent, string meshPath, ParsedMesh mesh, float importScale, int submeshIndex, string name)
+    {
+        var child = new GameObject { Name = name, Parent = parent };
+        child.SetLocalTRS(
+            new Vector3(0, 0, 0),
+            new MiMotor.Mathematics.Quaternion(0, 0, 0, 1),
+            new Vector3(1, 1, 1));
+
+        var mf = child.AddComponent<MeshFilter>();
+        mf.MeshPath = meshPath;
+        mf.ImportScale = importScale;
+        mf.SubmeshIndex = submeshIndex;
+        if (!mesh.HasSkin)
+            child.IsStatic = true;
+        if (mesh.Submeshes.Count > 0)
+            EnsureMaterialSlots(mf, mesh);
+        EnsureMeshRenderer(child);
+        TryPrewarmMeshAsset(mf.MeshPath, mf.ImportScale, mf.MaterialSlots);
+    }
+
     private void BuildModelHierarchy(GameObject root, string meshPath, ParsedMesh mesh)
     {
         float importScale = ComputeMeshImportScale(mesh);
         int created = 0;
+        var lodVariants = GetLodVariantSubmeshes(mesh);
 
         for (int i = 0; i < mesh.Submeshes.Count; i++)
         {
+            // Submallas que son variantes LOD1+ de una cadena: NO se crea hijo. La geometría
+            // de reserva vive en el FBX y el hijo LOD0 cambia de nivel por distancia solo.
+            // Antes, cada árbol traía 9+ hijos muertos que engordaban escena y recorrido.
+            if (lodVariants != null && lodVariants.Contains(i))
+                continue;
+
             var sub = mesh.Submeshes[i];
             string name = !string.IsNullOrWhiteSpace(sub.MeshName) ? sub.MeshName
                 : !string.IsNullOrWhiteSpace(sub.Name) ? sub.Name

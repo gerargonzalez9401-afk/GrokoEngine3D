@@ -52,6 +52,8 @@ internal sealed partial class SceneViewportRenderer
         solidScreenTexelLocation = GL.GetUniformLocation(solidShader, "uScreenTexel");
         solidRefractionStrengthLocation = GL.GetUniformLocation(solidShader, "uRefractionStrength");
         solidDistortionStrengthLocation = GL.GetUniformLocation(solidShader, "uDistortionStrength");
+        solidAlphaClipEnabledLocation = GL.GetUniformLocation(solidShader, "uAlphaClipEnabled");
+        solidAlphaClipThresholdLocation = GL.GetUniformLocation(solidShader, "uAlphaClipThreshold");
         solidLightMvpLocation = GL.GetUniformLocation(solidShader, "uLightMvp");
         solidCascadeCountLocation = GL.GetUniformLocation(solidShader, "uCascadeCount");
         solidCameraPositionLocation = GL.GetUniformLocation(solidShader, "uShadowCameraPos");
@@ -134,6 +136,13 @@ internal sealed partial class SceneViewportRenderer
         uEnvPrefilterMap = GL.GetUniformLocation(solidShader, "uEnvPrefilterMap");
         uHasEnvPrefilterMap = GL.GetUniformLocation(solidShader, "uHasEnvPrefilterMap");
         uEnvPrefilterMaxLod = GL.GetUniformLocation(solidShader, "uEnvPrefilterMaxLod");
+        uActiveReflectionProbeMap = GL.GetUniformLocation(solidShader, "uActiveReflectionProbeMap");
+        uHasActiveReflectionProbeMap = GL.GetUniformLocation(solidShader, "uHasActiveReflectionProbeMap");
+        uActiveReflectionProbeMaxLod = GL.GetUniformLocation(solidShader, "uActiveReflectionProbeMaxLod");
+        uActiveReflectionProbeCenter = GL.GetUniformLocation(solidShader, "uActiveReflectionProbeCenter");
+        uActiveReflectionProbeHalfSize = GL.GetUniformLocation(solidShader, "uActiveReflectionProbeHalfSize");
+        uActiveReflectionProbeBlendDistance = GL.GetUniformLocation(solidShader, "uActiveReflectionProbeBlendDistance");
+        uActiveReflectionProbeIntensity = GL.GetUniformLocation(solidShader, "uActiveReflectionProbeIntensity");
         uBrdfLut = GL.GetUniformLocation(solidShader, "uBrdfLut");
         uHasBrdfLut = GL.GetUniformLocation(solidShader, "uHasBrdfLut");
         uIblDiffuseStrength = GL.GetUniformLocation(solidShader, "uIblDiffuseStrength");
@@ -144,22 +153,9 @@ internal sealed partial class SceneViewportRenderer
         uVolumetricStrength = GL.GetUniformLocation(solidShader, "uVolumetricStrength");
         uDebugView = GL.GetUniformLocation(solidShader, "uDebugView");
 
-        terrainShader = CreateTerrainShader();
-        terrainMvpLocation = GL.GetUniformLocation(terrainShader, "uMvp");
-        terrainModelLocation = GL.GetUniformLocation(terrainShader, "uModel");
-        terrainSplatMapLocation = GL.GetUniformLocation(terrainShader, "uSplatMap");
-        for (int i = 0; i < 4; i++)
-        {
-            terrainLayerLocations[i] = GL.GetUniformLocation(terrainShader, $"uLayer{i}");
-            terrainHasLayerLocations[i] = GL.GetUniformLocation(terrainShader, $"uHasLayer{i}");
-            terrainTilingLocations[i] = GL.GetUniformLocation(terrainShader, $"uTiling{i}");
-        }
-        terrainAmbientColorLocation = GL.GetUniformLocation(terrainShader, "uAmbientColor");
-        terrainAmbientIntensityLocation = GL.GetUniformLocation(terrainShader, "uAmbientIntensity");
-        terrainSkyStrengthLocation = GL.GetUniformLocation(terrainShader, "uSkyStrength");
-        terrainDirDirLocation = GL.GetUniformLocation(terrainShader, "uDirDir");
-        terrainDirColorLocation = GL.GetUniformLocation(terrainShader, "uDirColor");
-        terrainDirIntensityLocation = GL.GetUniformLocation(terrainShader, "uDirIntensity");
+        // Terrain CDLOD: shader, rejilla compartida y locations (incluidas las de iluminación
+        // que consume ApplyTerrainLighting) viven en SceneViewportRenderer.TerrainPass.cs.
+        InitializeTerrainPass();
 
         GL.BindVertexArray(vertexArray);
         GL.BindBuffer(BufferTarget.ArrayBuffer, vertexBuffer);
@@ -353,6 +349,10 @@ internal sealed partial class SceneViewportRenderer
         _shadowModelLocation = GL.GetUniformLocation(_shadowShader, "uModel");
         _shadowUseInstancingLocation = GL.GetUniformLocation(_shadowShader, "uUseInstancing");
         _shadowUseSkinningLocation = GL.GetUniformLocation(_shadowShader, "uUseSkinning");
+        _shadowTextureLocation = GL.GetUniformLocation(_shadowShader, "uTexture");
+        _shadowHasTextureLocation = GL.GetUniformLocation(_shadowShader, "uHasTexture");
+        _shadowAlphaClipLocation = GL.GetUniformLocation(_shadowShader, "uAlphaClip");
+        _shadowAlphaClipThresholdLocation = GL.GetUniformLocation(_shadowShader, "uAlphaClipThreshold");
         for (int i = 0; i < MaxGpuBones; i++)
             _shadowBoneMatrixLocations[i] = GL.GetUniformLocation(_shadowShader, $"uBones[{i}]");
         _pointShadowShader = CreatePointShadowShader();
@@ -360,6 +360,10 @@ internal sealed partial class SceneViewportRenderer
         _pointShadowModelLocation = GL.GetUniformLocation(_pointShadowShader, "uModel");
         _pointShadowUseInstancingLocation = GL.GetUniformLocation(_pointShadowShader, "uUseInstancing");
         _pointShadowUseSkinningLocation = GL.GetUniformLocation(_pointShadowShader, "uUseSkinning");
+        _pointShadowTextureLocation = GL.GetUniformLocation(_pointShadowShader, "uTexture");
+        _pointShadowHasTextureLocation = GL.GetUniformLocation(_pointShadowShader, "uHasTexture");
+        _pointShadowAlphaClipLocation = GL.GetUniformLocation(_pointShadowShader, "uAlphaClip");
+        _pointShadowAlphaClipThresholdLocation = GL.GetUniformLocation(_pointShadowShader, "uAlphaClipThreshold");
         _pointShadowLightPosLocation = GL.GetUniformLocation(_pointShadowShader, "uLightPos");
         _pointShadowFarLocation = GL.GetUniformLocation(_pointShadowShader, "uFarPlane");
         for (int i = 0; i < MaxGpuBones; i++)
@@ -429,6 +433,8 @@ internal sealed partial class SceneViewportRenderer
         // ── Billboards de árbol de Terrain: shader + quad unitario + VBO de instancias ──
         _treeBillboardShader = CreateTreeBillboardShader();
         _treeBillboardMvpLoc = GL.GetUniformLocation(_treeBillboardShader, "uMvp");
+        _treeBillboardTimeLoc = GL.GetUniformLocation(_treeBillboardShader, "uTime");
+        _treeBillboardWindLoc = GL.GetUniformLocation(_treeBillboardShader, "uWind");
         _treeBillboardTexLoc = GL.GetUniformLocation(_treeBillboardShader, "uTexture");
         _treeBillboardHasTexLoc = GL.GetUniformLocation(_treeBillboardShader, "uHasTexture");
 

@@ -114,7 +114,14 @@ namespace GrokoEngine
         // que podría llamarse desde varios hilos (p. ej. un bake en segundo plano),
         // así que usamos ConcurrentDictionary para evitar corrupción/excepciones.
         // Tick = orden de inserción, usado para la evicción FIFO (ver EvictIfNeeded).
-        private static readonly ConcurrentDictionary<string, (ParsedMesh Mesh, DateTime LastWrite, long Tick)> _cache = new();
+        // CheckedAt = último TickCount64 en que se validó contra disco (ver RevalidateMs).
+        private static readonly ConcurrentDictionary<string, (ParsedMesh Mesh, DateTime LastWrite, long Tick, long CheckedAt)> _cache = new();
+
+        // Los hits de cache solo re-consultan el disco (File.Exists + GetLastWriteTimeUtc, 2
+        // syscalls) cada este intervalo. La física llama a Load decenas de veces por FRAME vía
+        // MeshCollider.GetBounds; sin throttle, esas syscalls dominan. El hot-reload de mallas
+        // editadas fuera sigue funcionando, solo que con hasta ~1 s de retardo.
+        private const long RevalidateMs = 1000;
 
         // Tope de mallas cacheadas. Evita que el cache crezca sin límite al navegar
         // muchos assets distintos en una sesión larga. Al superarlo, se descarta la
@@ -216,9 +223,16 @@ namespace GrokoEngine
         public static ParsedMesh? Load(string path)
         {
             LastError = "";
+
+            // Camino caliente: hit de cache recién validado → cero syscalls.
+            long now = Environment.TickCount64;
+            if (_cache.TryGetValue(path, out var cached) && now - cached.CheckedAt < RevalidateMs)
+                return cached.Mesh;
+
             if (!File.Exists(path))
             {
                 LastError = "Mesh file not found: " + path;
+                _cache.TryRemove(path, out _);
                 return null;
             }
             if (!IsSupportedMesh(path))
@@ -228,9 +242,13 @@ namespace GrokoEngine
             }
 
             var diskTime = File.GetLastWriteTimeUtc(path);
-            if (_cache.TryGetValue(path, out var cached))
+            if (cached.Mesh != null)
             {
-                if (cached.LastWrite == diskTime) return cached.Mesh;
+                if (cached.LastWrite == diskTime)
+                {
+                    _cache[path] = (cached.Mesh, cached.LastWrite, cached.Tick, now);
+                    return cached.Mesh;
+                }
                 _cache.TryRemove(path, out _);
             }
 
@@ -242,7 +260,7 @@ namespace GrokoEngine
                 if (mesh == null)
                     return null;
                 EvictIfNeeded();
-                _cache[path] = (mesh, diskTime, Interlocked.Increment(ref _insertTick));
+                _cache[path] = (mesh, diskTime, Interlocked.Increment(ref _insertTick), now);
                 return mesh;
             }
             catch (Exception ex)

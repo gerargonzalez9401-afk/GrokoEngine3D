@@ -1,0 +1,77 @@
+{
+  "Version": 2,
+  "Objects": [
+    {
+      "Id": "trans-camera",
+      "Name": "Transparent Test Camera",
+      "Type": 0,
+      "IsActive": true,
+      "IsCamera": true,
+      "Layer": 0,
+      "Position": { "X": 0, "Y": 2, "Z": -6 },
+      "Rotation": { "X": 14, "Y": 0, "Z": 0 },
+      "Scale": { "X": 1, "Y": 1, "Z": 1 },
+      "Components": [
+        { "TypeName": "Camera", "Fields": { "FOV": "60", "NearClip": "0.1", "FarClip": "500", "ClearFlags": "Skybox", "Projection": "0", "PostProcessing": "True", "OpaqueTexture": "1", "DepthTexture": "1", "CullingMask": "Everything" } }
+      ],
+      "Children": []
+    },
+    {
+      "Id": "trans-sun",
+      "Name": "Soft Sun",
+      "Type": 0,
+      "IsActive": true,
+      "Layer": 0,
+      "Position": { "X": 0, "Y": 5, "Z": 0 },
+      "Rotation": { "X": 45, "Y": -20, "Z": 0 },
+      "Scale": { "X": 1, "Y": 1, "Z": 1 },
+      "Components": [
+        { "TypeName": "DirectionalLight", "Fields": { "DirectionX": "-0.25", "DirectionY": "-1", "DirectionZ": "-0.2", "Intensity": "1", "R": "1", "G": "0.96", "B": "0.9", "Shadows": "True", "ShadowStrength": "0.7" } }
+      ],
+      "Children": []
+    },
+    {
+      "Id": "trans-floor",
+      "Name": "Checker Floor",
+      "Type": 2,
+      "IsActive": true,
+      "IsStatic": true,
+      "Layer": 0,
+      "Position": { "X": 0, "Y": -0.55, "Z": 0 },
+      "Rotation": { "X": 0, "Y": 0, "Z": 0 },
+      "Scale": { "X": 7, "Y": 1, "Z": 5 },
+      "Components": [
+        { "TypeName": "Material", "Fields": { "R": "0.5", "G": "0.5", "B": "0.5", "Roughness": "0.7", "Metallic": "0", "SurfaceType": "Opaque" } }
+      ],
+      "Children": []
+    },
+    {
+      "Id": "glass-cube",
+      "Name": "Transparent Refraction Cube",
+      "Type": 1,
+      "IsActive": true,
+      "Layer": 0,
+      "Position": { "X": -1, "Y": 0.25, "Z": 0 },
+      "Rotation": { "X": 0, "Y": 25, "Z": 0 },
+      "Scale": { "X": 1.2, "Y": 1.2, "Z": 1.2 },
+      "Components": [
+        { "TypeName": "Material", "Fields": { "R": "0.55", "G": "0.85", "B": "1", "Roughness": "0.05", "Metallic": "0", "SurfaceType": "Transparent", "Alpha": "0.35", "RefractionStrength": "0.05", "DistortionStrength": "0.02", "SpecularHighlights": "True", "EnvironmentReflections": "True" } }
+      ],
+      "Children": []
+    },
+    {
+      "Id": "particle-heat",
+      "Name": "Heat Distortion Particles",
+      "Type": 0,
+      "IsActive": true,
+      "Layer": 0,
+      "Position": { "X": 1.1, "Y": 0.2, "Z": 0 },
+      "Rotation": { "X": 0, "Y": 0, "Z": 0 },
+      "Scale": { "X": 1, "Y": 1, "Z": 1 },
+      "Components": [
+        { "TypeName": "ParticleSystem", "Fields": { "Enabled": "True", "PlayOnAwake": "True", "Loop": "True", "MaxParticles": "256", "Duration": "5", "StartLifetime": "1.2", "StartSpeed": "0.7", "StartSize": "0.45", "EmissionRate": "35", "Shape": "Cone", "RendererMode": "Billboard", "DistortionEnabled": "True", "DistortionStrength": "0.035", "RefractionStrength": "0.02" } }
+      ],
+      "Children": []
+    }
+  ]
+}

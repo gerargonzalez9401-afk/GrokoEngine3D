@@ -670,8 +670,10 @@ internal sealed partial class ImGuiEditorApp
     
 
 
+    // Materiales incluidos: su esfera PBR se cocina una vez y queda en Library/Previews;
+    // en cargas siguientes solo se valida la fecha del cache (barato).
     private static bool ShouldPrewarmPreviewAtLoad(string path) =>
-        MaterialAsset.IsTexturePath(path);
+        MaterialAsset.IsTexturePath(path) || MaterialAsset.IsMaterialPath(path);
 
     
 
@@ -736,7 +738,9 @@ internal sealed partial class ImGuiEditorApp
 
         try
         {
-            using var source = System.Drawing.Image.FromFile(albedoPath);
+            using var source = EditorImageLoader.LoadBitmap(albedoPath);
+            if (source == null)
+                return null;
 
             float scale = Math.Min(
                 (float)maxSize / source.Width,
@@ -993,11 +997,13 @@ internal sealed partial class ImGuiEditorApp
             return false;
 
         // Archivos internos del editor (proyecto/solución de scripts generados por
-        // el ScriptCompiler). Existen en disco pero no se muestran en el panel Project.
+        // el ScriptCompiler) y sidecars de importación. Existen en disco pero no se
+        // muestran en el panel Project (como los .meta de Unity).
         string ext = Path.GetExtension(name);
         if (string.Equals(ext, ".csproj", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(ext, ".sln", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(ext, ".user", StringComparison.OrdinalIgnoreCase))
+            string.Equals(ext, ".user", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(ext, ".import", StringComparison.OrdinalIgnoreCase))
             return false;
 
         return true;

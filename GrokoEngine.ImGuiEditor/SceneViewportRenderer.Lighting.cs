@@ -60,16 +60,26 @@ internal sealed partial class SceneViewportRenderer
 
         _framePointLights.Clear();
         CollectComponents(objects, _framePointLights, int.MaxValue);
-        TrimLightsByImportance(_framePointLights, MaxPointLights, cameraPosition, l => l.Intensity, l => l.Range);
+        bool highLightBudget = RenderingPath == RendererRenderingPath.ForwardPlus || RenderingPath == RendererRenderingPath.Deferred;
+        int pointBudget = highLightBudget ? MaxPointLights : Math.Min(4, MaxPointLights);
+        int spotBudget = highLightBudget ? MaxSpotLights : Math.Min(2, MaxSpotLights);
+        int areaBudget = highLightBudget ? MaxAreaLights : Math.Min(2, MaxAreaLights);
+        TrimLightsByImportance(_framePointLights, pointBudget, cameraPosition, l => l.Intensity, l => l.Range);
         _frameSpotLights.Clear();
         CollectComponents(objects, _frameSpotLights, int.MaxValue);
-        TrimLightsByImportance(_frameSpotLights, MaxSpotLights, cameraPosition, l => l.Intensity, l => l.Range);
+        TrimLightsByImportance(_frameSpotLights, spotBudget, cameraPosition, l => l.Intensity, l => l.Range);
         _frameAreaLights.Clear();
         CollectComponents(objects, _frameAreaLights, int.MaxValue);
-        TrimLightsByImportance(_frameAreaLights, MaxAreaLights, cameraPosition, l => l.Intensity, l => l.Range);
+        TrimLightsByImportance(_frameAreaLights, areaBudget, cameraPosition, l => l.Intensity, l => l.Range);
         _frameRectLights.Clear();
         CollectComponents(objects, _frameRectLights, int.MaxValue);
-        TrimLightsByImportance(_frameRectLights, Math.Max(0, MaxAreaLights - _frameAreaLights.Count), cameraPosition, l => l.Intensity, l => l.Range);
+        TrimLightsByImportance(_frameRectLights, Math.Max(0, areaBudget - _frameAreaLights.Count), cameraPosition, l => l.Intensity, l => l.Range);
+        _frameReflectionProbes.Clear();
+        // Durante el BAKE de un probe no se recolectan probes: así la captura no incluye reflejos
+        // de probes (ni del propio probe reflejándose a sí mismo). Sin esto, cada re-bake captura
+        // el reflejo anterior y se degrada hasta perderse (recursión), como evita Unity.
+        if (!SuppressReflectionProbes)
+            CollectComponents(objects, _frameReflectionProbes, int.MaxValue);
     }
 
     private void ApplySceneLighting(IReadOnlyList<GameObject> objects, Vector3 cameraPosition)
@@ -101,7 +111,7 @@ internal sealed partial class SceneViewportRenderer
         // IBL pro seguro: diffuse irradiance + reflections controladas por material.
         // El shader suaviza automaticamente el specular cuando hay normal maps para
         // evitar artefactos blancos en bordes y costuras.
-        GL.Uniform1(uUseIBL, ImageBasedLighting && IblDiffuseStrength > 0.0001f ? 1 : 0);
+        GL.Uniform1(uUseIBL, ImageBasedLighting ? 1 : 0);
         GL.Uniform1(uIblDiffuseStrength, Math.Clamp(IblDiffuseStrength, 0f, 1.5f));
         GL.Uniform1(uIblSpecularStrength, Math.Clamp(IblSpecularStrength, 0f, 0.35f));
         GL.ActiveTexture(TextureUnit.Texture9);
@@ -109,6 +119,7 @@ internal sealed partial class SceneViewportRenderer
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.Uniform1(uBrdfLut, 9);
         GL.Uniform1(uHasBrdfLut, _brdfLutTexture != 0 ? 1 : 0);
+        ApplyActiveReflectionProbe(cameraPosition);
         // HDRI de entorno en la unidad 7 (libre: 0-6 las usan albedo/sombras/mapas).
         if (_envLoaded)
         {
@@ -204,6 +215,80 @@ internal sealed partial class SceneViewportRenderer
         {
             if (areaIndex >= MaxAreaLights) break;
             UploadAreaLight(areaIndex++, rect.gameObject, rect.R, rect.G, rect.B, rect.Intensity, rect.Range, rect.Width, rect.Height);
+        }
+    }
+
+    private void ApplyActiveReflectionProbe(Vector3 cameraPosition)
+    {
+        _activeReflectionProbeCubemapPath = null;
+        _activeReflectionProbeTexture = 0;
+        _activeReflectionProbeMaxLod = 0f;
+
+        ReflectionProbe? best = null;
+        Vector3 bestCenter = Vector3.Zero;
+        Vector3 bestHalfSize = Vector3.One;
+        float bestScore = float.NegativeInfinity;
+
+        foreach (var probe in _frameReflectionProbes)
+        {
+            if (probe == null || !probe.Enabled || probe.gameObject == null)
+                continue;
+
+            string path = probe.EffectiveCubemapPath;
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+
+            var probePos = ComputeWorldPosition(probe.gameObject);
+            var center = new Vector3(probePos.X + probe.CenterX, probePos.Y + probe.CenterY, probePos.Z + probe.CenterZ);
+            var half = new Vector3(
+                MathF.Max(0.01f, probe.SizeX) * 0.5f,
+                MathF.Max(0.01f, probe.SizeY) * 0.5f,
+                MathF.Max(0.01f, probe.SizeZ) * 0.5f);
+
+            // Primera version pro: un probe activo por frame. Se prioriza el probe de
+            // mayor Importance y, en empate, el mas cercano a la camara. La influencia
+            // visual NO es global: el shader la calcula por pixel dentro del volumen.
+            float distance = (cameraPosition - center).Length;
+            float priority = probe.Importance * 1000f;
+            float score = priority - distance * 0.01f;
+            if (score > bestScore)
+            {
+                best = probe;
+                bestCenter = center;
+                bestHalfSize = half;
+                bestScore = score;
+            }
+        }
+
+        if (best != null && TryGetReflectionProbeCubeTexture(best.EffectiveCubemapPath, out int tex, out float maxLod))
+        {
+            _activeReflectionProbeCubemapPath = NormalizeExistingAssetPath(best.EffectiveCubemapPath) ?? best.EffectiveCubemapPath;
+            _activeReflectionProbeTexture = tex;
+            _activeReflectionProbeMaxLod = maxLod;
+
+            GL.ActiveTexture(TextureUnit.Texture10);
+            GL.BindTexture(TextureTarget.TextureCubeMap, tex);
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.Uniform1(uActiveReflectionProbeMap, 10);
+            GL.Uniform1(uHasActiveReflectionProbeMap, 1);
+            GL.Uniform1(uActiveReflectionProbeMaxLod, maxLod);
+            GL.Uniform3(uActiveReflectionProbeCenter, bestCenter);
+            GL.Uniform3(uActiveReflectionProbeHalfSize, bestHalfSize);
+            GL.Uniform1(uActiveReflectionProbeBlendDistance, MathF.Max(0.001f, best.BlendDistance));
+            GL.Uniform1(uActiveReflectionProbeIntensity, Math.Clamp(best.Intensity, 0f, 2f));
+        }
+        else
+        {
+            GL.ActiveTexture(TextureUnit.Texture10);
+            GL.BindTexture(TextureTarget.TextureCubeMap, 0);
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.Uniform1(uActiveReflectionProbeMap, 10);
+            GL.Uniform1(uHasActiveReflectionProbeMap, 0);
+            GL.Uniform1(uActiveReflectionProbeMaxLod, 0f);
+            GL.Uniform3(uActiveReflectionProbeCenter, Vector3.Zero);
+            GL.Uniform3(uActiveReflectionProbeHalfSize, Vector3.One);
+            GL.Uniform1(uActiveReflectionProbeBlendDistance, 0.001f);
+            GL.Uniform1(uActiveReflectionProbeIntensity, 0f);
         }
     }
 

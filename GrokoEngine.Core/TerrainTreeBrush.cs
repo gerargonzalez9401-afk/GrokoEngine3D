@@ -19,7 +19,7 @@ namespace GrokoEngine
         // llamada a Paint (O(N) en el peor caso) y cada candidato solo mira su celda + las 8
         // vecinas (O(1) amortizado), sin importar cuántos arboles haya en el resto del terreno.
         public static bool Paint(Terrain terrain, int prototypeIndex, float localX, float localZ, float radius,
-            float density, float deltaTime, Random rng,
+            float density, float deltaTime, System.Random rng,
             float minScale = 0.85f, float maxScale = 1.15f, float minSpacing = 0.5f)
         {
             if (terrain == null || rng == null) return false;
