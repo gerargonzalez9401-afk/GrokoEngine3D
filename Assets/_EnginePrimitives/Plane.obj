@@ -1,0 +1,24 @@
+# GrokoEngine built-in primitive mesh
+o Plane
+g Plane
+usemtl Default
+v -0.5 0 -0.5
+v -0.5 0 0.5
+v 0.5 0 0.5
+v -0.5 0 -0.5
+v 0.5 0 0.5
+v 0.5 0 -0.5
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 0
+vt 1 1
+vt 0 1
+vn 0 1 0
+vn 0 1 0
+vn 0 1 0
+vn 0 1 0
+vn 0 1 0
+vn 0 1 0
+f 1/1/1 2/2/2 3/3/3
+f 4/4/4 5/5/5 6/6/6

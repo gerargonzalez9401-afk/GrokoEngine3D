@@ -167,7 +167,7 @@ namespace GrokoEngine
         public static void Save(string path, AvatarData data)
         {
             data.Normalize();
-            try { File.WriteAllText(path, JsonSerializer.Serialize(data, Options)); }
+            try { AtomicFile.WriteAllText(path, JsonSerializer.Serialize(data, Options)); }
             catch (Exception ex)
             {
                 Debug.LogWarning($"[AvatarAsset] No se pudo guardar '{path}': {ex.Message}");

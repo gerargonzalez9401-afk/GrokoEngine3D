@@ -39,8 +39,9 @@ internal sealed partial class SceneViewportRenderer
     {
         EnsureProbePrefilterResources();
 
-        // mip0 a resolución alta (512) → el reflejo liso queda NÍTIDO. RGBA16F a 512 pesa menos que
-        // el RGBA8 a 1024 del box previo, así que no hay coste extra de memoria.
+        // RGBA16F es un target de framebuffer HDR ampliamente compatible. Aunque el probe no
+        // usa alpha, mantenerlo evita fallos de bake en drivers que no soportan R11G11B10F como
+        // attachment de color para esta ruta de prefiltrado.
         int baseSize = Math.Clamp(srcSize, 8, 512);
         int mipCount = Math.Clamp((int)MathF.Floor(MathF.Log2(baseSize)) + 1, 1, 7);
         maxLod = mipCount - 1;

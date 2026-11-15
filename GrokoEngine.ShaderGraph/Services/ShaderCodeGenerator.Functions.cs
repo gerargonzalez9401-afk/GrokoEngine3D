@@ -39,7 +39,8 @@ public sealed partial class ShaderCodeGenerator
                 if (i >= u_CascadeCount) break;
                 if (viewDistance <= u_CascadeSplit[i]) { cascade = i; break; }
             }
-            vec4 lightPos = vec4(v_WorldPos, 1.0) * u_CascadeLightMvp[cascade];
+            vec3 biasedPos = v_WorldPos + N * (u_ShadowNormalBias * (0.02 + 0.03 * float(cascade)));
+            vec4 lightPos = vec4(biasedPos, 1.0) * u_CascadeLightMvp[cascade];
             vec3 proj = lightPos.xyz / max(lightPos.w, 0.0001);
             proj = proj * 0.5 + 0.5;
             if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0) return 1.0;

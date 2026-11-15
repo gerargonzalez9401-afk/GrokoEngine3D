@@ -16,6 +16,29 @@ internal static class Program
         EditorDiagnostics.InstallGlobalExceptionHandlers();
         EditorDiagnostics.Log("Editor process starting.");
 
+        if (args.Length == 1 && string.Equals(args[0], "--open-directional-shadow-scene", StringComparison.OrdinalIgnoreCase))
+            args = new[] { DirectionalShadowVisualScene.CreateProject() };
+
+        if (args.Length == 1 && (string.Equals(args[0], "--gpu-visual-smoke", StringComparison.OrdinalIgnoreCase) || string.Equals(args[0], "--update-gpu-visual-baselines", StringComparison.OrdinalIgnoreCase)))
+        {
+            Environment.ExitCode = GpuVisualRegression.Run(updateBaselines: string.Equals(args[0], "--update-gpu-visual-baselines", StringComparison.OrdinalIgnoreCase));
+            return;
+        }
+
+        // Diagnóstico reproducible de una escena real: fuerza Forward+ pero conserva
+        // geometría, lightmaps, luces, postproceso y cámara del proyecto indicado.
+        if (args.Length == 2 && string.Equals(args[0], "--gpu-scene-forward-plus", StringComparison.OrdinalIgnoreCase))
+        {
+            Environment.ExitCode = GpuVisualRegression.RunForwardPlusProjectScene(args[1]);
+            return;
+        }
+
+        if (args.Length == 2 && string.Equals(args[0], "--gpu-scene-deferred", StringComparison.OrdinalIgnoreCase))
+        {
+            Environment.ExitCode = GpuVisualRegression.RunDeferredProjectScene(args[1]);
+            return;
+        }
+
         // ── Game Mode ──
         // Si hay un game.json junto al ejecutable, este binario ES un juego exportado:
         // arranca a pantalla completa en Play Mode, sin UI de editor ni splash.
@@ -115,7 +138,7 @@ internal static class Program
     {
         try
         {
-            File.WriteAllText(Path.Combine(AppContext.BaseDirectory, ".last_project"), Path.GetFullPath(projectPath));
+            AtomicFile.WriteAllText(Path.Combine(AppContext.BaseDirectory, ".last_project"), Path.GetFullPath(projectPath));
         }
         catch (Exception ex)
         {

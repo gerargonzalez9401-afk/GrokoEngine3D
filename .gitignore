@@ -10,6 +10,11 @@ obj/
 TestResults/
 *.log
 publish/
+build/
+.build/
+GrokoEngine.VST3/build/
+GeneratedVST3/
+GrokoEngine.VSTDesigner/GeneratedVST3/
 
 GrokoEngine/Assets/bin/
 GrokoEngine/Assets/obj/

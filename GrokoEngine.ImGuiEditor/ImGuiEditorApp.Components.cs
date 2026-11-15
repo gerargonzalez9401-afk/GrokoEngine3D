@@ -34,7 +34,7 @@ internal sealed partial class ImGuiEditorApp
 {
     private static int particleGradientSelectedKey = 1;
 
-    // Opciones de creaciÃ³n de objetos. parent == null â†’ crea en la raÃ­z; si no, como hijo de parent.
+    // Opciones de creación de objetos. parent == null → crea en la raíz; si no, como hijo de parent.
     private void DrawObjectCreationMenu(GameObject? parent)
     {
         if (ImGui.MenuItem("Create Empty"))
@@ -72,7 +72,7 @@ internal sealed partial class ImGuiEditorApp
         if (ImGui.BeginMenu("UI"))
         {
             // Crean el GameObject ya con su componente (estilo Unity).
-            // Si no existe Canvas, se crea automÃ¡ticamente.
+            // Si no existe Canvas, se crea automáticamente.
             if (ImGui.MenuItem("Canvas")) CreateCanvas();
             ImGui.Separator();
             if (ImGui.MenuItem("Panel")) CreateUIElement<UIPanel>("Panel");
@@ -386,7 +386,7 @@ internal sealed partial class ImGuiEditorApp
 
         CommitSceneMutation("Reparent " + obj.Name, () =>
         {
-            // Preserva la posiciÃ³n de MUNDO al emparentar (como Unity), para que no "salte".
+            // Preserva la posición de MUNDO al emparentar (como Unity), para que no "salte".
             var worldPos = obj.Position;
             sceneGraph.Attach(obj, newParent, targetIndex);
             obj.Position = worldPos;
@@ -479,7 +479,7 @@ internal sealed partial class ImGuiEditorApp
     
 
 
-    // â”€â”€ Lightmap Baking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Lightmap Baking ───────────────────────────────────────────
     
 
 
@@ -1170,6 +1170,16 @@ internal sealed partial class ImGuiEditorApp
                             SaveMaterialComponentToAsset(mat);
                         });
                         EndMaterialEdit(obj, mat);
+                        float subsurface = mat.SubsurfaceScattering;
+                        if (DrawUnitySliderFloat("Subsurface / Fabric##matsubsurface", ref subsurface, 0f, 1f))
+                        {
+                            BeginMaterialEdit(obj);
+                            mat.SubsurfaceScattering = Math.Clamp(subsurface, 0f, 1f);
+                            sceneRenderer.InvalidateStaticBatch();
+                            SaveMaterialComponentToAsset(mat);
+                        }
+                        EndMaterialEdit(obj, mat);
+                        ImGui.TextDisabled("Luz suave de contra para personajes/tela. 0 = PBR estandar; prueba 0.08-0.22.");
                         ImGui.Dummy(new Vector2(0f, 3f));
                     }
                     if (!hasShaderGraph && SectionHeader("Emission"))
@@ -1203,13 +1213,13 @@ internal sealed partial class ImGuiEditorApp
                         ImGui.PopStyleVar();
                     }
                     if (terrain.Resolution > 1025)
-                        ImGui.TextDisabled("Resoluciones altas (2049) cuestan mÃ¡s memoria y un pequeÃ±o hitch al cargar/deshacer (re-subida completa del heightmap); esculpir sigue siendo fluido (solo se sube la regiÃ³n tocada).");
+                        ImGui.TextDisabled("Resoluciones altas (2049) cuestan más memoria y un pequeño hitch al cargar/deshacer (re-subida completa del heightmap); esculpir sigue siendo fluido (solo se sube la región tocada).");
                     DrawFloat("Size X", terrain.SizeX, v => { terrain.SizeX = v; terrain.Version++; }, 0.1f, 1f, 10000f);
                     DrawFloat("Size Z", terrain.SizeZ, v => { terrain.SizeZ = v; terrain.Version++; }, 0.1f, 1f, 10000f);
                     DrawFloat("Height Scale", terrain.HeightScale, v => { terrain.HeightScale = v; terrain.Version++; }, 0.1f, 0f, 1000f);
 
                     DrawFloat("LOD Detail", terrain.LodDetailBalance, v => terrain.LodDetailBalance = Math.Clamp(v, 0.25f, 4f), 0.05f, 0.25f, 4f);
-                    ImGui.TextDisabled(">1 = mÃ¡s detalle de malla a mÃ¡s distancia (mÃ¡s triÃ¡ngulos); <1 = LOD mÃ¡s agresivo (mÃ¡s FPS).");
+                    ImGui.TextDisabled(">1 = más detalle de malla a más distancia (más triángulos); <1 = LOD más agresivo (más FPS).");
                     DrawCheckRow("Draw Skirts", terrain.DrawSkirts, v => terrain.DrawSkirts = v);
                     ImGui.TextDisabled("Faldas en el borde de los tiles LOD que tapan cualquier grieta residual entre terrenos vecinos.");
 
@@ -1221,7 +1231,7 @@ internal sealed partial class ImGuiEditorApp
                     FieldRow("");
                     if (ImGui.Button("Auto-Connect Neighbors##terrainNeighbors", new Vector2(-1f, 0f)))
                         AutoConnectTerrainNeighbors(terrain.gameObject, terrain);
-                    ImGui.TextDisabled("Busca otros Terrain del mismo tamaÃ±o pegados exactamente a cada lado (misma Size X/Z) y los conecta como vecinos, para eliminar la costura de iluminaciÃ³n en el borde compartido.");
+                    ImGui.TextDisabled("Busca otros Terrain del mismo tamaño pegados exactamente a cada lado (misma Size X/Z) y los conecta como vecinos, para eliminar la costura de iluminación en el borde compartido.");
 
                     FieldRow("");
                     ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.10f, 0.10f, 0.11f, 1f));
@@ -1242,7 +1252,7 @@ internal sealed partial class ImGuiEditorApp
                         }
                         ImGui.EndDragDropTarget();
                     }
-                    ImGui.TextDisabled("Reemplaza todo el heightmap: negro = mÃ¡s bajo, blanco = mÃ¡s alto. ArrastrÃ¡ una imagen en escala de grises acÃ¡, o hacÃ© clic para elegir un archivo.");
+                    ImGui.TextDisabled("Reemplaza todo el heightmap: negro = más bajo, blanco = más alto. Arrastrá una imagen en escala de grises acá, o hacé clic para elegir un archivo.");
 
                     // Fila de iconos estilo Unity: un solo toolbar arriba en vez de "Edit Mode" +
                     // "Sculpt Tool" como dos filas separadas. Elegir un icono de sculpt implica
@@ -1283,7 +1293,7 @@ internal sealed partial class ImGuiEditorApp
                     {
                         TerrainEditMode.Sculpt => SculptToolTooltip(terrainBrushTool),
                         TerrainEditMode.Paint => "Pintar capas de textura.",
-                        TerrainEditMode.Trees => "Click para plantar Ã¡rboles. Shift+Click para borrarlos.",
+                        TerrainEditMode.Trees => "Click para plantar árboles. Shift+Click para borrarlos.",
                         _ => "Click para pintar pasto/detalles. Shift+Click para borrarlos."
                     });
 
@@ -1320,19 +1330,19 @@ internal sealed partial class ImGuiEditorApp
                         }
 
                         DrawFloat("Blend Sharpness", terrain.BlendSharpness, v => terrain.BlendSharpness = Math.Clamp(v, 0f, 1f), 0.01f, 0f, 1f);
-                        ImGui.TextDisabled("0 = mezcla lineal clÃ¡sica entre capas; 1 = transiciÃ³n dura donde \"gana\" la textura con mÃ¡s relieve aparente (height-based blending).");
+                        ImGui.TextDisabled("0 = mezcla lineal clásica entre capas; 1 = transición dura donde \"gana\" la textura con más relieve aparente (height-based blending).");
                         DrawCheckRow("Triplanar Slopes", terrain.TriplanarSteepSlopes, v => terrain.TriplanarSteepSlopes = v);
-                        ImGui.TextDisabled("ProyecciÃ³n triplanar en pendientes empinadas: evita el estirado de textura en paredes. Cuesta fetches extra donde se activa.");
+                        ImGui.TextDisabled("Proyección triplanar en pendientes empinadas: evita el estirado de textura en paredes. Cuesta fetches extra donde se activa.");
                         DrawFloat("Anti-Tiling Dist", terrain.DetailTilingBreakupDistance, v => terrain.DetailTilingBreakupDistance = Math.Max(0f, v), 1f, 0f, 2000f);
-                        ImGui.TextDisabled("A partir de esta distancia cada capa se mezcla consigo misma a otra escala para romper la repeticiÃ³n visible. 0 = desactivado.");
+                        ImGui.TextDisabled("A partir de esta distancia cada capa se mezcla consigo misma a otra escala para romper la repetición visible. 0 = desactivado.");
                     }
                     else if (terrainEditMode == TerrainEditMode.Trees)
                     {
                         DrawTerrainTreePrototypeList(terrain);
                         DrawFloat("Tree Distance", terrain.TreeDistance, v => terrain.TreeDistance = Math.Max(1f, v), 1f, 1f, 20000f);
-                        ImGui.TextDisabled("MÃ¡s allÃ¡ de esta distancia un Ã¡rbol ni se dibuja (ni malla ni billboard).");
+                        ImGui.TextDisabled("Más allá de esta distancia un árbol ni se dibuja (ni malla ni billboard).");
                         DrawFloat("Billboard Start", terrain.BillboardStart, v => terrain.BillboardStart = Math.Max(0f, v), 1f, 0f, 20000f);
-                        ImGui.TextDisabled("MÃ¡s allÃ¡ de esta distancia, un Ã¡rbol se dibuja como billboard (quad plano) en vez de malla 3D.");
+                        ImGui.TextDisabled("Más allá de esta distancia, un árbol se dibuja como billboard (quad plano) en vez de malla 3D.");
                         {
                             int maxMeshTrees = terrain.MaxMeshTrees;
                             FieldRow("Max Mesh Trees");
@@ -1341,7 +1351,7 @@ internal sealed partial class ImGuiEditorApp
                                 terrain.MaxMeshTrees = Math.Max(0, maxMeshTrees);
                             ImGui.PopStyleVar();
                         }
-                        ImGui.TextDisabled("Si hay mÃ¡s Ã¡rboles dentro de rango que este nÃºmero, los que sobran (los mÃ¡s lejos de cÃ¡mara) tambiÃ©n se dibujan como billboard.");
+                        ImGui.TextDisabled("Si hay más árboles dentro de rango que este número, los que sobran (los más lejos de cámara) también se dibujan como billboard.");
                         DrawFloat("Tree Cell Size", terrain.TreeCellSize, v => terrain.TreeCellSize = Math.Max(1f, v), 1f, 1f, 512f);
                         ImGui.TextDisabled("Tamaño de celda para agrupar árboles del Terrain; celdas grandes reducen overhead, celdas pequeñas dan mejor culling/debug.");
                     }
@@ -1349,9 +1359,9 @@ internal sealed partial class ImGuiEditorApp
                     {
                         DrawTerrainDetailPrototypeList(terrain);
                         DrawFloat("Detail Distance", terrain.DetailDistance, v => terrain.DetailDistance = Math.Max(1f, v), 1f, 1f, 5000f);
-                        ImGui.TextDisabled("MÃ¡s allÃ¡ de esta distancia, el pasto no se dibuja.");
+                        ImGui.TextDisabled("Más allá de esta distancia, el pasto no se dibuja.");
                         DrawFloat("Density Scale", terrain.DetailDensityScale, v => terrain.DetailDensityScale = Math.Clamp(v, 0f, 1f), 0.05f, 0f, 1f);
-                        ImGui.TextDisabled("Reduce cuÃ¡nto del pasto plantado se dibuja de verdad (sin borrar lo pintado) â€” Ãºtil para bajar carga sin repintar todo.");
+                        ImGui.TextDisabled("Reduce cuánto del pasto plantado se dibuja de verdad (sin borrar lo pintado) — útil para bajar carga sin repintar todo.");
                         ImGui.TextDisabled($"Tope: {Terrain.MaxDetailInstances} detalles por Terrain.");
                     }
 
@@ -1393,8 +1403,13 @@ internal sealed partial class ImGuiEditorApp
                     DrawFbxAnimationInfo(mf.MeshPath);
                     break;
                 case DirectionalLight dl:
-                    DrawVector3("Direction", dl.Direction, v => dl.Direction = v, 0.05f);
+                    DrawCheckRow("Use Transform Rotation", dl.UseTransformRotation, v => dl.UseTransformRotation = v);
+                    ImGui.TextDisabled(dl.UseTransformRotation
+                        ? "Rotate the GameObject to aim the sun. Direction is local."
+                        : "Direction is interpreted as a world-space vector.");
+                    DrawVector3(dl.UseTransformRotation ? "Local Direction" : "Direction", dl.Direction, v => dl.Direction = v, 0.05f);
                     DrawLightColor(dl.R, dl.G, dl.B, (r, g, b) => { dl.R = r; dl.G = g; dl.B = b; });
+                    DrawEnumCombo("Mode", dl.Mode, v => dl.Mode = v);
                     DrawFloat("Intensity", dl.Intensity, v => dl.Intensity = v, 0.05f, 0f, 100f);
                     DrawCheckRow("Use Temperature", dl.UseTemperature, v => dl.UseTemperature = v);
                     if (dl.UseTemperature)
@@ -1415,10 +1430,17 @@ internal sealed partial class ImGuiEditorApp
                     DrawFloat("Turbidity (Procedural Sky)", dl.Turbidity, v => dl.Turbidity = v, 0.05f, 1f, 15f);
                     DrawFloat("Sky Exposure (Procedural Sky)", dl.SkyExposure, v => dl.SkyExposure = v, 0.02f, 0f, 8f);
                     DrawCheckRow("Shadows", dl.Shadows, v => dl.Shadows = v);
-                    DrawFloat("Shadow Strength", dl.ShadowStrength, v => dl.ShadowStrength = v, 0.01f, 0f, 1f);
+                    if (dl.Shadows)
+                    {
+                        DrawFloat("Shadow Strength", dl.ShadowStrength, v => dl.ShadowStrength = v, 0.01f, 0f, 1f);
+                        DrawFloat("Bias", dl.ShadowBias, v => dl.ShadowBias = v, 0.005f, 0f, 2f);
+                        DrawFloat("Normal Bias", dl.ShadowNormalBias, v => dl.ShadowNormalBias = v, 0.01f, 0f, 3f);
+                        DrawFloat("Shadow Near Plane", dl.ShadowNearPlane, v => dl.ShadowNearPlane = v, 0.01f, 0.01f, 10f);
+                    }
                     break;
                 case PointLight pl:
                     DrawLightColor(pl.R, pl.G, pl.B, (r, g, b) => { pl.R = r; pl.G = g; pl.B = b; });
+                    DrawEnumCombo("Mode", pl.Mode, v => pl.Mode = v);
                     DrawFloat("Intensity", pl.Intensity, v => pl.Intensity = v, 0.05f, 0f, 100f);
                     DrawCheckRow("Use Temperature", pl.UseTemperature, v => pl.UseTemperature = v);
                     if (pl.UseTemperature)
@@ -1431,6 +1453,7 @@ internal sealed partial class ImGuiEditorApp
                 case SpotLight sl:
                     DrawVector3("Direction", sl.Direction, v => sl.Direction = v, 0.05f);
                     DrawLightColor(sl.R, sl.G, sl.B, (r, g, b) => { sl.R = r; sl.G = g; sl.B = b; });
+                    DrawEnumCombo("Mode", sl.Mode, v => sl.Mode = v);
                     DrawFloat("Intensity", sl.Intensity, v => sl.Intensity = v, 0.05f, 0f, 100f);
                     DrawCheckRow("Use Temperature", sl.UseTemperature, v => sl.UseTemperature = v);
                     if (sl.UseTemperature)
@@ -1465,6 +1488,14 @@ internal sealed partial class ImGuiEditorApp
                     {
                         DrawCheckRow("Enabled", pp.PostProcessEnabled, v => pp.PostProcessEnabled = v);
                         DrawFloat("Exposure", pp.Exposure, v => pp.Exposure = v, 0.01f, 0f, 100f);
+                        DrawCheckRow("Auto Exposure", pp.AutoExposure, v => pp.AutoExposure = v);
+                        if (pp.AutoExposure)
+                        {
+                            DrawFloat("Min EV", pp.AutoExposureMinEV, v => pp.AutoExposureMinEV = Math.Clamp(v, -12f, 12f), 0.1f, -12f, 12f);
+                            DrawFloat("Max EV", pp.AutoExposureMaxEV, v => pp.AutoExposureMaxEV = Math.Clamp(v, pp.AutoExposureMinEV, 12f), 0.1f, -12f, 12f);
+                            DrawFloat("Compensation EV", pp.AutoExposureCompensation, v => pp.AutoExposureCompensation = Math.Clamp(v, -8f, 8f), 0.1f, -8f, 8f);
+                            DrawFloat("Adaptation Speed", pp.AutoExposureAdaptationSpeed, v => pp.AutoExposureAdaptationSpeed = Math.Clamp(v, 0.05f, 12f), 0.05f, 0.05f, 12f);
+                        }
                         DrawFloat("Gamma", pp.Gamma, v => pp.Gamma = v, 0.01f, 0.01f, 10f);
                         DrawCheckRow("Tone Mapping", pp.ToneMapping, v => pp.ToneMapping = v);
                         DrawCheckRow("AgX (en vez de ACES)", pp.ToneMappingMode == 1, v => pp.ToneMappingMode = v ? 1 : 0);
@@ -1543,7 +1574,15 @@ internal sealed partial class ImGuiEditorApp
                         var fogColor = new System.Numerics.Vector3(pp.FogR, pp.FogG, pp.FogB);
                         FieldRow("Fog Color");
                         if (ColorField("##fogcolor", ref fogColor)) { pp.FogR = fogColor.X; pp.FogG = fogColor.Y; pp.FogB = fogColor.Z; }
+                        DrawFloat("Fog Height", pp.FogHeight, v => pp.FogHeight = v, 0.1f, -1000f, 1000f);
+                        DrawFloat("Height Falloff", pp.FogHeightFalloff, v => pp.FogHeightFalloff = Math.Clamp(v, 0f, 4f), 0.01f, 0f, 4f);
                         DrawFloat("Volumetric Light", pp.VolumetricLightStrength, v => pp.VolumetricLightStrength = v, 0.01f, 0f, 10f);
+                        DrawCheckRow("Screen Space GI (Deferred)", pp.ScreenSpaceGlobalIllumination, v => pp.ScreenSpaceGlobalIllumination = v);
+                        if (pp.ScreenSpaceGlobalIllumination)
+                        {
+                            DrawFloat("SSGI Intensity", pp.ScreenSpaceGiIntensity, v => pp.ScreenSpaceGiIntensity = Math.Clamp(v, 0f, 2f), 0.01f, 0f, 2f);
+                            DrawFloat("SSGI Radius", pp.ScreenSpaceGiRadius, v => pp.ScreenSpaceGiRadius = Math.Clamp(v, 0.1f, 8f), 0.05f, 0.1f, 8f);
+                        }
                     }
                     break;
                 case Canvas canvas:
@@ -1551,7 +1590,7 @@ internal sealed partial class ImGuiEditorApp
                     break;
                 case UIImage uiImg:
                 {
-                    // Inspector rÃ©plica del Image de Unity (Canvas Renderer + Image).
+                    // Inspector réplica del Image de Unity (Canvas Renderer + Image).
                     // El "Rect Transform" se dibuja arriba, en lugar del Transform normal (DrawTransform).
                     if (Section("Canvas Renderer"))
                     {
@@ -1581,7 +1620,7 @@ internal sealed partial class ImGuiEditorApp
                         ImGui.TreePop();
                     }
 
-                    // â”€â”€ Campos que aparecen al asignar una Source Image (como Unity) â”€â”€
+                    // ── Campos que aparecen al asignar una Source Image (como Unity) ──
                     if (!string.IsNullOrWhiteSpace(uiImg.SpritePath))
                     {
                         DrawComboRow("Image Type", new[] { "Simple", "Sliced", "Tiled", "Filled" }, uiImg.ImageType, v => uiImg.ImageType = v);
@@ -1707,7 +1746,7 @@ internal sealed partial class ImGuiEditorApp
                     break;
                 case Animator animator:
                 {
-                    // â”€â”€ Layout estilo Unity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                    // ── Layout estilo Unity ──────────────────────────────
                     DrawAssetSlot("Controller", animator.ControllerPath, "None (Animator Controller)",
                         path => { animator.ControllerPath = path; animator.InvalidateCache(); },
                         AnimatorControllerAsset.IsControllerPath);
@@ -1726,7 +1765,7 @@ internal sealed partial class ImGuiEditorApp
                     var skeletalClip = clip == null ? animator.CurrentSkeletalClip() : null;
                     var runtimeInfo = animator.GetRuntimeInfo();
 
-                    // â”€â”€ Caja de informaciÃ³n (estilo Unity) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                    // ── Caja de información (estilo Unity) ───────────────
                     int clipCount = controller?.ClipCount() ?? (string.IsNullOrWhiteSpace(animator.ClipPath) ? 0 : 1);
                     int kfCount = clip?.Keyframes.Count ?? 0;
                     int boneClipCount = GetInspectorAnimatorBoneClipCount(animator);
@@ -1762,10 +1801,10 @@ internal sealed partial class ImGuiEditorApp
                     if (Environment.TickCount != int.MinValue)
                         break;
 
-                    // â”€â”€ AsignaciÃ³n de clip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                    // ── Asignación de clip ───────────────────────────────
                     if (controller != null)
                     {
-                        // Puente prÃ¡ctico hasta el editor de state machine: el estado por defecto
+                        // Puente práctico hasta el editor de state machine: el estado por defecto
                         // del controller toma este clip para reproducirse.
                         var defState = controller.GetDefaultState();
                         DrawAssetSlot("Default Clip", defState?.ClipPath ?? "", "Drop .anim or FBX clip", path =>
@@ -1809,7 +1848,7 @@ internal sealed partial class ImGuiEditorApp
                                 bool sel = string.Equals(name, animator.CurrentClipName, StringComparison.OrdinalIgnoreCase);
                                 if (ImGui.Selectable($"{name}  ({c.Duration:0.00}s)", sel))
                                 {
-                                    // CrossFade suave si estÃ¡ reproduciendo; si no, cambio directo para previsualizar.
+                                    // CrossFade suave si está reproduciendo; si no, cambio directo para previsualizar.
                                     if (animator.IsPlaying || isPlaying)
                                         animator.CrossFade(name, animator.CrossFadeDuration);
                                     else
@@ -1826,7 +1865,7 @@ internal sealed partial class ImGuiEditorApp
                         DrawFloat("CrossFade (s)", animator.CrossFadeDuration, v => animator.CrossFadeDuration = MathF.Max(0f, v), 0.01f, 0f, 2f);
                     }
 
-                    // â”€â”€ ReproducciÃ³n / keyframes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                    // ── Reproducción / keyframes ─────────────────────────
                     string clipSavePath = animator.EffectiveClipPath();
                     if (clip != null && !string.IsNullOrWhiteSpace(clipSavePath))
                     {
@@ -1842,7 +1881,7 @@ internal sealed partial class ImGuiEditorApp
                             animator.Sample(0f);
                         }
                         ImGui.SameLine();
-                        ImGui.TextDisabled("Edita la timeline en Window â†’ Animation");
+                        ImGui.TextDisabled("Edita la timeline en Window → Animation");
 
                         float length = clip.Keyframes.Count > 0 ? clip.Keyframes[^1].Time : 0f;
                         DrawFloat("Time", animator.Time, v =>
@@ -1898,7 +1937,7 @@ internal sealed partial class ImGuiEditorApp
                     break;
 
                 default:
-                    // Editor genÃ©rico para componentes propios nuevos (UI Layout, Toggle, Slider, etc.).
+                    // Editor genérico para componentes propios nuevos (UI Layout, Toggle, Slider, etc.).
                     DrawScriptFields(component);
                     break;
             }
@@ -2020,8 +2059,8 @@ internal sealed partial class ImGuiEditorApp
     
 
 
-    // Dibuja los campos pÃºblicos editables de un script del usuario (MonoBehaviour) por reflexiÃ³n.
-    // gameObject / HasStarted / Physics son propiedades, no campos, asÃ­ que no aparecen aquÃ­.
+    // Dibuja los campos públicos editables de un script del usuario (MonoBehaviour) por reflexión.
+    // gameObject / HasStarted / Physics son propiedades, no campos, así que no aparecen aquí.
     
 
 
@@ -2069,7 +2108,7 @@ internal sealed partial class ImGuiEditorApp
     
 
 
-    // Cuadro de presets de anclas (estilo Unity): botÃ³n + popup con la rejilla 3Ã—3 de puntos
+    // Cuadro de presets de anclas (estilo Unity): botón + popup con la rejilla 3×3 de puntos
     // y los presets de "stretch". Al elegir uno, fija AnchorMin/Max y Pivot y resetea Pos.
     private static readonly (string Label, float MinX, float MinY, float MaxX, float MaxY, float PivX, float PivY)[] AnchorPresets =
     {
@@ -2118,11 +2157,11 @@ internal sealed partial class ImGuiEditorApp
     
 
 
-    // Casilla de referencia estilo Unity: "None (Tipo)" + Ã­cono selector â—‰, con drag&drop.
+    // Casilla de referencia estilo Unity: "None (Tipo)" + ícono selector ◉, con drag&drop.
     // Los ScriptableObject se guardan como archivos .asset (JSON) independientes de la escena;
     // no pueden conservar referencias a GameObjects/Components/Transforms vivos (esos solo
-    // existen mientras la escena estÃ¡ cargada y no son serializables). Mostramos el campo
-    // deshabilitado con una explicaciÃ³n en lugar de permitir asignarlo (evitaba que el motor
+    // existen mientras la escena está cargada y no son serializables). Mostramos el campo
+    // deshabilitado con una explicación en lugar de permitir asignarlo (evitaba que el motor
     // se cerrara al intentar guardar el asset con esa referencia).
     private static void DrawUnsupportedAssetReferenceField(string fieldName, string typeName)
     {
@@ -2132,7 +2171,7 @@ internal sealed partial class ImGuiEditorApp
         ImGui.EndDisabled();
         DrawTooltip("Un ScriptableObject es un asset persistente: no puede guardar referencias " +
                     "a objetos de la escena (GameObject/Component/Transform), porque esos solo " +
-                    "existen mientras la escena estÃ¡ cargada. Usa este campo en un MonoBehaviour, " +
+                    "existen mientras la escena está cargada. Usa este campo en un MonoBehaviour, " +
                     "o referencia el asset desde el script de la escena.");
         ImGui.PopID();
     }
@@ -2170,7 +2209,7 @@ internal sealed partial class ImGuiEditorApp
                 hierarchyDragObjectId = null;
             }
 
-            // TambiÃ©n se puede arrastrar un PREFAB desde el panel de Assets (como en Unity):
+            // También se puede arrastrar un PREFAB desde el panel de Assets (como en Unity):
             // se carga una plantilla vinculada al .prefab (PrefabAssetPath) y se persiste
             // como @@prefab:<ruta> en la escena (ver SceneSerializer).
             bool assetDelivered = AcceptDragDropOnRelease("GROKO_ASSET");
@@ -2221,8 +2260,8 @@ internal sealed partial class ImGuiEditorApp
 
     // Slot para asignar un ASSET de prefab (".prefab" del proyecto) a un campo GameObject
     // de un ScriptableObject. A diferencia de DrawObjectSlot (que apunta a instancias vivas
-    // de la escena), aquÃ­ cada vez que se lee el asset se instancia una copia nueva del
-    // prefab â€” es lo que sÃ­ se puede persistir de forma segura en un asset independiente.
+    // de la escena), aquí cada vez que se lee el asset se instancia una copia nueva del
+    // prefab — es lo que sí se puede persistir de forma segura en un asset independiente.
     private void DrawPrefabAssetSlot(string id, Type fieldType, GameObject? current, Action<GameObject?> onAssign)
     {
         ImGui.PushID(id);
@@ -2306,7 +2345,7 @@ internal sealed partial class ImGuiEditorApp
         ImGui.EndPopup();
     }
 
-    // Dibuja el Ã­cono â—‰ (selector de objeto) sobre el Ãºltimo item.
+    // Dibuja el ícono ◉ (selector de objeto) sobre el último item.
     private static void DrawPickerIcon()
     {
         var min = ImGui.GetItemRectMin();
@@ -2574,6 +2613,8 @@ internal sealed partial class ImGuiEditorApp
         }
         if (ctrl && ImGui.IsKeyPressed(ImGuiKey.P))
             TogglePlayMode();
+        if (ctrl && shift && ImGui.IsKeyPressed(ImGuiKey.F))
+            AlignGameCameraToSceneView();
         if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Backslash) && selection.HasSelection)
         {
             var before = CaptureSceneState();
@@ -2588,7 +2629,7 @@ internal sealed partial class ImGuiEditorApp
             PushSceneState(targets.Count > 1 ? "Align Selected To Grid" : "Align To Grid " + targets[0].Name, before, CaptureSceneState());
             statusMessage = targets.Count > 1 ? $"Aligned {targets.Count} objects to grid" : "Aligned selected object to grid";
         }
-        if (ImGui.IsKeyPressed(ImGuiKey.F))
+        if (!ctrl && !shift && ImGui.IsKeyPressed(ImGuiKey.F))
         {
             if (selection.Selected.Count > 1) FrameSelection();
             else if (selected != null) FrameObject(selected);
@@ -2668,16 +2709,16 @@ internal sealed partial class ImGuiEditorApp
             set((T)Enum.ToObject(typeof(T), index));
     }
 
-    // Abre un diÃ¡logo de archivos nativo para elegir un HDRI (.hdr). Devuelve la
+    // Abre un diálogo de archivos nativo para elegir un HDRI (.hdr). Devuelve la
     // ruta elegida o null si se cancela. Corre en el hilo principal (STA), modal.
     
 
 
-    // CachÃ© de animaciones leÃ­das por modelo (clave = ruta, invalidado por fecha de escritura).
+    // Caché de animaciones leídas por modelo (clave = ruta, invalidado por fecha de escritura).
     private readonly Dictionary<string, (DateTime Stamp, List<ModelAnimationInfo> Anims)> fbxAnimCache = new(StringComparer.OrdinalIgnoreCase);
 
-    // CachÃ© SOLO para el Inspector: evita volver a parsear el FBX/OBJ del personaje
-    // cada frame cuando el Mesh Renderer estÃ¡ abierto. Seleccionar un personaje con
+    // Caché SOLO para el Inspector: evita volver a parsear el FBX/OBJ del personaje
+    // cada frame cuando el Mesh Renderer está abierto. Seleccionar un personaje con
     // muchas submallas antes disparaba ObjLoader.Load(...) dentro del Draw del Inspector.
     private readonly Dictionary<string, (DateTime Stamp, ParsedMesh Mesh)> inspectorParsedMeshCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -2734,24 +2775,24 @@ internal sealed partial class ImGuiEditorApp
     
 
 
-    // Cabecera de secciÃ³n colapsable estilo Unity (reemplaza a ImGui.SeparatorText en el inspector).
+    // Cabecera de sección colapsable estilo Unity (reemplaza a ImGui.SeparatorText en el inspector).
     // Abierta por defecto; ImGui recuerda el estado abierto/cerrado por su ID. Uso: if (Section("X")) { ... }
     private static bool Section(string label) =>
         ImGui.CollapsingHeader(label, ImGuiTreeNodeFlags.DefaultOpen);
 
-    // AÃ±ade un Mesh Renderer a los objetos renderizables (con MeshFilter o primitivas) que no lo tengan,
+    // Añade un Mesh Renderer a los objetos renderizables (con MeshFilter o primitivas) que no lo tengan,
     // para que TODOS los objetos lo muestren como en Unity. Idempotente.
     
 
 
     // Inspector del Mesh Renderer, replicando el de Unity (Materials + Lighting + Ray Tracing + Additional).
     // "Materials" es funcional (edita MaterialSlots del MeshFilter o el componente Material); el resto de
-    // secciones son de presentaciÃ³n (las sombras del motor son globales por ahora).
+    // secciones son de presentación (las sombras del motor son globales por ahora).
     
 
 
     // Asegura que cada sub-malla del modelo importado tenga un .mat asignado en MaterialSlots,
-    // creando uno automÃ¡ticamente (a partir del color/textura embebidos en el FBX/OBJ) si falta.
+    // creando uno automáticamente (a partir del color/textura embebidos en el FBX/OBJ) si falta.
     
 
 

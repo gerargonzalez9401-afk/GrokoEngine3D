@@ -17,6 +17,19 @@ internal sealed partial class SceneRenderTarget : IDisposable
     private int msaaDepthRenderbuffer;
     private int postFramebuffer;
     private int postTexture;
+    // SMAA necesita conservar la salida ya tonemapeada antes de resolver los bordes.
+    // postTexture sigue siendo siempre la imagen final que consume ImGui/Game Mode.
+    private int smaaSourceFramebuffer;
+    private int smaaSourceTexture;
+    private int smaaEdgeFramebuffer;
+    private int smaaEdgeTexture;
+    private int smaaEdgeShader;
+    private int smaaResolveShader;
+    private readonly int[] autoExposureTextures = new int[2];
+    private readonly int[] autoExposureFramebuffers = new int[2];
+    private int autoExposureShader;
+    private int autoExposureReadIndex;
+    private long autoExposureLastUpdateTicks;
     private int postShader;
     private int postVertexArray;
     private int postVertexBuffer;
@@ -45,8 +58,12 @@ internal sealed partial class SceneRenderTarget : IDisposable
     private int uVignetteRoundedLocation;
     private int uChromaticAberrationLocation;
     private int uAoStrengthLocation;
+    private int uCameraNearLocation;
+    private int uCameraFarLocation;
     private int uTexelLocation;
     private int uFxaaEnabledLocation;
+    private int uAutoExposureTextureLocation;
+    private int uAutoExposureEnabledLocation;
     private int uBloomQualityLocation;
     private int uAoQualityLocation;
     private int uBloomTexLocation;
@@ -73,15 +90,30 @@ internal sealed partial class SceneRenderTarget : IDisposable
     public IntPtr DepthTextureId => (IntPtr)depthTexture;
     public IntPtr OpaqueTextureId => (IntPtr)opaqueTexture;
     public int OpaqueTextureHandle => opaqueTexture;
+    // El renderer Deferred necesita volver al mismo destino tras escribir su G-buffer.
+    // Exponerlo evita un glGet(FrameBufferBinding) síncrono por frame.
+    public int BoundFramebufferHandle => samples > 1 ? msaaFramebuffer : framebuffer;
+    // Número efectivo de muestras tras limitarlo a lo que soporta la GPU.
+    public int Samples => samples;
     public bool DepthTextureEnabled { get; set; } = true;
     public bool OpaqueTextureEnabled { get; set; } = true;
     public bool HasOpaqueTexture { get; private set; }
+    /// <summary>
+    /// Anti-aliasing de postproceso. Deferred usa SMAA/FXAA porque sus atributos del
+    /// G-buffer se resuelven por píxel; MSAA queda reservado para Forward/Forward+.
+    /// TAA usa SMAA como fallback temporal hasta que el renderer tenga motion vectors.
+    /// </summary>
+    public CameraAntiAliasingMode AntiAliasingMode { get; set; } = CameraAntiAliasingMode.SMAA;
     public bool FxaaEnabled { get; set; } = true;
     // Ajustes de salida por-cámara (Camera.StopNaNs/Dithering): el app los copia antes de ApplyPostProcess.
     public bool StopNaNsEnabled { get; set; } = false;
     public bool DitheringEnabled { get; set; } = false;
     public int BloomQuality { get; set; } = 2;
     public int AmbientOcclusionQuality { get; set; } = 2;
+    // La AO en pantalla necesita reconstruir profundidad lineal con los planos reales de la cámara.
+    // Valores seguros para renderizados autónomos que no pasan por ImGuiEditorApp.
+    public float CameraNearClip { get; set; } = 0.01f;
+    public float CameraFarClip { get; set; } = 2000f;
 
     // God rays (light shafts del sol): el renderer/app rellena esto antes de ApplyPostProcess.
     public bool GodRaysEnabled { get; set; } = false;
@@ -110,9 +142,19 @@ internal sealed partial class SceneRenderTarget : IDisposable
         depthRenderbuffer = GL.GenRenderbuffer();
         postFramebuffer = GL.GenFramebuffer();
         postTexture = GL.GenTexture();
+        smaaSourceFramebuffer = GL.GenFramebuffer();
+        smaaSourceTexture = GL.GenTexture();
+        smaaEdgeFramebuffer = GL.GenFramebuffer();
+        smaaEdgeTexture = GL.GenTexture();
+        autoExposureTextures[0] = GL.GenTexture();
+        autoExposureTextures[1] = GL.GenTexture();
+        autoExposureFramebuffers[0] = GL.GenFramebuffer();
+        autoExposureFramebuffers[1] = GL.GenFramebuffer();
         postShader = CreatePostShader();
         CachePostUniformLocations();
         CreatePostQuad();
+        CreateSmaaShaders();
+        CreateAutoExposureResources();
         CreateBloomShaders();
         Resize(1, 1);
     }
@@ -127,6 +169,7 @@ internal sealed partial class SceneRenderTarget : IDisposable
         Width = width;
         Height = height;
         samples = requestedSamples;
+        ResetAutoExposure();
 
         GL.BindTexture(TextureTarget.Texture2D, colorTexture);
         GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba16f, Width, Height, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
@@ -162,6 +205,8 @@ internal sealed partial class SceneRenderTarget : IDisposable
         status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
         if (status != FramebufferErrorCode.FramebufferComplete)
             throw new InvalidOperationException($"Scene postprocess framebuffer incomplete: {status}");
+
+        ResizeSmaaBuffers();
 
         GL.BindTexture(TextureTarget.Texture2D, opaqueTexture);
         GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba16f, Width, Height, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);

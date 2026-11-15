@@ -21,7 +21,9 @@ private static int ShadowPcfRadiusFor(ShadowQuality quality) => quality switch
         ShadowQuality.Low    => 0,
         ShadowQuality.Medium => 1,
         ShadowQuality.High   => 1,
-        ShadowQuality.Ultra  => 1,
+        // Ultra usa 5x5 (direccional/spot) y 25 taps para point lights. High
+        // mantiene 3x3 para conservar el perfil de 120 FPS.
+        ShadowQuality.Ultra  => 2,
         _ => 1
     };
 
@@ -30,9 +32,16 @@ private static (int Directional, int Spot, int Point) ShadowMapSizesFor(ShadowQu
         ShadowQuality.Low    => (768,   512,  256),
         ShadowQuality.Medium => (1024,  768,  384),
         ShadowQuality.High   => (1536, 1024,  512),
-        ShadowQuality.Ultra  => (2048, 1536,  768),
+        // Las point lights necesitan seis caras; 1024 conserva detalle de contacto
+        // interior sin disparar la memoria como un cubemap 2K de seis caras.
+        ShadowQuality.Ultra  => (2048, 1536, 1024),
         _                    => (1024,  768,  384)
     };
+
+// Un interior importado desde DCC puede contener paredes con normales invertidas o una sola
+// cara. Durante la sombra solar las proyectamos a dos caras; de lo contrario, el culling del
+// shadow map deja pasar luz por techo/pared y aparecen manchas dentro de una habitación cerrada.
+private bool _forceTwoSidedDirectionalShadowPass;
 
 private void TrackShadowDraw()
     {
@@ -60,20 +69,32 @@ private (ShadowInfo Directional, ShadowInfo Spot, PointShadowInfo Point) Prepare
         var lightDir = directional?.gameObject != null && directional.Shadows
             ? ToTk(directional.GetNormalizedDirection()).Normalized()
             : Vector3.Zero;
+        float shadowNearPlane = directional?.gameObject != null && directional.Shadows
+            ? directional.ShadowNearPlane
+            : 0.2f;
 
         bool sameDirectionalResources =
             _cachedRealtimeShadowsValid &&
             _cachedShadowWidth == width &&
             _cachedShadowHeight == height &&
             _cachedShadowQuality == _shadowQuality &&
+            MathF.Abs(_cachedShadowNearPlane - shadowNearPlane) < 0.0001f &&
             SameDirection(_cachedShadowLightDirection, lightDir);
+
+        // En una habitación estática no tiene sentido redibujar las cascadas completas cada
+        // frame. Conservamos la corrección para gameplay: en cuanto cambia la cámara, un caster,
+        // su Animator o la luz, la firma deja de coincidir y el shadow map se actualiza al instante.
+        int casterSignature = ComputeShadowCasterSignature(objects);
+        bool stableShadowScene = sameDirectionalResources &&
+            casterSignature == _cachedShadowCasterSignature &&
+            SameShadowCamera(camera);
 
         // La sombra direccional se regenera según ShadowUpdateIntervalFrames (default 1 = cada
         // frame). Antes se reutilizaba mientras la CÁMARA no se moviese, pero eso ignoraba el
         // movimiento de los OBJETOS: con la cámara quieta, la sombra de un personaje caminando se
         // quedaba congelada ("no sigue") y daba un salto al refrescarse ("tiembla").
-        bool reuseDirectional = sameDirectionalResources &&
-            _frameCount - _cachedRealtimeShadowFrame < interval;
+        bool reuseDirectional = stableShadowScene ||
+            (sameDirectionalResources && _frameCount - _cachedRealtimeShadowFrame < interval);
 
         if (!reuseDirectional)
         {
@@ -86,22 +107,35 @@ private (ShadowInfo Directional, ShadowInfo Spot, PointShadowInfo Point) Prepare
             _cachedShadowWidth = width;
             _cachedShadowHeight = height;
             _cachedShadowQuality = _shadowQuality;
+            _cachedShadowNearPlane = shadowNearPlane;
+            _cachedShadowCasterSignature = casterSignature;
+            _cachedShadowCameraPosition = ToTk(camera.Position);
+            _cachedShadowCameraFront = ToTk(camera.Front);
+            _cachedShadowCameraUp = ToTk(camera.Up);
+            _cachedShadowCameraNearClip = camera.NearClip;
+            _cachedShadowCameraFarClip = camera.FarClip;
         }
 
         // Spot y point se regeneran según ShadowUpdateIntervalFrames (default 1 = cada frame),
         // igual que la direccional, para que SIGAN a los objetos en movimiento. Antes solo se
         // refrescaban si la LUZ cambiaba (firma), así que con la luz quieta la sombra de un objeto
         // que se movía quedaba congelada.
-        bool reuseSpot = _cachedRealtimeShadowsValid && _frameCount - _cachedSpotShadowFrame < interval;
+        // int.MinValue es el centinela "todavía no hay shadow map". Restarlo a un
+        // contador de frame positivo desborda a un número negativo, que antes cumplía
+        // accidentalmente `< interval` y reutilizaba una textura de profundidad vacía
+        // para siempre. Comprueba el centinela explícitamente antes de calcular la edad.
+        bool reuseSpot = _cachedSpotShadowFrame != int.MinValue &&
+            _cachedRealtimeShadowsValid && _frameCount - _cachedSpotShadowFrame < interval;
         if (!reuseSpot)
         {
             long start = RenderTimestamp();
-            _cachedSpotShadow = PrepareSpotShadow(objects);
+            _cachedSpotShadow = PrepareSpotShadowAtlas(objects);
             _statsSpotShadowMs = RenderElapsedMs(start);
             _cachedSpotShadowFrame = _frameCount;
         }
 
-        bool reusePoint = _cachedRealtimeShadowsValid && _frameCount - _cachedPointShadowFrame < interval;
+        bool reusePoint = _cachedPointShadowFrame != int.MinValue &&
+            _cachedRealtimeShadowsValid && _frameCount - _cachedPointShadowFrame < interval;
         if (!reusePoint)
         {
             long start = RenderTimestamp();
@@ -122,6 +156,46 @@ private static bool SameDirection(Vector3 a, Vector3 b)
         return Vector3.Dot(a.Normalized(), b.Normalized()) > 0.9999f;
     }
 
+private bool SameShadowCamera(ImGuiEditorApp.EditorCameraState camera)
+    {
+        if (_cachedShadowCameraNearClip < 0f || _cachedShadowCameraFarClip < 0f)
+            return false;
+
+        const float positionToleranceSq = 0.000001f;
+        return (ToTk(camera.Position) - _cachedShadowCameraPosition).LengthSquared <= positionToleranceSq &&
+            SameDirection(ToTk(camera.Front), _cachedShadowCameraFront) &&
+            SameDirection(ToTk(camera.Up), _cachedShadowCameraUp) &&
+            MathF.Abs(camera.NearClip - _cachedShadowCameraNearClip) < 0.0001f &&
+            MathF.Abs(camera.FarClip - _cachedShadowCameraFarClip) < 0.0001f;
+    }
+
+private int ComputeShadowCasterSignature(IReadOnlyList<GameObject> roots)
+    {
+        var hash = new HashCode();
+        foreach (var root in roots)
+            AddShadowCasterSignature(root, ref hash);
+        return hash.ToHashCode();
+    }
+
+private void AddShadowCasterSignature(GameObject obj, ref HashCode hash)
+    {
+        if (obj.IsActive && HasShadowGeometry(obj))
+        {
+            var renderer = obj.GetComponent<MeshRenderer>();
+            hash.Add(obj.EditorId);
+            hash.Add(obj.PosX); hash.Add(obj.PosY); hash.Add(obj.PosZ);
+            hash.Add(obj.RotX); hash.Add(obj.RotY); hash.Add(obj.RotZ);
+            hash.Add(obj.ScaleX); hash.Add(obj.ScaleY); hash.Add(obj.ScaleZ);
+            hash.Add(renderer?.Enabled ?? true);
+            hash.Add(renderer?.CastShadows ?? 1);
+            hash.Add(renderer?.StaticShadowCaster ?? false);
+            hash.Add(obj.GetComponent<Animator>()?.PoseVersion ?? 0);
+        }
+
+        foreach (var child in obj.Children)
+            AddShadowCasterSignature(child, ref hash);
+    }
+
 private ShadowInfo PrepareDirectionalShadow(
         IReadOnlyList<GameObject> objects,
         ImGuiEditorApp.EditorCameraState camera,
@@ -138,7 +212,7 @@ private ShadowInfo PrepareDirectionalShadow(
         int cascadeCount = DirectionalCascadeCountFor(_shadowQuality);
         var cascades = new Matrix4[MaxDirectionalShadowCascades];
         var splits = new float[MaxDirectionalShadowCascades];
-        ComputeDirectionalCascades(camera, width, height, lightDir, up, cascadeCount, cascades, splits);
+        ComputeDirectionalCascades(camera, width, height, lightDir, up, cascadeCount, Math.Clamp(directional.ShadowNearPlane, 0.01f, 10f), cascades, splits);
 
         GL.GetInteger(GetPName.FramebufferBinding, out int previousFramebuffer);
         int[] previousViewport = new int[4];
@@ -147,8 +221,12 @@ private ShadowInfo PrepareDirectionalShadow(
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _shadowFbo);
         GL.Viewport(0, 0, _directionalShadowSize, _directionalShadowSize);
         GL.Enable(EnableCap.DepthTest);
-        GL.Enable(EnableCap.CullFace);
-        GL.CullFace(TriangleFace.Front);
+        // Para el sol priorizamos oclusión correcta de arquitectura sobre el pequeño ahorro de
+        // culling: una pared debe bloquear el sol independientemente de cómo se exportaron sus
+        // normales. El vidrio transparente ya queda fuera del depth pass, por lo que la entrada
+        // de luz sigue limitada únicamente por los huecos y los marcos reales de la ventana.
+        _forceTwoSidedDirectionalShadowPass = true;
+        GL.Disable(EnableCap.CullFace);
         GL.Enable(EnableCap.PolygonOffsetFill);
         GL.PolygonOffset(1.5f, 2.5f);
         GL.ColorMask(false, false, false, false);
@@ -167,6 +245,8 @@ private ShadowInfo PrepareDirectionalShadow(
         GL.UseProgram(0);
         GL.ColorMask(true, true, true, true);
         GL.Disable(EnableCap.PolygonOffsetFill);
+        _forceTwoSidedDirectionalShadowPass = false;
+        GL.Enable(EnableCap.CullFace);
         GL.CullFace(TriangleFace.Back);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, previousFramebuffer);
         GL.Viewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
@@ -224,6 +304,7 @@ private void ComputeDirectionalCascades(
         Vector3 lightDir,
         Vector3 up,
         int cascadeCount,
+        float shadowNearPlane,
         Matrix4[] cascades,
         float[] splits)
     {
@@ -243,7 +324,7 @@ private void ComputeDirectionalCascades(
                 split = farClip;
 
             var corners = GetCameraFrustumCorners(camera, view, aspect, previousSplit, split);
-            cascades[i] = BuildCascadeLightMatrix(corners, lightDir, up, i);
+            cascades[i] = BuildCascadeLightMatrix(corners, lightDir, up, i, shadowNearPlane);
             splits[i] = split;
             previousSplit = split;
         }
@@ -255,7 +336,7 @@ private void ComputeDirectionalCascades(
         }
     }
 
-private Matrix4 BuildCascadeLightMatrix(Vector3[] corners, Vector3 lightDir, Vector3 up, int cascadeIndex)
+private Matrix4 BuildCascadeLightMatrix(Vector3[] corners, Vector3 lightDir, Vector3 up, int cascadeIndex, float shadowNearPlane)
     {
         Vector3 center = Vector3.Zero;
         foreach (var corner in corners)
@@ -283,37 +364,103 @@ private Matrix4 BuildCascadeLightMatrix(Vector3[] corners, Vector3 lightDir, Vec
         }
 
         float depthPadding = MathF.Max(20f, extent * (cascadeIndex == 0 ? 1.2f : 1.8f));
+        float nearPlane = MathF.Max(0.01f, -maxZ - depthPadding);
+        float farPlane = MathF.Max(nearPlane + 0.01f, -minZ + depthPadding);
+        if (shadowNearPlane > nearPlane && shadowNearPlane < farPlane - 0.01f)
+            nearPlane = shadowNearPlane;
+
         Matrix4 lightProjection = Matrix4.CreateOrthographic(
             extent,
             extent,
-            MathF.Max(0.01f, -maxZ - depthPadding),
-            MathF.Max(0.02f, -minZ + depthPadding));
+            nearPlane,
+            farPlane);
         return lightView * lightProjection;
     }
 
-private ShadowInfo PrepareSpotShadow(IReadOnlyList<GameObject> objects)
-    {
-        var spot = FindShadowCaster<SpotLight>(objects, s => s.Shadows && s.gameObject != null);
-        if (spot?.gameObject == null)
-            return new ShadowInfo(false, Matrix4.Identity, 0f);
+private ShadowInfo PrepareSpotShadowAtlas(IReadOnlyList<GameObject> objects)
+{
+        // RenderDepthMap restaura el framebuffer que estaba enlazado cuando se le llama.
+        // En este caso ya es _spotShadowFbo porque debemos adjuntar la capa del atlas antes
+        // de renderizarla. Sin esta restauración exterior el método terminaba devolviendo el
+        // FBO de profundidad como destino activo. Deferred lo ocultaba al volver a enlazar su
+        // G-buffer, pero Forward/Forward+ escribían el frame siguiente en el atlas y el viewport
+        // mostraba únicamente el clear color azul. Conservamos el destino real de la escena
+        // (incluido el MSAA FBO) y lo restauramos siempre al terminar el atlas.
+        GL.GetInteger(GetPName.FramebufferBinding, out int previousFramebuffer);
+        int[] previousViewport = new int[4];
+        GL.GetInteger(GetPName.Viewport, previousViewport);
 
-        var pos = ComputeWorldPosition(spot.gameObject);
-        var dir = ResolveSpotDirection(spot);
-        var up = MathF.Abs(Vector3.Dot(dir, Vector3.UnitY)) > 0.92f ? Vector3.UnitZ : Vector3.UnitY;
-        Matrix4 view = Matrix4.LookAt(pos, pos + dir, up);
-        Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(
-            MathHelper.DegreesToRadians(Math.Clamp(spot.Angle, 1f, 170f)),
-            1f,
-            0.05f,
-            Math.Max(0.1f, spot.Range));
-        Matrix4 lightMvp = view * projection;
-        RenderDepthMap(_spotShadowFbo, _spotShadowSize, _shadowShader, _shadowMvpLocation, _shadowModelLocation, lightMvp);
-        return new ShadowInfo(true, lightMvp, Math.Clamp(spot.ShadowStrength, 0f, 1f));
-    }
+        Array.Fill(_cachedSpotShadowLights, null);
+        for (int i = 0; i < MaxSpotLights; i++)
+            _cachedSpotShadows[i] = ShadowInfo.Disabled;
+
+        int slot = 0;
+        try
+        {
+            foreach (var obj in FlattenActive(objects))
+            {
+                var spot = obj.GetComponent<SpotLight>();
+                if (spot?.gameObject == null || !spot.Shadows || spot.Mode == LightMode.Baked)
+                    continue;
+                if (slot >= MaxSpotLights)
+                    break;
+
+                var pos = ComputeWorldPosition(spot.gameObject);
+                var dir = ResolveSpotDirection(spot);
+                var up = MathF.Abs(Vector3.Dot(dir, Vector3.UnitY)) > 0.92f ? Vector3.UnitZ : Vector3.UnitY;
+                Matrix4 view = Matrix4.LookAt(pos, pos + dir, up);
+                Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(
+                    MathHelper.DegreesToRadians(Math.Clamp(spot.Angle, 1f, 170f)),
+                    1f,
+                    0.05f,
+                    Math.Max(0.1f, spot.Range));
+                Matrix4 lightMvp = view * projection;
+
+                // Cada Spot escribe una capa distinta del atlas. Unity usa el mismo principio:
+                // un atlas de sombras puntuales en vez de que todas las luces compartan un mapa.
+                GL.BindFramebuffer(FramebufferTarget.Framebuffer, _spotShadowFbo);
+                GL.FramebufferTextureLayer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
+                    _spotShadowArrayTex, 0, slot);
+                RenderDepthMap(_spotShadowFbo, _spotShadowSize, _shadowShader, _shadowMvpLocation, _shadowModelLocation, lightMvp);
+                _cachedSpotShadowLights[slot] = spot;
+                _cachedSpotShadows[slot] = new ShadowInfo(true, lightMvp, Math.Clamp(spot.ShadowStrength, 0f, 1f));
+                slot++;
+            }
+        }
+        finally
+        {
+            // Contrato de salida del pase de sombras: jamás dejar un FBO de profundidad
+            // ni una máscara de color desactivada para el render normal.
+            GL.BindVertexArray(0);
+            GL.UseProgram(0);
+            GL.ColorMask(true, true, true, true);
+            GL.DepthMask(true);
+            GL.Disable(EnableCap.PolygonOffsetFill);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Enable(EnableCap.CullFace);
+            GL.CullFace(TriangleFace.Back);
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, previousFramebuffer);
+            GL.Viewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+        }
+
+        return slot > 0 ? _cachedSpotShadows[0] : ShadowInfo.Disabled;
+}
 
 private PointShadowInfo PreparePointShadow(IReadOnlyList<GameObject> objects)
     {
-        var point = FindShadowCaster<PointLight>(objects, p => p.Shadows && p.gameObject != null);
+        // Igual que Unity, el presupuesto de sombras locales se asigna a la luz más relevante
+        // del frame. _framePointLights ya se ordenó por importancia respecto a la cámara; antes
+        // se elegía la primera PointLight de la jerarquía y el shader aplicaba ese cubemap a la
+        // luz [0] de la lista ordenada, produciendo sombras en la luminaria equivocada.
+        PointLight? point = null;
+        foreach (var candidate in _framePointLights)
+        {
+            if (candidate.Shadows && candidate.gameObject != null)
+            {
+                point = candidate;
+                break;
+            }
+        }
         if (point?.gameObject == null)
             return new PointShadowInfo(false, Vector3.Zero, 1f, 0f);
 
@@ -338,7 +485,10 @@ private PointShadowInfo PreparePointShadow(IReadOnlyList<GameObject> objects)
         GL.Viewport(0, 0, _pointShadowSize, _pointShadowSize);
         GL.Enable(EnableCap.DepthTest);
         GL.Enable(EnableCap.CullFace);
-        GL.CullFace(TriangleFace.Back);
+        // Guardar caras traseras (front-face culling) evita que el propio suelo se compare
+        // contra sí mismo. La alternativa Back producía un disco de autocontacto con la
+        // silueta del alcance de la point light; es el modo estándar para shadow cubemaps.
+        GL.CullFace(TriangleFace.Front);
         GL.Enable(EnableCap.PolygonOffsetFill);
         GL.PolygonOffset(1.5f, 2.5f);
         GL.ColorMask(false, false, false, false);
@@ -363,7 +513,7 @@ private PointShadowInfo PreparePointShadow(IReadOnlyList<GameObject> objects)
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, previousFramebuffer);
         GL.Viewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
 
-        return new PointShadowInfo(true, pos, farPlane, Math.Clamp(point.ShadowStrength, 0f, 1f));
+        return new PointShadowInfo(true, pos, farPlane, Math.Clamp(point.ShadowStrength, 0f, 1f), point);
     }
 
 private void RenderDepthMap(int framebuffer, int size, int program, int mvpLocation, int modelLocation, Matrix4 mvp)
@@ -438,7 +588,7 @@ private void DrawDepthGeometry(int modelLocation)
             // geometría delgada (una hoja, una tarjeta) no deje "agujeros" de sombra en el lado
             // que normalmente se cullea. CanDepthInstanceTogether ya garantiza que todo el grupo
             // instanciado comparte este mismo valor.
-            if (draw.TwoSidedShadows)
+            if (draw.TwoSidedShadows && !_forceTwoSidedDirectionalShadowPass)
                 GL.Disable(EnableCap.CullFace);
 
             int instanceCount = end - i;
@@ -458,7 +608,7 @@ private void DrawDepthGeometry(int modelLocation)
                 GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
             }
 
-            if (draw.TwoSidedShadows)
+            if (draw.TwoSidedShadows && !_forceTwoSidedDirectionalShadowPass)
                 GL.Enable(EnableCap.CullFace);
 
             ApplyDepthAlphaClip(modelLocation, false, 0.5f, null);
@@ -484,7 +634,7 @@ private void DrawDepthGeometry(int modelLocation)
             }
 
             GL.BindVertexArray(draw.Mesh.Vao);
-            if (draw.TwoSidedShadows)
+            if (draw.TwoSidedShadows && !_forceTwoSidedDirectionalShadowPass)
                 GL.Disable(EnableCap.CullFace);
 
             int instanceCount = end - sg;
@@ -507,7 +657,7 @@ private void DrawDepthGeometry(int modelLocation)
                 GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
             }
 
-            if (draw.TwoSidedShadows)
+            if (draw.TwoSidedShadows && !_forceTwoSidedDirectionalShadowPass)
                 GL.Enable(EnableCap.CullFace);
 
             sg = end;
@@ -526,10 +676,10 @@ private void DrawDepthGeometry(int modelLocation)
             ApplyDepthAlphaClip(modelLocation, draw.AlphaClip, draw.AlphaClipThreshold, draw.TexturePath);
             GL.BindVertexArray(draw.Mesh.Vao);
             TrackShadowDraw();
-            if (draw.TwoSidedShadows)
+            if (draw.TwoSidedShadows && !_forceTwoSidedDirectionalShadowPass)
                 GL.Disable(EnableCap.CullFace);
             GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
-            if (draw.TwoSidedShadows)
+            if (draw.TwoSidedShadows && !_forceTwoSidedDirectionalShadowPass)
                 GL.Enable(EnableCap.CullFace);
             ApplyDepthAlphaClip(modelLocation, false, 0.5f, null);
         }
@@ -546,10 +696,10 @@ private void DrawDepthGeometry(int modelLocation)
             UploadBoneMatrices(GetDepthBoneLocations(modelLocation), draw.Skin);
             GL.BindVertexArray(draw.Mesh.Vao);
             TrackShadowDraw();
-            if (draw.TwoSidedShadows)
+            if (draw.TwoSidedShadows && !_forceTwoSidedDirectionalShadowPass)
                 GL.Disable(EnableCap.CullFace);
             GL.DrawArrays(PrimitiveType.Triangles, draw.Start, draw.Count);
-            if (draw.TwoSidedShadows)
+            if (draw.TwoSidedShadows && !_forceTwoSidedDirectionalShadowPass)
                 GL.Enable(EnableCap.CullFace);
         }
 
@@ -633,21 +783,28 @@ private void ApplyShadowUniforms(ShadowInfo shadow, ShadowInfo spotShadow, Point
         GL.Uniform1(solidShadowEnabledLocation, shadow.Enabled ? 1 : 0);
         GL.Uniform1(solidShadowStrengthLocation, shadow.Strength);
         GL.Uniform1(solidShadowPcfRadiusLocation, ShadowPcfRadiusFor(_shadowQuality));
-        GL.Uniform1(solidShadowBiasScaleLocation, Math.Clamp(ShadowBias, 0.1f, 4f));
+        GL.Uniform1(solidShadowBiasScaleLocation, EffectiveShadowBiasScale());
+        GL.Uniform1(solidShadowNormalBiasLocation, _frameDir != null ? _frameDir.ShadowNormalBias : 0f);
         GL.Uniform1(solidShadowMapLocation, 1);
         GL.ActiveTexture(TextureUnit.Texture1);
         GL.BindTexture(TextureTarget.Texture2DArray, shadow.Enabled ? _shadowArrayTex : 0);
-        var spotMvp = spotShadow.LightMvp;
-        GL.UniformMatrix4(solidSpotLightMvpLocation, true, ref spotMvp);
-        GL.Uniform1(solidSpotShadowEnabledLocation, spotShadow.Enabled ? 1 : 0);
-        GL.Uniform1(solidSpotShadowStrengthLocation, spotShadow.Strength);
         GL.Uniform1(solidSpotShadowMapLocation, 5);
         GL.ActiveTexture(TextureUnit.Texture5);
-        GL.BindTexture(TextureTarget.Texture2D, spotShadow.Enabled ? _spotShadowTex : 0);
+        GL.BindTexture(TextureTarget.Texture2DArray, _spotShadowArrayTex);
+        for (int i = 0; i < MaxSpotLights; i++)
+        {
+            var info = _cachedSpotShadows[i];
+            var spotMvp = info.LightMvp;
+            GL.UniformMatrix4(solidSpotLightMvpLocations[i], true, ref spotMvp);
+            GL.Uniform1(solidSpotShadowEnabledLocations[i], info.Enabled ? 1 : 0);
+            GL.Uniform1(solidSpotShadowStrengthLocations[i], info.Strength);
+        }
         GL.Uniform1(solidPointShadowEnabledLocation, pointShadow.Enabled ? 1 : 0);
         GL.Uniform1(solidPointShadowStrengthLocation, pointShadow.Strength);
         GL.Uniform3(solidPointShadowPosLocation, pointShadow.Position);
         GL.Uniform1(solidPointShadowFarLocation, pointShadow.FarPlane);
+        GL.Uniform1(solidPointShadowTexelSizeLocation, 1f / Math.Max(1, _pointShadowSize));
+        GL.Uniform1(solidPointShadowLightIndexLocation, ResolvePointShadowLightIndex(pointShadow));
         GL.Uniform1(solidPointShadowCubeLocation, 6);
         GL.ActiveTexture(TextureUnit.Texture6);
         GL.BindTexture(TextureTarget.TextureCubeMap, pointShadow.Enabled ? _pointShadowCube : 0);
@@ -777,7 +934,7 @@ private void EnsureShadowResources()
         if (_shadowFbo == 0) _shadowFbo = GL.GenFramebuffer();
         if (_shadowArrayTex == 0) _shadowArrayTex = GL.GenTexture();
         if (_spotShadowFbo == 0) _spotShadowFbo = GL.GenFramebuffer();
-        if (_spotShadowTex == 0) _spotShadowTex = GL.GenTexture();
+        if (_spotShadowArrayTex == 0) _spotShadowArrayTex = GL.GenTexture();
         if (_pointShadowFbo == 0) _pointShadowFbo = GL.GenFramebuffer();
         if (_pointShadowCube == 0) _pointShadowCube = GL.GenTexture();
 
@@ -800,16 +957,17 @@ private void EnsureShadowResources()
         if (status != FramebufferErrorCode.FramebufferComplete)
             throw new InvalidOperationException($"Shadow framebuffer incomplete: {status}");
 
-        GL.BindTexture(TextureTarget.Texture2D, _spotShadowTex);
-        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.DepthComponent24,
-            _spotShadowSize, _spotShadowSize, 0, OpenTK.Graphics.OpenGL4.PixelFormat.DepthComponent, PixelType.Float, IntPtr.Zero);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToBorder);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToBorder);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureBorderColor, border);
+        GL.BindTexture(TextureTarget.Texture2DArray, _spotShadowArrayTex);
+        GL.TexImage3D(TextureTarget.Texture2DArray, 0, PixelInternalFormat.DepthComponent24,
+            _spotShadowSize, _spotShadowSize, MaxSpotLights, 0,
+            OpenTK.Graphics.OpenGL4.PixelFormat.DepthComponent, PixelType.Float, IntPtr.Zero);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToBorder);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToBorder);
+        GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureBorderColor, border);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _spotShadowFbo);
-        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, _spotShadowTex, 0);
+        GL.FramebufferTextureLayer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, _spotShadowArrayTex, 0, 0);
         GL.DrawBuffer(DrawBufferMode.None);
         GL.ReadBuffer(ReadBufferMode.None);
         status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
@@ -1068,5 +1226,5 @@ private void CaptureDepthBuffer()
         }
     }
 
-    private readonly record struct PointShadowInfo(bool Enabled, Vector3 Position, float FarPlane, float Strength);
+    private readonly record struct PointShadowInfo(bool Enabled, Vector3 Position, float FarPlane, float Strength, PointLight? Light = null);
 }

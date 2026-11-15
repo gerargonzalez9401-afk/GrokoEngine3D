@@ -21,6 +21,7 @@ private void ApplyRangeTextures(SolidRange range)
 {
         ApplyAlphaClipUniforms(range.AlphaClip, range.AlphaClipThreshold);
         ApplySurfaceTextures(range.TexturePath, range.NormalMapPath, range.RoughnessMapPath, range.MetallicMapPath);
+        ApplyForwardLightmap(range.LightmapPath, range.ShadowmaskPath, range.LightmapIntensity, range.LightmapScaleOffset);
 }
 
 private void ApplySurfaceTexturesIfChanged(
@@ -44,6 +45,9 @@ private void ApplySurfaceTexturesIfChanged(
         }
 
         ApplySurfaceTextures(texturePath, normalMapPath, roughnessMapPath, metallicMapPath);
+        // Los lightmaps pertenecen únicamente a los rangos estáticos. Sin este reset un
+        // mesh dinámico podría heredar el último lightmap del batch estático anterior.
+        DisableForwardLightmap();
         hasBoundSurface = true;
         boundTexture = texturePath;
         boundNormal = normalMapPath;
@@ -58,6 +62,35 @@ private void ApplySurfaceTextures(string? texturePath, string? normalMapPath, st
         BindOptionalTexture(TextureUnit.Texture3, solidRoughnessMapLocation, solidHasRoughnessMapLocation, roughnessMapPath);
         BindOptionalTexture(TextureUnit.Texture4, solidMetallicMapLocation, solidHasMetallicMapLocation, metallicMapPath);
         GL.ActiveTexture(TextureUnit.Texture0);
+    }
+
+// Deferred ya aplicaba la irradiancia horneada en el G-buffer. Forward y Forward+
+// tenían el dato en SolidRange pero nunca lo enlazaban: una casa estática quedaba sin
+// su rebote indirecto al cambiar de ruta. Usamos Texture15 sólo para opacos; el pase
+// refractivo la reserva después para OpaqueTexture y resetea este estado antes de usarla.
+private void ApplyForwardLightmap(string? lightmapPath, string? shadowmaskPath, float intensity, Vector4 scaleOffset = default)
+    {
+        int texture = string.IsNullOrWhiteSpace(lightmapPath) ? 0 : GetTexture(lightmapPath);
+        GL.Uniform1(solidLightmapLocation, 15);
+        GL.Uniform1(solidHasLightmapLocation, texture != 0 ? 1 : 0);
+        GL.Uniform1(solidLightmapIntensityLocation, Math.Clamp(intensity, 0f, 8f));
+        GL.Uniform4(solidLightmapScaleOffsetLocation, scaleOffset == default ? new Vector4(1f, 1f, 0f, 0f) : scaleOffset);
+        GL.ActiveTexture(TextureUnit.Texture15);
+        GL.BindTexture(TextureTarget.Texture2D, texture);
+        int shadowmask = string.IsNullOrWhiteSpace(shadowmaskPath) ? 0 : GetTexture(shadowmaskPath);
+        GL.Uniform1(solidShadowmaskLocation, 16);
+        GL.Uniform1(solidHasShadowmaskLocation, shadowmask != 0 ? 1 : 0);
+        GL.ActiveTexture(TextureUnit.Texture16);
+        GL.BindTexture(TextureTarget.Texture2D, shadowmask);
+        GL.ActiveTexture(TextureUnit.Texture0);
+    }
+
+private void DisableForwardLightmap()
+    {
+        GL.Uniform1(solidHasLightmapLocation, 0);
+        GL.Uniform1(solidLightmapIntensityLocation, 0f);
+        GL.Uniform4(solidLightmapScaleOffsetLocation, new Vector4(1f, 1f, 0f, 0f));
+        GL.Uniform1(solidHasShadowmaskLocation, 0);
     }
 
 private void BindOptionalTexture(TextureUnit unit, int samplerLocation, int hasLocation, string? path)
@@ -120,6 +153,7 @@ public void InvalidateTexture(string? texturePath)
 
         textureCache.Remove(fullPath);
         textureFileTimeCache.Remove(fullPath);
+        textureNextValidationTick.Remove(fullPath);
     }
 
 private int GetTexture(string path)
@@ -131,21 +165,35 @@ private int GetTexture(string path)
             return 0;
         }
 
-        DateTime fileTime = System.IO.File.GetLastWriteTimeUtc(fullPath);
         if (textureCache.TryGetValue(fullPath, out int cached) &&
-            textureFileTimeCache.TryGetValue(fullPath, out DateTime cachedTime) &&
-            cachedTime == fileTime)
-            return cached;
+            textureFileTimeCache.TryGetValue(fullPath, out DateTime cachedTime))
+        {
+            // Las invalidaciones desde el Inspector/importador llaman InvalidateTexture y
+            // siguen siendo inmediatas. Este chequeo es solo el respaldo para cambios
+            // externos, y evita hacer stat de cada material cada frame.
+            long nowTick = Environment.TickCount64;
+            if (textureNextValidationTick.TryGetValue(fullPath, out long nextTick) && nowTick < nextTick)
+                return cached;
+
+            DateTime fileTime = System.IO.File.GetLastWriteTimeUtc(fullPath);
+            if (cachedTime == fileTime)
+            {
+                textureNextValidationTick[fullPath] = nowTick + 5000;
+                return cached;
+            }
+        }
 
         if (textureCache.TryGetValue(fullPath, out int oldTexture) && oldTexture != 0)
         {
             GL.DeleteTexture(oldTexture);
             textureCache.Remove(fullPath);
             textureFileTimeCache.Remove(fullPath);
+            textureNextValidationTick.Remove(fullPath);
         }
 
         try
         {
+            DateTime fileTime = System.IO.File.GetLastWriteTimeUtc(fullPath);
             var importSettings = TextureImportSettingsAsset.Load(fullPath);
             if (!EditorImageLoader.TryLoadRgba(fullPath, out var image))
                 throw new InvalidDataException("Formato de textura no soportado o archivo corrupto.");
@@ -170,6 +218,7 @@ private int GetTexture(string path)
             GL.BindTexture(TextureTarget.Texture2D, 0);
             textureCache[fullPath] = texture;
             textureFileTimeCache[fullPath] = fileTime;
+            textureNextValidationTick[fullPath] = Environment.TickCount64 + 5000;
             return texture;
         }
         catch (Exception ex)
@@ -187,6 +236,21 @@ private bool TryGetReflectionProbeCubeTexture(string? cubemapPath, out int textu
         string? fullPath = NormalizeExistingAssetPath(cubemapPath);
         if (fullPath == null || !CubemapAsset.IsCubemapPath(fullPath))
             return false;
+
+        // Un probe Baked es inmutable durante el render normal. Antes se parseaba el .cubemap,
+        // se comprobaban seis PNG y se consultaban siete fechas de archivo CADA frame. En Windows
+        // eso puede bloquear el hilo de render por el antivirus/cache de disco y convertir una
+        // escena de 120 FPS en ~40 FPS. Conservamos hot-reload, pero validamos el asset una vez
+        // cada dos segundos; al cambiarlo se recarga y prefiltra como siempre.
+        const int validationIntervalFrames = 120;
+        if (_reflectionProbeCubeCache.TryGetValue(fullPath, out var resident) &&
+            resident.TextureId != 0 &&
+            _frameCount - resident.LastValidationFrame < validationIntervalFrames)
+        {
+            textureId = resident.TextureId;
+            maxLod = resident.MaxLod;
+            return true;
+        }
 
         CubemapAssetData data;
         try
@@ -219,6 +283,8 @@ private bool TryGetReflectionProbeCubeTexture(string? cubemapPath, out int textu
             cached.CubemapWriteTime == cubemapTime &&
             cached.FaceWriteTime == faceTime)
         {
+            cached = cached with { LastValidationFrame = _frameCount };
+            _reflectionProbeCubeCache[fullPath] = cached;
             textureId = cached.TextureId;
             maxLod = cached.MaxLod;
             return true;
@@ -277,7 +343,7 @@ private bool TryGetReflectionProbeCubeTexture(string? cubemapPath, out int textu
             int prefiltered = PrefilterProbeCubemap(tex, size, out float prefMaxLod);
             GL.DeleteTexture(tex);
 
-            _reflectionProbeCubeCache[fullPath] = new ReflectionProbeCubeCacheEntry(prefiltered, prefMaxLod, cubemapTime, faceTime);
+            _reflectionProbeCubeCache[fullPath] = new ReflectionProbeCubeCacheEntry(prefiltered, prefMaxLod, cubemapTime, faceTime, _frameCount);
             textureId = prefiltered;
             maxLod = prefMaxLod;
             return true;

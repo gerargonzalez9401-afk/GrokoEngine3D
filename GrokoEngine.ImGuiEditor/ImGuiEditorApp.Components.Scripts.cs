@@ -34,6 +34,12 @@ internal sealed partial class ImGuiEditorApp
 {
 private void CompileScripts()
     {
+        if (!scriptCompiler.IsProjectTrusted)
+        {
+            statusMessage = "Scripts blocked: use Assets > Trust Project Scripts first";
+            return;
+        }
+
         QueueEditorProgressTask("Compiling scripts", "Building C# assemblies", CompileScriptsNow);
     }
 
@@ -200,6 +206,9 @@ private bool IsProjectScriptPath(string path)
 
 private void ProcessScriptAutoCompile()
     {
+        if (!scriptCompiler.IsProjectTrusted)
+            return;
+
         ScanScriptSourcesForAutoCompile();
 
         string reason;

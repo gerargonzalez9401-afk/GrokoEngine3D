@@ -35,7 +35,7 @@ namespace GrokoEngine
         // Ejecuta el intercambio de escena si hay una carga pendiente. Devuelve true si se
         // realizo un intercambio. Los objetos marcados DontDestroyOnLoad (solo raiz) sobreviven,
         // el resto recibe OnDisable/OnDestroy antes de deserializar la nueva escena.
-        public static bool ProcessPendingLoad(IList<GameObject> currentRoots, PhysicsEngine physics, ScriptCompiler scriptCompiler)
+        public static bool ProcessPendingLoad(IList<GameObject> currentRoots, PhysicsEngine physics, IScriptTypeResolver scriptCompiler)
         {
             if (RequestedLoadPath == null)
                 return false;

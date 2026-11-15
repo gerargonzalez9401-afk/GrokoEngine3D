@@ -595,7 +595,7 @@ private void DrawSkybox(Vector3 camFront, Vector3 camUp, float fovDeg, float asp
     {
         if (sun == null || sun.Intensity <= 0.0001f)
         {
-            _flatAmbientColor = new Vector3(0.3f, 0.32f, 0.36f);
+            _flatAmbientColor = Vector3.Zero;
             return;
         }
 

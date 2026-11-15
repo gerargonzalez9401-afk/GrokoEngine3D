@@ -32,10 +32,10 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     public float SceneGridOpacity { get; set; } = 0.55f;
     public IReadOnlyCollection<string> SelectedObjectIds { get; set; } = Array.Empty<string>();
 
-    /// <summary>Cuando estÃ¡ en false, solo se dibujan gizmos/selecciÃ³n; mejora la vista visual del editor.</summary>
+    /// <summary>Cuando está en false, solo se dibujan gizmos/selección; mejora la vista visual del editor.</summary>
     public bool ShowObjectWireframes { get; set; } = false;
 
-    /// <summary>Recalcula el static batch cuando detecta cambios en objetos estÃ¡ticos o sus padres.</summary>
+    /// <summary>Recalcula el static batch cuando detecta cambios en objetos estáticos o sus padres.</summary>
     public bool AutoInvalidateStaticBatch { get; set; } = true;
     public bool RenderRealtimeShadows { get; set; } = true;
     // Cuando true, no se muestrean reflection probes (lo usa el bake de un probe para no capturar
@@ -47,6 +47,44 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     public Action? ResolveAndCaptureOpaqueTexture { get; set; }
     public int ShadowUpdateIntervalFrames { get; set; } = 1;
     public SceneRenderStats LastStats { get; private set; } = SceneRenderStats.Empty;
+
+    /// <summary>
+    /// Renders a scene through the same framebuffer lifecycle used by the editor.
+    /// This is safe for hidden OpenGL contexts and visual-regression runners.
+    /// </summary>
+    public void RenderToTarget(SceneRenderTarget target, IReadOnlyList<GameObject> objects, GameObject? selected,
+        ImGuiEditorApp.EditorCameraState camera, int width, int height, System.Drawing.Color clearColor, bool showGrid = false)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        // Mantén la misma configuración de muestras que una Camera real. El helper se usa
+        // en pruebas GPU y antes forzaba 1x, con lo cual no podía detectar fallos exclusivos
+        // del framebuffer MSAA de Forward/Forward+.
+        target.Resize(width, height, requestedSamples: camera.AntiAliasing ? camera.AntiAliasingSamples : 1);
+        target.CameraNearClip = Math.Max(0.001f, camera.NearClip);
+        target.CameraFarClip = Math.Max(target.CameraNearClip + 0.001f, camera.FarClip);
+        target.Bind();
+        GL.ClearColor(clearColor.R / 255f, clearColor.G / 255f, clearColor.B / 255f, clearColor.A / 255f);
+        GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+        GL.Enable(EnableCap.DepthTest);
+        OpaqueTextureHandle = target.HasOpaqueTexture ? target.OpaqueTextureHandle : 0;
+        ResolveAndCaptureOpaqueTexture = () =>
+        {
+            target.Resolve();
+            target.CaptureOpaqueTexture();
+            target.Bind();
+            OpaqueTextureHandle = target.HasOpaqueTexture ? target.OpaqueTextureHandle : 0;
+        };
+        try
+        {
+            Render(objects, selected, camera, target.Width, target.Height, showGrid, target.BoundFramebufferHandle, target.Samples);
+        }
+        finally
+        {
+            ResolveAndCaptureOpaqueTexture = null;
+        }
+        target.Resolve();
+        target.CaptureOpaqueTexture();
+    }
 
     private readonly List<LineVertex> vertices = new(4096);
     private LineVertex[] cachedGridVertices = Array.Empty<LineVertex>();
@@ -63,15 +101,15 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly List<ShaderGraphSkinnedMeshDraw> shaderGraphSkinnedMeshDraws = new(32);
     // Buffers reutilizables para ApplySceneLighting(). Antes se creaban listas nuevas
     // varias veces por frame (static, dynamic, shader graph, terrain, occlusion).
-    // En escenas grandes eso mete GC y picos pequeÃ±os.
+    // En escenas grandes eso mete GC y picos pequeños.
     private readonly List<PointLight> _framePointLights = new(MaxPointLights);
     private readonly List<SpotLight> _frameSpotLights = new(MaxSpotLights);
     private readonly List<AreaLight> _frameAreaLights = new(MaxAreaLights);
     private readonly List<RectangleLight> _frameRectLights = new(MaxAreaLights);
     private readonly List<ReflectionProbe> _frameReflectionProbes = new(8);
-    // IluminaciÃ³n recolectada UNA vez por Render (memoizada por _frameCount): ApplySceneLighting
-    // se llama en cada pase sÃ³lido (estÃ¡tico/dinÃ¡mico/skinned) pero las luces no cambian dentro
-    // del Render, asÃ­ que se recolectan una sola vez y los pases reutilizan estos resultados.
+    // Iluminación recolectada UNA vez por Render (memoizada por _frameCount): ApplySceneLighting
+    // se llama en cada pase sólido (estático/dinámico/skinned) pero las luces no cambian dentro
+    // del Render, así que se recolectan una sola vez y los pases reutilizan estos resultados.
     private int _frameLightsCollectedFor = -1;
     private AmbientLight? _frameAmbient;
     private PostProcessSettings? _framePostProcess;
@@ -102,6 +140,12 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private float _statsDirectionalShadowMs;
     private float _statsSpotShadowMs;
     private float _statsPointShadowMs;
+    private float _statsDeferredGBufferMs;
+    private float _statsDeferredLightingMs;
+    private float _statsDeferredDepthCopyMs;
+    private float _statsDeferredSsgiMs;
+    private bool _statsDeferredSsgiActive;
+    private float _statsDeferredSsrMs;
     private float _statsRenderOtherMs;
     private int _statsTerrainTreeMesh;
     private int _statsTerrainTreeBillboard;
@@ -121,12 +165,15 @@ internal sealed partial class SceneViewportRenderer : IDisposable
 
     private readonly Dictionary<string, int> textureCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTime> textureFileTimeCache = new(StringComparer.OrdinalIgnoreCase);
+    // Evita File.GetLastWriteTimeUtc por mapa y por frame: en proyectos bajo OneDrive
+    // esas consultas síncronas pueden consumir varios ms aun cuando la textura ya esté en VRAM.
+    private readonly Dictionary<string, long> textureNextValidationTick = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (DateTime WriteTime, int Frame)> staticSignatureFileTimeCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CachedParsedMesh> parsedMeshCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CachedGpuMesh> gpuMeshCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CachedSkinnedGpuMesh> skinnedGpuMeshCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CachedSkinnedRange> skinnedRangeCache = new(StringComparer.OrdinalIgnoreCase);
-    // Ãndice EditorId -> Terrain, reconstruido una vez por frame (ver Render()), para que el
+    // Índice EditorId -> Terrain, reconstruido una vez por frame (ver Render()), para que el
     // pase CDLOD pueda resolver los vecinos de un Terrain (Left/Right/Top/BottomNeighborId)
     // sin tener que recorrer la escena entera por cada terreno.
     private readonly Dictionary<string, Terrain> _terrainsByEditorId = new(StringComparer.OrdinalIgnoreCase);
@@ -163,6 +210,21 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int solidHasRoughnessMapLocation;
     private int solidMetallicMapLocation;
     private int solidHasMetallicMapLocation;
+    // La unidad 15 se reutiliza: durante opacos contiene el lightmap de cada rango;
+    // durante el pase refractivo contiene la copia de opaque scene. Nunca coinciden.
+    private int solidLightmapLocation;
+    private int solidHasLightmapLocation;
+    private int solidLightmapIntensityLocation;
+    private int solidLightmapScaleOffsetLocation;
+    private int solidShadowmaskLocation;
+    private int solidHasShadowmaskLocation;
+    private int solidDirShadowmaskChannelLocation;
+    private int solidMixedLightingModeLocation;
+    private int solidDistanceShadowmaskLocation;
+    private int solidShadowmaskDistanceLocation;
+    private int solidShadowmaskDistanceFadeLocation;
+    private readonly int[] solidPointShadowmaskChannelLocations = new int[MaxPointLights];
+    private readonly int[] solidSpotShadowmaskChannelLocations = new int[MaxSpotLights];
     private int solidRefractivePassLocation;
     private int solidOpaqueTextureLocation;
     private int solidScreenTexelLocation;
@@ -187,8 +249,11 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int solidPointShadowStrengthLocation;
     private int solidPointShadowPosLocation;
     private int solidPointShadowFarLocation;
+    private int solidPointShadowTexelSizeLocation;
+    private int solidPointShadowLightIndexLocation;
     private int solidShadowPcfRadiusLocation;
     private int solidShadowBiasScaleLocation;
+    private int solidShadowNormalBiasLocation;
     private readonly int[] solidBoneMatrixLocations = new int[MaxGpuBones];
 
     // Lighting uniforms
@@ -211,8 +276,12 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly int[] uSpotIntensity = new int[MaxSpotLights];
     private readonly int[] uSpotRange = new int[MaxSpotLights];
     private readonly int[] uSpotAngle = new int[MaxSpotLights];
+    private readonly int[] uSpotShadowSlotLocations = new int[MaxSpotLights];
+    private readonly int[] solidSpotLightMvpLocations = new int[MaxSpotLights];
+    private readonly int[] solidSpotShadowEnabledLocations = new int[MaxSpotLights];
+    private readonly int[] solidSpotShadowStrengthLocations = new int[MaxSpotLights];
     // Cookie + IES POR LUZ (hasta MaxSpotLights spots con cookie/IES propios a la vez, y hasta
-    // MaxPointLights points con IES propio). Arrays de textura (mismo tamaÃ±o fijo por capa) en
+    // MaxPointLights points con IES propio). Arrays de textura (mismo tamaño fijo por capa) en
     // vez de una textura sencilla por-tipo: el limite ya no es "solo la luz [0]".
     private const int CookieArraySize = 256;
     private int uSpotCookieLocation, uSpotIesLutLocation, uPointIesLutLocation;
@@ -249,6 +318,15 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int uActiveReflectionProbeHalfSize;
     private int uActiveReflectionProbeBlendDistance;
     private int uActiveReflectionProbeIntensity;
+    private int uActiveReflectionProbeBoxProjection;
+    private int uSecondaryReflectionProbeMap;
+    private int uHasSecondaryReflectionProbeMap;
+    private int uSecondaryReflectionProbeMaxLod;
+    private int uSecondaryReflectionProbeCenter;
+    private int uSecondaryReflectionProbeHalfSize;
+    private int uSecondaryReflectionProbeBlendDistance;
+    private int uSecondaryReflectionProbeIntensity;
+    private int uSecondaryReflectionProbeBoxProjection;
     private int uBrdfLut;
     private int uHasBrdfLut;
     private int uIblDiffuseStrength;
@@ -256,10 +334,12 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int uAoStrength;
     private int uFogDensity;
     private int uFogColor;
+    private int uFogHeight;
+    private int uFogHeightFalloff;
     private int uVolumetricStrength;
     private int uDebugView;
 
-    // â”€â”€ Terrain: locations de iluminaciÃ³n compartidas por el pase CDLOD (ApplyTerrainLighting)
+    // ── Terrain: locations de iluminación compartidas por el pase CDLOD (ApplyTerrainLighting)
     private int terrainAmbientColorLocation;
     private int terrainAmbientIntensityLocation;
     private int terrainSkyStrengthLocation;
@@ -267,7 +347,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int terrainDirColorLocation;
     private int terrainDirIntensityLocation;
     // OwnerHash = identidad de la instancia Terrain (undo/recarga crean otra con el mismo
-    // EditorId y contadores reiniciados â†’ hay que re-subir aunque el Version coincida).
+    // EditorId y contadores reiniciados → hay que re-subir aunque el Version coincida).
     private readonly Dictionary<string, (int TextureId, int Version, int Resolution, int OwnerHash)> terrainSplatTextureCache = new(StringComparer.OrdinalIgnoreCase);
 
     private const int MaxPointLights = 8;
@@ -276,11 +356,11 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private const int MaxGpuBones = 128;
     private int bufferCapacity;
     private int solidBufferCapacity;
-    // Cache de vÃ©rtices de mesh en espacio objeto (pos/normal/uv pre-escalados por importScale)
+    // Cache de vértices de mesh en espacio objeto (pos/normal/uv pre-escalados por importScale)
     private readonly Dictionary<string, CachedMeshVerts> meshCache = new(StringComparer.OrdinalIgnoreCase);
 
-    // â”€â”€ Static Batch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // VBO dedicado para objetos estÃ¡ticos. Se construye UNA VEZ y se
+    // ── Static Batch ───────────────────────────────────────────────
+    // VBO dedicado para objetos estáticos. Se construye UNA VEZ y se
     // reutiliza cada frame sin subir datos a la GPU.
     private int _staticVertexArray;
     private int _staticVertexBuffer;
@@ -296,15 +376,15 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private const int StaticSignatureCheckIntervalFrames = 30;
 
     /// <summary>
-    /// Llama esto cuando cualquier objeto IsStatic cambia, se aÃ±aden/quitan
-    /// objetos estÃ¡ticos, o se modifica su mesh/material.
+    /// Llama esto cuando cualquier objeto IsStatic cambia, se añaden/quitan
+    /// objetos estáticos, o se modifica su mesh/material.
     /// </summary>
     public void InvalidateStaticBatch()
     {
         _staticDirty = true;
         _staticBatchSignature = 0;
         _nextStaticSignatureCheckFrame = 0;
-        _staticRouteCache.Clear();     // la ruta estÃ¡tico/dinÃ¡mico puede haber cambiado (material/malla)
+        _staticRouteCache.Clear();     // la ruta estático/dinámico puede haber cambiado (material/malla)
         _lodVariantNodeCache.Clear();  // idem para los hijos-variante LOD (cambios de MeshFilter)
         _hierarchyLodBoundsCache.Clear();
         _hierarchyLodGpuBatchCache.Clear();
@@ -312,9 +392,9 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         _meshDrawCache.Clear();        // y los draws grabados por objeto (material/malla/textura)
     }
 
-    // â”€â”€ Particle Renderer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Shader billboard compartido por los trails (los quads de partÃ­culas van por GPU instancing,
-    // ver "Particle GPU instancing" mÃ¡s abajo). Center/Offset/Uv/Absolute vÃ­a _trailVao/_trailVbo.
+    // ── Particle Renderer ──────────────────────────────────────────
+    // Shader billboard compartido por los trails (los quads de partículas van por GPU instancing,
+    // ver "Particle GPU instancing" más abajo). Center/Offset/Uv/Absolute vía _trailVao/_trailVbo.
     private int _particleShader;
     private int _particleMvpLoc, _particleRightLoc, _particleUpLoc;
     private int _particleTexLoc, _particleHasTexLoc;
@@ -322,10 +402,10 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int _particleSoftRangeLoc;
     private int _particleOpaqueTexLoc, _particleDistortionLoc, _particleDistortionStrengthLoc, _particleRefractionStrengthLoc;
 
-    // â”€â”€ Particle GPU instancing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // PartÃ­culas billboard "normales" (no mesh): en vez de escribir 6 vÃ©rtices por partÃ­cula
-    // desde la CPU cada frame, se sube 1 registro pequeÃ±o por partÃ­cula (instancia) y la GPU
-    // repite un quad unitario compartido via glDrawArraysInstanced. Mismo patrÃ³n que ya usa el
+    // ── Particle GPU instancing ─────────────────────────────────────
+    // Partículas billboard "normales" (no mesh): en vez de escribir 6 vértices por partícula
+    // desde la CPU cada frame, se sube 1 registro pequeño por partícula (instancia) y la GPU
+    // repite un quad unitario compartido via glDrawArraysInstanced. Mismo patrón que ya usa el
     // motor para instanciar mallas (ver UploadInstanceMatrices en MeshDraws.cs).
     private int _particleInstancedShader;
     private int _particleInstancedVao, _particleUnitQuadVbo, _particleInstanceVbo;
@@ -339,12 +419,12 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly List<ParticleInstance> _particleInstances = new(4096);
     private readonly List<ParticleInstance> _particleSortedInstances = new(4096);
 
-    // â”€â”€ Stretched billboard GPU instancing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // PartÃ­culas "StretchedBillboard" (lluvia, chispas rÃ¡pidas): el quad no es un simple
-    // centro+tamaÃ±o+rotaciÃ³n, su forma depende de la direcciÃ³n de velocidad de cada partÃ­cula.
-    // El eje perpendicular a cÃ¡mara se recalcula en el vertex shader (depende de uCamRight, que
-    // cambia cada frame), asÃ­ que el registro por-instancia guarda velocidad + medio-ancho/alto
-    // en vez de un Ã¡ngulo de rotaciÃ³n.
+    // ── Stretched billboard GPU instancing ───────────────────────────
+    // Partículas "StretchedBillboard" (lluvia, chispas rápidas): el quad no es un simple
+    // centro+tamaño+rotación, su forma depende de la dirección de velocidad de cada partícula.
+    // El eje perpendicular a cámara se recalcula en el vertex shader (depende de uCamRight, que
+    // cambia cada frame), así que el registro por-instancia guarda velocidad + medio-ancho/alto
+    // en vez de un ángulo de rotación.
     private int _particleStretchedShader;
     private int _particleStretchedVao, _particleStretchedUnitQuadVbo, _particleStretchedInstanceVbo;
     private int _particleStretchedInstanceBufferCapacity;
@@ -357,12 +437,12 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly List<ParticleStretchedInstance> _particleStretchedInstances = new(2048);
     private readonly List<ParticleStretchedInstance> _particleSortedStretchedInstances = new(2048);
 
-    // â”€â”€ Billboards de Ã¡rboles de Terrain (LOD lejano) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Estilo Unity "Billboard Start": mÃ¡s allÃ¡ de esa distancia (o fuera del ranking de
-    // MaxMeshTrees mÃ¡s cercanos) un Ã¡rbol se dibuja como un quad plano en vez de la malla 3D
-    // completa. SimplificaciÃ³n respecto a Unity: reusa la textura del prototipo directo sobre
-    // el quad (sin bake de un snapshot recortado), y solo rota en Y para mirar a cÃ¡mara (no es
-    // billboard esfÃ©rico completo) â€” documentado en Terrain.cs.
+    // ── Billboards de árboles de Terrain (LOD lejano) ────────────────
+    // Estilo Unity "Billboard Start": más allá de esa distancia (o fuera del ranking de
+    // MaxMeshTrees más cercanos) un árbol se dibuja como un quad plano en vez de la malla 3D
+    // completa. Simplificación respecto a Unity: reusa la textura del prototipo directo sobre
+    // el quad (sin bake de un snapshot recortado), y solo rota en Y para mirar a cámara (no es
+    // billboard esférico completo) — documentado en Terrain.cs.
     private int _treeBillboardShader;
     private int _treeBillboardVao, _treeBillboardUnitQuadVbo, _treeBillboardInstanceVbo;
     private int _treeBillboardInstanceBufferCapacity;
@@ -373,17 +453,17 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly TerrainTreeLodScratch _terrainTreeLodScratch = new();
     private readonly Dictionary<(int X, int Z), bool> _terrainTreeCellVisibilityScratch = new();
     private TerrainTreePrototypeRenderData[] _terrainTreePrototypeScratch = Array.Empty<TerrainTreePrototypeRenderData>();
-    // Detalles/pasto de Terrain: reusan el MISMO shader/VAO de billboard que los Ã¡rboles lejanos
-    // (misma idea: quad plano que rota en Y hacia cÃ¡mara), pero un detalle SIEMPRE es billboard
-    // (nunca malla 3D), asÃ­ que va en su propio diccionario en vez de mezclarse con Ã¡rboles.
+    // Detalles/pasto de Terrain: reusan el MISMO shader/VAO de billboard que los árboles lejanos
+    // (misma idea: quad plano que rota en Y hacia cámara), pero un detalle SIEMPRE es billboard
+    // (nunca malla 3D), así que va en su propio diccionario en vez de mezclarse con árboles.
     private readonly Dictionary<string, List<TreeBillboardInstance>> _detailBillboardsByTexture = new(StringComparer.OrdinalIgnoreCase);
 
-    // â”€â”€ Depth FBO para soft particles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Depth FBO para soft particles ─────────────────────────────
     private int _depthFbo, _depthTex;
     private int _depthFboWidth, _depthFboHeight;
 
-    // â”€â”€ Trail buffers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Keyed by particle ID â†’ lista de (worldPos, age, maxAge)
+    // ── Trail buffers ──────────────────────────────────────────────
+    // Keyed by particle ID → lista de (worldPos, age, maxAge)
     private readonly Dictionary<int, List<(MiMotor.Mathematics.Vector3 Pos, float Age, float MaxAge)>>
         _trailPoints = new();
     private int _trailVbo, _trailVao;
@@ -392,8 +472,8 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly List<ParticleSortSlice> _particleSortSlices = new(4096);
     private readonly Dictionary<string, (DateTime FileTime, MaterialAssetData Data)> _particleMaterialCache = new(StringComparer.OrdinalIgnoreCase);
 
-    // â”€â”€ Occlusion Culling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    /// <summary>Estado de culling de la cÃ¡mara activa para el frame actual (ver Camera.FrustumCulling / OcclusionCulling).</summary>
+    // ── Occlusion Culling ──────────────────────────────────────────
+    /// <summary>Estado de culling de la cámara activa para el frame actual (ver Camera.FrustumCulling / OcclusionCulling).</summary>
     private bool _frustumCullingEnabled = true;
     private bool _occlusionCullingEnabled = false;
     private int _activeCullingMask = LayerMask.Everything;
@@ -407,14 +487,14 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly List<(string Id, Matrix4 World, MeshFilter Mf, ParsedMesh Mesh)> _pendingOcclusionObjects = new();
 
     // VBO/VAO dedicado para las bounding boxes de occlusion queries
-    // â€” completamente independiente del solidVertexBuffer para no interferir
+    // — completamente independiente del solidVertexBuffer para no interferir
     private int _occVao, _occVbo;
     private int _occVboCapacity;
 
     private int _shadowFbo;
     private int _shadowArrayTex;
     private int _spotShadowFbo;
-    private int _spotShadowTex;
+    private int _spotShadowArrayTex;
     private int _pointShadowFbo;
     private int _pointShadowCube;
     private int _shadowShader;
@@ -440,9 +520,9 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private readonly int[] _shadowBoneMatrixLocations = new int[MaxGpuBones];
     private readonly int[] _pointShadowBoneMatrixLocations = new int[MaxGpuBones];
 
-    // â”€â”€ Calidad de sombras (estilo Unity: Quality Settings â†’ Shadow Resolution) â”€â”€
-    // En vez de un tamaÃ±o fijo de shadow map, el usuario puede subir/bajar la
-    // calidad desde el editor; esto reasigna la resoluciÃ³n de las texturas de
+    // ── Calidad de sombras (estilo Unity: Quality Settings → Shadow Resolution) ──
+    // En vez de un tamaño fijo de shadow map, el usuario puede subir/bajar la
+    // calidad desde el editor; esto reasigna la resolución de las texturas de
     // profundidad (direccional, spot y cubemap de point) sin recrear el motor.
     private ShadowQuality _shadowQuality = ShadowQuality.High;
     private bool _shadowResourcesDirty = true;
@@ -453,34 +533,49 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int _cachedRealtimeShadowFrame = int.MinValue;
     private ShadowInfo _cachedDirectionalShadow = new(false, Matrix4.Identity, 0f);
     private ShadowInfo _cachedSpotShadow = new(false, Matrix4.Identity, 0f);
+    private readonly ShadowInfo[] _cachedSpotShadows = new ShadowInfo[MaxSpotLights];
+    private readonly SpotLight?[] _cachedSpotShadowLights = new SpotLight?[MaxSpotLights];
     private PointShadowInfo _cachedPointShadow = new(false, Vector3.Zero, 1f, 0f);
     private Vector3 _cachedShadowLightDirection;
+    private float _cachedShadowNearPlane = -1f;
     private int _cachedShadowWidth;
     private int _cachedShadowHeight;
     private ShadowQuality _cachedShadowQuality;
+    private int _cachedShadowCasterSignature;
+    private Vector3 _cachedShadowCameraPosition;
+    private Vector3 _cachedShadowCameraFront;
+    private Vector3 _cachedShadowCameraUp;
+    private float _cachedShadowCameraNearClip = -1f;
+    private float _cachedShadowCameraFarClip = -1f;
     private int _cachedSpotShadowFrame = int.MinValue;
     private int _cachedPointShadowFrame = int.MinValue;
 
     /// <summary>
     /// Espacio de color del pipeline de render (ver <see cref="GrokoEngine.ImGuiEditor.ColorSpace"/>).
-    /// Solo controla un uniform â€” no requiere reasignar recursos como las sombras,
-    /// asÃ­ que el cambio se nota en pantalla en el frame siguiente.
+    /// Solo controla un uniform — no requiere reasignar recursos como las sombras,
+    /// así que el cambio se nota en pantalla en el frame siguiente.
     /// </summary>
     public ColorSpace ColorSpace { get; set; } = ColorSpace.Linear;
     public float ShadowBias { get; set; } = 1f;
     public RendererRenderingPath RenderingPath { get; set; } = RendererRenderingPath.ForwardPlus;
+    /// <summary>Configuración persistente de luces Mixed de Lighting Settings.</summary>
+    public MixedLightingMode MixedLightingMode { get; set; } = MixedLightingMode.Shadowmask;
+    /// <summary>Activa el equivalente a Distance Shadowmask de Unity.</summary>
+    public bool DistanceShadowmask { get; set; } = true;
+    public float ShadowmaskDistance { get; set; } = 40f;
+    public float ShadowmaskDistanceFade { get; set; } = 8f;
 
     /// <summary>
-    /// Image-Based Lighting procedural. Cuando estÃ¡ activo, las superficies
+    /// Image-Based Lighting procedural. Cuando está activo, las superficies
     /// reflejan el entorno (cielo/suelo derivado del ambiente) y los metales
     /// dejan de verse planos. Solo controla un uniform; el cambio se ve al frame
-    /// siguiente. Sin coste de recursos (es analÃ­tico, sin texturas precalculadas).
+    /// siguiente. Sin coste de recursos (es analítico, sin texturas precalculadas).
     /// </summary>
     public bool ImageBasedLighting { get; set; } = true;
     public float IblDiffuseStrength { get; set; } = 0.65f;
     public float IblSpecularStrength { get; set; } = 0f;
 
-    // â”€â”€ Entorno HDRI (IBL Fase 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Entorno HDRI (IBL Fase 2) ─────────────────────────────────────────
     private int _envTexture;          // textura equirectangular RGB16F (con mips)
     private int _envPrefilterCube;     // cubemap RGB16F prefiltrado para reflejos PBR
     private int _brdfLutTexture;       // LUT split-sum para IBL especular
@@ -491,7 +586,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private bool _envLoaded;
     private float _envMaxLod;
     private float _envPrefilterMaxLod;
-    private Vector3 _envDiffuseColor = new(0.3f, 0.32f, 0.36f);
+    private Vector3 _envDiffuseColor = Vector3.Zero;
     private readonly Vector3[] _envSh = new Vector3[9];
     private string _envPath = "";
     private bool _envDirty;
@@ -503,8 +598,8 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int _skySunDirLoc, _skySunColorLoc, _skySunAngularLoc, _skySunEnabledLoc;
 
     /// <summary>
-    /// Ruta a un HDRI equirectangular (.hdr). Cuando estÃ¡ cargado, el IBL refleja
-    /// esta imagen real en vez del entorno procedural. VacÃ­o = entorno procedural.
+    /// Ruta a un HDRI equirectangular (.hdr). Cuando está cargado, el IBL refleja
+    /// esta imagen real en vez del entorno procedural. Vacío = entorno procedural.
     /// </summary>
     public string EnvironmentHdriPath
     {
@@ -531,7 +626,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
     private int _skyTurbidityLoc, _skyExposureLoc;
     // Ambiente barato para ProceduralSky: se reusa el mismo camino de "ambiente plano" que ya
     // existia para "sin HDRI" (antes un literal fijo), ahora tintado por el cielo analitico.
-    private Vector3 _flatAmbientColor = new(0.3f, 0.32f, 0.36f);
+    private Vector3 _flatAmbientColor = Vector3.Zero;
 
     public ShadowQuality ShadowQuality
     {
@@ -547,14 +642,14 @@ internal sealed partial class SceneViewportRenderer : IDisposable
 
     /// <summary>
     /// Resoluciones de shadow map por nivel de calidad. "Medium" conserva los
-    /// valores que tenÃ­a el motor antes de exponer esta opciÃ³n, asÃ­ que un
+    /// valores que tenía el motor antes de exponer esta opción, así que un
     /// proyecto existente no cambia de aspecto si el usuario no toca el ajuste.
     /// </summary>
     /// <summary>
-    /// Radio del kernel PCF (sombras suaves) por nivel de calidad â€” el equivalente
-    /// a alternar entre "Hard Shadows" y "Soft Shadows" en Unity, con mÃ¡s muestras
-    /// cuanto mayor es la calidad: 0 â†’ 1 muestra (dura/barata), 1 â†’ 3x3 (9
-    /// muestras, el comportamiento que tenÃ­a el motor por defecto), 2 â†’ 5x5
+    /// Radio del kernel PCF (sombras suaves) por nivel de calidad — el equivalente
+    /// a alternar entre "Hard Shadows" y "Soft Shadows" en Unity, con más muestras
+    /// cuanto mayor es la calidad: 0 → 1 muestra (dura/barata), 1 → 3x3 (9
+    /// muestras, el comportamiento que tenía el motor por defecto), 2 → 5x5
     /// (25 muestras, penumbra muy suave para escenas "hero").
     /// </summary>
 
@@ -571,10 +666,15 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             _statsTerrainMs +
             _statsLinesGizmosMs +
             _statsParticlesMs +
-            _statsOcclusionMs;
+            _statsOcclusionMs +
+            _statsDeferredGBufferMs +
+            _statsDeferredLightingMs +
+            _statsDeferredDepthCopyMs +
+            _statsDeferredSsgiMs +
+            _statsDeferredSsrMs;
 
         // Todo lo que no tenga fase propia (state setup, FBO/viewport restores, GL driver stalls,
-        // shader/texture warmup y pequeÃ±os blits internos) cae aquÃ­. Si este nÃºmero sube,
+        // shader/texture warmup y pequeños blits internos) cae aquí. Si este número sube,
         // ya no se confunde con sombras o dynamic opaque.
         _statsRenderOtherMs = Math.Max(0f, totalMs - trackedMs);
     }
@@ -619,6 +719,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             _statsHierarchyLodGpuParts,
             RenderingPath,
             UseDeferredOpaquePath,
+            _statsDeferredSsgiActive,
             width,
             height,
             _statsBuildSceneMs,
@@ -637,6 +738,11 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             _statsDirectionalShadowMs,
             _statsSpotShadowMs,
             _statsPointShadowMs,
+            _statsDeferredGBufferMs,
+            _statsDeferredLightingMs,
+            _statsDeferredDepthCopyMs,
+            _statsDeferredSsgiMs,
+            _statsDeferredSsrMs,
             _statsRenderOtherMs);
     }
 
@@ -646,7 +752,9 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         ImGuiEditorApp.EditorCameraState camera,
         int width,
         int height,
-        bool showGrid = true)
+        bool showGrid = true,
+        int targetFramebuffer = -1,
+        int targetSamples = 1)
     {
         _frameCount++;
         MaybeWritePerfLog();   // vuelca las stats del frame ANTERIOR (solo con GROKO_PERF_LOG)
@@ -654,17 +762,17 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         long renderFrameStart = RenderTimestamp();
         long buildPhaseStart = BeginRenderPass(SceneRenderPass.BuildScene);
 
-        // El usuario cambiÃ³ la calidad de sombras desde el editor (Settings â†’ Lighting):
-        // reasignamos las texturas de profundidad al nuevo tamaÃ±o antes de generarlas
-        // este frame. No se hace en cada frame â€” solo cuando realmente cambia el ajuste.
+        // El usuario cambió la calidad de sombras desde el editor (Settings → Lighting):
+        // reasignamos las texturas de profundidad al nuevo tamaño antes de generarlas
+        // este frame. No se hace en cada frame — solo cuando realmente cambia el ajuste.
         if (_shadowResourcesDirty)
             EnsureShadowResources();
 
         if (_envDirty)
             EnsureEnvironment();
 
-        // Ãndice de Terrains por EditorId, refrescado antes que nada este frame: tanto el chequeo
-        // periÃ³dico de firma del batch estÃ¡tico como GetTerrainMesh (malla dinÃ¡mica) necesitan
+        // Índice de Terrains por EditorId, refrescado antes que nada este frame: tanto el chequeo
+        // periódico de firma del batch estático como GetTerrainMesh (malla dinámica) necesitan
         // poder resolver LeftNeighborId/RightNeighborId/etc. a un Terrain real.
         _terrainsByEditorId.Clear();
         foreach (var obj in objects)
@@ -676,7 +784,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         Matrix4 projection;
         if (camera.Orthographic)
         {
-            // Modo 2D: proyecciÃ³n ortogrÃ¡fica (sin perspectiva), como el botÃ³n 2D de Unity.
+            // Modo 2D: proyección ortográfica (sin perspectiva), como el botón 2D de Unity.
             float aspect = width / (float)Math.Max(1, height);
             float halfH = Math.Max(0.01f, camera.OrthoSize);
             projection = Matrix4.CreateOrthographic(halfH * 2f * aspect, halfH * 2f, nearClip, farClip);
@@ -689,13 +797,13 @@ internal sealed partial class SceneViewportRenderer : IDisposable
                 nearClip, farClip);
         }
         var eye = ToTk(camera.Position);
-        _lodCameraPosition = eye;   // selecciÃ³n de LOD por distancia (SceneViewportRenderer.MeshLod)
+        _lodCameraPosition = eye;   // selección de LOD por distancia (SceneViewportRenderer.MeshLod)
         _lodCameraTanHalfFov = MathF.Tan(MathHelper.DegreesToRadians(Math.Clamp(camera.FOV, 5f, 170f)) * 0.5f);
         _lodCameraOrthographic = camera.Orthographic;
         _lodCameraOrthoHalfHeight = Math.Max(0.01f, camera.OrthoSize);
         Matrix4 view = Matrix4.LookAt(eye, eye + ToTk(camera.Front), ToTk(camera.Up));
         Matrix4 mvp = view * projection;
-        ComputeSunScreenPosition(objects, eye, mvp, ToTk(camera.Front));
+        ComputeSunScreenPosition(objects, eye, mvp, ToTk(camera.Front), camera.FarClip);
         var frustum = new Frustum(mvp);
         _frustumCullingEnabled = camera.FrustumCulling;
         _occlusionCullingEnabled = camera.OcclusionCulling;
@@ -714,7 +822,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             }
         }
 
-        // â”€â”€ Reconstruir static batch si estÃ¡ sucio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Reconstruir static batch si está sucio ─────────────────
         if (_staticDirty)
         {
             _staticBuildList.Clear();
@@ -742,7 +850,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
             }
         }
 
-        // â”€â”€ Construir vÃ©rtices dinÃ¡micos (excluye objetos estÃ¡ticos) â”€â”€
+        // ── Construir vértices dinámicos (excluye objetos estáticos) ──
         vertices.Clear();
         solidVertices.Clear();
         solidRanges.Clear();
@@ -807,6 +915,10 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         SortDynamicMeshDrawsForStateReuse();
         EndRenderPass(SceneRenderPass.BuildScene, buildPhaseStart);
 
+        // La misma lista ordenada por importancia se usa tanto para los uniforms de las luces
+        // como para elegir el cubemap de sombra local. Así una sombra nunca puede asociarse a
+        // otra luz solo por el orden de los GameObjects en la jerarquía.
+        CollectFrameLighting(objects, cameraPositionTk);
         long shadowPhaseStart = BeginRenderPass(SceneRenderPass.Shadows);
         var (shadowInfo, spotShadowInfo, pointShadowInfo) = PrepareRealtimeShadows(objects, camera, width, height);
         EndRenderPass(SceneRenderPass.Shadows, shadowPhaseStart);
@@ -814,10 +926,29 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         GL.Enable(EnableCap.DepthTest);
         GL.Disable(EnableCap.Blend);
         GL.DepthMask(true);
-        GL.Enable(EnableCap.CullFace);
-        GL.CullFace(TriangleFace.Back);
+        // Los mapas de sombra y los prepasses cambian estado global de OpenGL. El pase
+        // opaco Forward no puede depender de que cada helper lo haya restaurado: con
+        // ColorMask desactivado los draw calls se ejecutan, pero la escena termina siendo
+        // solo el clear color (y los transparentes, que se dibujan después). Restablecer
+        // explícitamente el contrato del pase aquí elimina esa fuga de estado.
+        GL.ColorMask(true, true, true, true);
+        GL.DepthFunc(DepthFunction.Lequal);
+        // Los interiores importados desde DCC suelen tener caras de pared orientadas hacia
+        // fuera. Deferred ya dispone de un G-buffer consistente para esas mallas, pero en
+        // Forward/Forward+ el back-face culling dejaba el interior vacío y sólo sobrevivían
+        // los cristales (que se pintan sin culling). Renderizar los opacos de Forward a dos
+        // caras conserva la arquitectura; al acabar el frame se restaura el estado global.
+        if (UseDeferredOpaquePath)
+        {
+            GL.Enable(EnableCap.CullFace);
+            GL.CullFace(TriangleFace.Back);
+        }
+        else
+        {
+            GL.Disable(EnableCap.CullFace);
+        }
 
-        // â”€â”€ Skybox HDRI de fondo (solo si hay HDRI cargado) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Skybox HDRI de fondo (solo si hay HDRI cargado) ─────────
         if ((_envLoaded || EnvironmentMode == EnvironmentMode.ProceduralSky) && DrawEnvironmentBackground)
         {
             long skyPhaseStart = BeginRenderPass(SceneRenderPass.Skybox);
@@ -826,11 +957,18 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         }
 
         bool useDeferredOpaquePath = UseDeferredOpaquePath;
+        // DrawSkybox restablece el culling para los pases que le siguen. Forward necesita
+        // volver a apagarlo después de ese helper para interiores de doble cara.
+        if (!useDeferredOpaquePath)
+            GL.Disable(EnableCap.CullFace);
+        GL.ColorMask(true, true, true, true);
+        GL.DepthMask(true);
+        GL.DepthFunc(DepthFunction.Lequal);
         if (useDeferredOpaquePath)
-            RenderDeferredOpaque(ref mvp, ref view, ref projection, width, height, objects, ToTk(camera.Position), shadowInfo);
+            RenderDeferredOpaque(ref mvp, ref view, ref projection, width, height, objects, ToTk(camera.Position), shadowInfo, spotShadowInfo, pointShadowInfo, targetFramebuffer, targetSamples);
 
         long staticPhaseStart = BeginRenderPass(SceneRenderPass.StaticOpaque);
-        // â”€â”€ Dibujar static batch (1 setup, N draw calls por textura) â”€
+        // ── Dibujar static batch (1 setup, N draw calls por textura) ─
         if (!useDeferredOpaquePath && _staticVertexCount > 0)
         {
             GL.UseProgram(solidShader);
@@ -857,12 +995,16 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         EndRenderPass(SceneRenderPass.StaticOpaque, staticPhaseStart);
 
         long dynamicPhaseStart = BeginRenderPass(SceneRenderPass.DynamicOpaque);
-        // â”€â”€ Dibujar objetos dinÃ¡micos â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Dibujar objetos dinámicos ─────────────────────────────
         if (!useDeferredOpaquePath && (dynamicMeshDraws.Count > 0 || skinnedMeshDraws.Count > 0))
         {
             Vector3 cameraPosTk = ToTk(camera.Position);
             GL.UseProgram(solidShader);
             GL.UniformMatrix4(solidMvpLocation, true, ref mvp);
+            // Los meshes GPU dinámicos comparten el programa con los pases de vidrio,
+            // instancing y skinning. Restablecer primero el modo de vértice evita que un
+            // estado heredado descarte todo el pase opaco en Forward/Forward+.
+            ApplyBakedSolidVertexMode();
             GL.Uniform1(solidTextureLocation, 0);
             ApplyShadowUniforms(shadowInfo, spotShadowInfo, pointShadowInfo);
             SetIntUniform(solidRefractivePassLocation, 0);
@@ -909,7 +1051,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         if (!diagnosticDebugView)
         {
         long shaderGraphPhaseStart = BeginRenderPass(SceneRenderPass.ShaderGraph);
-        // â”€â”€ Dibujar objetos con material Shader Graph (shaders custom) â”€â”€
+        // ── Dibujar objetos con material Shader Graph (shaders custom) ──
         bool needsShaderGraphSceneDepth =
             ShaderGraphRangesNeedSceneDepth(_staticRanges) ||
             ShaderGraphRangesNeedSceneDepth(solidRanges) ||
@@ -934,7 +1076,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         EndRenderPass(SceneRenderPass.ShaderGraph, shaderGraphPhaseStart);
 
         long terrainPhaseStart = BeginRenderPass(SceneRenderPass.Terrain);
-        // â”€â”€ Dibujar Terrain (CDLOD: quadtree + heightmap en GPU + splat/normal maps) â”€â”€â”€â”€
+        // ── Dibujar Terrain (CDLOD: quadtree + heightmap en GPU + splat/normal maps) ────
         RenderTerrainPass(ref mvp, eye, objects, shadowInfo);
         DrawTreeBillboardInstances(ref mvp, _treeBillboardsByTexture);
         DrawTreeBillboardInstances(ref mvp, _detailBillboardsByTexture, windStrength: 0.08f);
@@ -949,7 +1091,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
 
         GL.Disable(EnableCap.CullFace);
 
-        // â”€â”€ Issue occlusion queries after opaque geometry is drawn â”€
+        // ── Issue occlusion queries after opaque geometry is drawn ─
         if (!diagnosticDebugView && _occlusionCullingEnabled && _pendingOcclusionObjects.Count > 0)
         {
             long occlusionPhaseStart = BeginRenderPass(SceneRenderPass.Occlusion);
@@ -977,7 +1119,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
         }
         EndRenderPass(SceneRenderPass.LinesGizmos, linesPhaseStart);
 
-        // â”€â”€ PartÃ­culas billboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Partículas billboard ───────────────────────────────────
         long particlesPhaseStart = BeginRenderPass(SceneRenderPass.Particles);
         if (!diagnosticDebugView)
             DrawParticles(objects, ref view, ref mvp, eye);
@@ -988,7 +1130,7 @@ internal sealed partial class SceneViewportRenderer : IDisposable
 
     private readonly List<ParticleRenderRange> _particleRanges = new();
 
-    // Buffer temporal para ordenar partÃ­culas por distancia (back-to-front)
+    // Buffer temporal para ordenar partículas por distancia (back-to-front)
     private readonly List<(Particle P, float Dist)> _sortBuf = new(512);
 
     private void ProcessSubEmitters(GameObject obj, IReadOnlyList<GameObject> allObjects)

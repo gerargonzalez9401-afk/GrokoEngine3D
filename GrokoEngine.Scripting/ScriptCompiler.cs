@@ -21,10 +21,12 @@ namespace GrokoEngine
         public string       ErrorLog     { get; set; } = "";
     }
 
-    public class ScriptCompiler : IDisposable
+    public class ScriptCompiler : IDisposable, IScriptTypeResolver
     {
         public Assembly? UltimoEnsamblado { get; private set; }
         private readonly string assetsPath;
+        private readonly string trustFilePath;
+        private bool projectTrusted;
         private List<Type> tiposCompilados = new List<Type>();
         private List<Type> tiposScriptableObjects = new List<Type>();
         private AssemblyLoadContext? scriptLoadContext;
@@ -37,6 +39,8 @@ namespace GrokoEngine
         public event Action<string, bool>? OnLog;
         public IReadOnlyList<Type> CompiledTypes => tiposCompilados;
         public IReadOnlyList<Type> ScriptableObjectTypes => tiposScriptableObjects;
+        public bool IsProjectTrusted => projectTrusted;
+        public string TrustFilePath => trustFilePath;
 
         // Nombres canónicos del DLL de matemáticas en orden de prioridad
         private static readonly string[] MathDllNames =
@@ -48,7 +52,28 @@ namespace GrokoEngine
 
         public ScriptCompiler(string assetsPath)
         {
-            this.assetsPath = assetsPath;
+            this.assetsPath = Path.GetFullPath(assetsPath);
+            string? projectPath = Directory.GetParent(this.assetsPath)?.FullName;
+            if (string.IsNullOrWhiteSpace(projectPath))
+                throw new ArgumentException("Assets debe estar dentro de una carpeta de proyecto.", nameof(assetsPath));
+
+            trustFilePath = Path.Combine(projectPath, ".groko-script-trust.json");
+            projectTrusted = ProjectScriptTrust.Load(trustFilePath).Trusted;
+        }
+
+        /// <summary>
+        /// Changes the explicit trust decision. Passing persist=false is reserved
+        /// for an already exported game launched by the user.
+        /// </summary>
+        public void SetProjectTrusted(bool trusted, bool persist = true)
+        {
+            projectTrusted = trusted;
+            if (persist)
+                new ProjectScriptTrust { Trusted = trusted }.Save(trustFilePath);
+
+            Log(trusted
+                ? "[ScriptCompiler] Proyecto autorizado para ejecutar scripts."
+                : "[ScriptCompiler] Ejecución de scripts bloqueada para este proyecto.", false);
         }
 
         // =====================================================
@@ -128,7 +153,7 @@ $@"<!-- Auto-generado por GrokoEngine - no editar manualmente -->
                 // Solo reescribir si cambió el contenido
                 if (!File.Exists(csprojPath) || File.ReadAllText(csprojPath) != contenido)
                 {
-                    File.WriteAllText(csprojPath, contenido);
+                    AtomicFileWriter.WriteAllText(csprojPath, contenido);
                     Log($"[ScriptCompiler] GrokoScripts.csproj generado.", false);
                 }
                 else
@@ -214,7 +239,7 @@ $@"<!-- Auto-generado por GrokoEngine - no editar manualmente -->
 
                 if (!File.Exists(slnPath) || File.ReadAllText(slnPath) != contenido)
                 {
-                    File.WriteAllText(slnPath, contenido);
+                    AtomicFileWriter.WriteAllText(slnPath, contenido);
                     Log($"[ScriptCompiler] GrokoProject.sln generado.", false);
                 }
             }
@@ -414,6 +439,24 @@ $@"<!-- Auto-generado por GrokoEngine - no editar manualmente -->
         // =====================================================
         public CompilationResult Compile()
         {
+            if (!HasProjectScriptSources())
+            {
+                tiposCompilados.Clear();
+                tiposScriptableObjects.Clear();
+                UltimoEnsamblado = null;
+                scriptLoadContext?.Unload();
+                scriptLoadContext = null;
+                successfulScriptSignature = string.Empty;
+                return new CompilationResult { Success = true };
+            }
+
+            if (!projectTrusted)
+            {
+                const string message = "[ScriptCompiler] Scripts bloqueados: autoriza este proyecto antes de compilar o cargar código C#.";
+                Log(message, true);
+                return new CompilationResult { Success = false, ErrorLog = message };
+            }
+
             // Filtrar archivos obj/ y bin/ usando normalización de ruta real
             string objSep = Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar;
             string binSep = Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar;
@@ -477,7 +520,7 @@ $@"<!-- Auto-generado por GrokoEngine - no editar manualmente -->
                         src = repaired;
                         try
                         {
-                            File.WriteAllText(f, src);
+                            AtomicFileWriter.WriteAllText(f, src);
                             Log($"[ScriptCompiler] PlayerControllerPro actualizado para la API actual: {Path.GetFileName(f)}", false);
                         }
                         catch (Exception ex)
@@ -560,6 +603,29 @@ $@"<!-- Auto-generado por GrokoEngine - no editar manualmente -->
                 string msg = "[ScriptCompiler] Error crítico: " + ex.Message;
                 Log(msg, true);
                 return new CompilationResult { Success = false, ErrorLog = msg };
+            }
+        }
+
+        private bool HasProjectScriptSources()
+        {
+            try
+            {
+                return Directory.EnumerateFiles(assetsPath, "*.cs", SearchOption.AllDirectories)
+                    .Any(path =>
+                    {
+                        string normalized = Path.GetFullPath(path);
+                        string name = Path.GetFileName(normalized);
+                        string separator = Path.DirectorySeparatorChar.ToString();
+                        return !normalized.Contains(separator + "obj" + separator, StringComparison.OrdinalIgnoreCase) &&
+                               !normalized.Contains(separator + "bin" + separator, StringComparison.OrdinalIgnoreCase) &&
+                               !name.EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase) &&
+                               !name.Equals("AssemblyInfo.cs", StringComparison.OrdinalIgnoreCase);
+                    });
+            }
+            catch (Exception ex)
+            {
+                Log($"[ScriptCompiler] No se pudo inspeccionar scripts: {ex.Message}", true);
+                return true;
             }
         }
 
@@ -709,7 +775,7 @@ $@"<!-- Auto-generado por GrokoEngine - no editar manualmente -->
                 $"            // dt = tiempo desde el ultimo frame en segundos\n        }}\n" +
                 $"    }}\n}}\n";
 
-            File.WriteAllText(filePath, template);
+            AtomicFileWriter.WriteAllText(filePath, template);
             Log($"[ScriptCompiler] Script creado: {finalName}.cs", false);
             return filePath;
         }
@@ -1072,7 +1138,7 @@ namespace GrokoEngine
 }}
 ";
 
-            File.WriteAllText(filePath, template);
+            AtomicFileWriter.WriteAllText(filePath, template);
             Log($"[ScriptCompiler] Player Controller Pro creado: {finalName}.cs", false);
             return filePath;
         }

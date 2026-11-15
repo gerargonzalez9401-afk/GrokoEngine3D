@@ -20,12 +20,15 @@ internal static class Program
         {
             ("BoxCollider uses center and scale in bounds", BoxColliderUsesCenterAndScale),
             ("Debug dispatches logs with severity", DebugDispatchesLogsWithSeverity),
+            ("WavPcmReader loads PCM data and rejects corrupt WAV", WavPcmReaderLoadsPcmAndRejectsCorruptWav),
             ("Additional colliders compute bounds and register", AdditionalCollidersComputeBoundsAndRegister),
             ("SceneSerializer writes version and relative asset paths", SceneSerializerWritesVersionAndRelativePaths),
             ("AssetDatabase creates meta and resolves moved asset", AssetDatabaseCreatesMetaAndResolvesMovedAsset),
             ("AssetDatabase move preserves guid and meta", AssetDatabaseMovePreservesGuidAndMeta),
+            ("AssetDatabase move refuses orphan destination metadata", AssetDatabaseMoveRefusesOrphanDestinationMetadata),
             ("AssetDatabase validate repairs missing and orphan metas", AssetDatabaseValidateRepairsMissingAndOrphanMetas),
             ("AssetDatabase folder meta survives move and delete", AssetDatabaseFolderMetaSurvivesMoveAndDelete),
+            ("AssetDatabase restores a deleted asset from recovery", AssetDatabaseRestoresDeletedAssetFromRecovery),
             ("SceneSerializer resolves moved assets by guid", SceneSerializerResolvesMovedAssetsByGuid),
             ("SceneSerializer loads legacy prefab payload", SceneSerializerLoadsLegacyPrefabPayload),
             ("SceneSerializer normalizes null collections", SceneSerializerNormalizesNullCollections),
@@ -43,6 +46,7 @@ internal static class Program
             ("AssetService imports unique files and applies material", AssetServiceImportsUniqueFilesAndAppliesMaterial),
             ("ObjLoader loads minimal FBX mesh", ObjLoaderLoadsMinimalFbxMesh),
             ("ScriptCompiler skips unchanged recompiles", ScriptCompilerSkipsUnchangedRecompiles),
+            ("ScriptCompiler blocks untrusted projects and persists trust", ScriptCompilerRequiresProjectTrust),
             ("ScriptCompiler creates player controller pro script", ScriptCompilerCreatesPlayerControllerProScript),
             ("ScriptCompiler repairs legacy player controller pro script", ScriptCompilerRepairsLegacyPlayerControllerProScript),
             ("GameObject parent setter adds child only once", GameObjectParentSetterAddsChildOnlyOnce),
@@ -58,6 +62,7 @@ internal static class Program
             ("Animator interruption does not self-retrigger while condition stays true", AnimatorInterruptionDoesNotSelfRetriggerWhileConditionStaysTrue),
             ("Animator interruption respects exit time from abandoned state", AnimatorInterruptionRespectsExitTimeFromAbandonedState),
             ("SceneSerializer preserves contact shadow settings", SceneSerializerPreservesContactShadowSettings),
+            ("SceneSerializer preserves directional light shadow settings", SceneSerializerPreservesDirectionalLightShadowSettings),
             ("SceneSerializer preserves terrain trees", SceneSerializerPreservesTerrainTrees),
             ("SceneSerializer preserves procedural sky settings", SceneSerializerPreservesProceduralSkySettings),
             ("SceneSerializer preserves light cookie and IES paths", SceneSerializerPreservesLightCookieAndIesPaths),
@@ -842,6 +847,7 @@ internal static class Program
         File.WriteAllText(scriptPath, "using GrokoEngine; public class CacheProbe : MonoBehaviour { public int Value = 1; }");
 
         using var compiler = new ScriptCompiler(assets);
+        compiler.SetProjectTrusted(true);
         var first = compiler.Compile();
         AssertTrue(first.Success, "first compile success");
         var firstAssembly = compiler.UltimoEnsamblado;
@@ -858,12 +864,33 @@ internal static class Program
         AssertTrue(!ReferenceEquals(firstAssembly, compiler.UltimoEnsamblado), "changed script recompiles assembly");
     }
 
+    private static void ScriptCompilerRequiresProjectTrust()
+    {
+        string root = CreateTempProject();
+        string assets = Path.Combine(root, "Assets");
+        Directory.CreateDirectory(assets);
+        File.WriteAllText(Path.Combine(assets, "TrustProbe.cs"), "using GrokoEngine; public class TrustProbe : MonoBehaviour { }");
+
+        using (var untrusted = new ScriptCompiler(assets))
+        {
+            var blocked = untrusted.Compile();
+            AssertTrue(!blocked.Success, "untrusted project must not compile");
+            AssertContains(blocked.ErrorLog, "bloqueados", "untrusted error explains approval");
+            untrusted.SetProjectTrusted(true);
+            AssertTrue(untrusted.Compile().Success, "trusted project compiles");
+        }
+
+        using var reloaded = new ScriptCompiler(assets);
+        AssertTrue(reloaded.IsProjectTrusted, "trust choice persists per project");
+    }
+
     private static void ScriptCompilerCreatesPlayerControllerProScript()
     {
         string root = CreateTempProject();
         string assets = Path.Combine(root, "Assets");
 
         using var compiler = new ScriptCompiler(assets);
+        compiler.SetProjectTrusted(true);
         string scriptPath = compiler.CreatePlayerControllerScript(assets);
         string source = File.ReadAllText(scriptPath);
 
@@ -907,6 +934,7 @@ internal static class Program
             "}\n");
 
         using var compiler = new ScriptCompiler(assets);
+        compiler.SetProjectTrusted(true);
         var result = compiler.Compile();
         string repaired = File.ReadAllText(scriptPath);
 
@@ -2256,6 +2284,107 @@ internal static class Program
         AssertTrue(loadedDl.ContactShadows, "contact shadows flag restored");
         AssertNear(0.02f, loadedDl.ContactShadowLength, "contact shadow length restored");
         AssertEqual(12, loadedDl.ContactShadowSamples, "contact shadow samples restored");
+    }
+
+    private static void WavPcmReaderLoadsPcmAndRejectsCorruptWav()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        string wavPath = Path.Combine(folder, "tone.wav");
+        byte[] samples = { 0, 0, 255, 127, 0, 128, 0, 0 };
+        using (var stream = File.Create(wavPath))
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("RIFF"));
+            writer.Write(36 + samples.Length);
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("WAVEfmt "));
+            writer.Write(16);
+            writer.Write((short)1);
+            writer.Write((short)1);
+            writer.Write(22050);
+            writer.Write(44100);
+            writer.Write((short)2);
+            writer.Write((short)16);
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("data"));
+            writer.Write(samples.Length);
+            writer.Write(samples);
+        }
+
+        AssertTrue(WavPcmReader.TryRead(wavPath, out var wav, out string readError), "valid wav loads: " + readError);
+        AssertEqual(22050, wav.SampleRate, "wav sample rate");
+        AssertEqual((short)1, wav.Channels, "wav channel count");
+        AssertEqual((short)16, wav.BitsPerSample, "wav bit depth");
+        AssertEqual(samples.Length, wav.Samples.Length, "wav sample bytes");
+
+        string brokenPath = Path.Combine(folder, "broken.wav");
+        File.WriteAllText(brokenPath, "not a wav");
+        AssertFalse(WavPcmReader.TryRead(brokenPath, out _, out _), "corrupt wav rejected");
+    }
+
+    private static void AssetDatabaseRestoresDeletedAssetFromRecovery()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets");
+        Directory.CreateDirectory(root);
+        string assetPath = Path.Combine(root, "Recoverable.mat");
+        File.WriteAllText(assetPath, "recover me");
+
+        var database = new AssetDatabase(root);
+        string guid = database.GetOrCreateGuid(assetPath);
+        AssertTrue(database.DeleteAsset(assetPath, out string deleteError), "move asset to recovery: " + deleteError);
+        AssertFalse(File.Exists(assetPath), "asset removed from Assets after delete");
+        AssertFalse(File.Exists(AssetDatabase.GetMetaPath(assetPath)), "metadata removed from Assets after delete");
+
+        var entry = database.GetRecoveryEntries().Single();
+        AssertEqual(guid, entry.Guid, "recovery retains asset guid");
+        AssertTrue(database.RestoreRecoveryEntry(entry.Id, out string restoredPath, out string restoreError), "restore asset: " + restoreError);
+        AssertEqual(assetPath, restoredPath, "asset restored to original path");
+        AssertTrue(File.Exists(assetPath), "asset exists after restore");
+        AssertEqual(guid, database.GetOrCreateGuid(assetPath), "restore preserves original guid");
+        AssertEqual(0, database.GetRecoveryEntries().Count, "recovery entry consumed after restore");
+    }
+
+    private static void AssetDatabaseMoveRefusesOrphanDestinationMetadata()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets");
+        Directory.CreateDirectory(root);
+        string source = Path.Combine(root, "Source.mat");
+        string destination = Path.Combine(root, "Destination.mat");
+        File.WriteAllText(source, "source");
+
+        var database = new AssetDatabase(root);
+        string guid = database.GetOrCreateGuid(source);
+        File.WriteAllText(AssetDatabase.GetMetaPath(destination), "{\"Guid\":\"orphan\"}");
+
+        AssertFalse(database.MoveAsset(source, destination, out string error), "move must reject orphan destination metadata");
+        AssertContains(error, "metadata", "move reports destination metadata conflict");
+        AssertTrue(File.Exists(source), "source remains after rejected move");
+        AssertTrue(File.Exists(AssetDatabase.GetMetaPath(source)), "source metadata remains after rejected move");
+        AssertEqual(guid, database.GetOrCreateGuid(source), "source GUID remains stable after rejected move");
+    }
+
+    private static void SceneSerializerPreservesDirectionalLightShadowSettings()
+    {
+        var physics = new PhysicsEngine();
+        var scripts = new ScriptCompiler(Path.Combine(Path.GetTempPath(), "GrokoEngineTests", Guid.NewGuid().ToString("N"), "Assets"));
+        var obj = new GameObject { Name = "Sun" };
+        var dl = obj.AddComponent<DirectionalLight>();
+        dl.Mode = LightMode.Mixed;
+        dl.Shadows = true;
+        dl.ShadowStrength = 0.73f;
+        dl.ShadowBias = 0.12f;
+        dl.ShadowNormalBias = 0.85f;
+        dl.ShadowNearPlane = 1.25f;
+
+        string json = SceneSerializer.Serialize(new[] { obj });
+        var loaded = SceneSerializer.Deserialize(json, physics, scripts);
+        var loadedDl = loaded[0].GetComponent<DirectionalLight>()!;
+
+        AssertEqual(LightMode.Mixed, loadedDl.Mode, "directional light mode restored");
+        AssertTrue(loadedDl.Shadows, "directional shadows flag restored");
+        AssertNear(0.73f, loadedDl.ShadowStrength, "directional shadow strength restored");
+        AssertNear(0.12f, loadedDl.ShadowBias, "directional shadow bias restored");
+        AssertNear(0.85f, loadedDl.ShadowNormalBias, "directional shadow normal bias restored");
+        AssertNear(1.25f, loadedDl.ShadowNearPlane, "directional shadow near plane restored");
     }
 
     private static void SceneSerializerPreservesProceduralSkySettings()
@@ -3628,7 +3757,11 @@ internal static class Program
         baker.BakeAsync(new[] { obj }, lighting, _ => mesh, resolution: 1).GetAwaiter().GetResult();
 
         string path = baker.BakedPaths[obj.EditorId];
-        byte red = ReadBmpPixelRed(path);
+        // El baker ahora empaqueta charts en un atlas con padding; el primer texel
+        // pertenece al gutter y ya no representa necesariamente la geometría.
+        // Verificamos el máximo del atlas para conservar la intención real: la
+        // escala mundial altera la distancia/atenuación de la PointLight.
+        byte red = ReadBmpMaxRed(path);
         AssertTrue(red > 190, "scaled lightmap red channel");
     }
 
@@ -4176,6 +4309,22 @@ internal static class Program
         AssertEqual(CameraTextureMode.Off, loadedCam.DepthTexture, "camera depth texture restored");
         AssertEqual("Default", loadedCam.CullingMask, "camera culling mask restored");
         AssertTrue(loadedCam.OcclusionCulling, "camera occlusion restored");
+    }
+
+    private static byte ReadBmpMaxRed(string path)
+    {
+        byte[] bytes = File.ReadAllBytes(path);
+        int offset = BitConverter.ToInt32(bytes, 10);
+        int width = BitConverter.ToInt32(bytes, 18);
+        int height = Math.Abs(BitConverter.ToInt32(bytes, 22));
+        int bitsPerPixel = BitConverter.ToInt16(bytes, 28);
+        int bytesPerPixel = bitsPerPixel / 8;
+        int rowBytes = ((width * bytesPerPixel + 3) / 4) * 4;
+        byte max = 0;
+        for (int y = 0; y < height; y++)
+        for (int x = 0; x < width; x++)
+            max = Math.Max(max, bytes[offset + y * rowBytes + x * bytesPerPixel + 2]);
+        return max;
     }
 
     private static void SceneSerializerPreservesReflectionProbeSettings()

@@ -30,7 +30,7 @@ internal static class PrimitiveMeshFactory
         string path = Path.Combine(directory, kind + ".obj");
         string obj = BuildObj(kind);
         if (!File.Exists(path) || File.ReadAllText(path) != obj)
-            File.WriteAllText(path, obj, Encoding.UTF8);
+            AtomicFile.WriteAllText(path, obj);
 
         AssetDatabase.Get(assetsRoot).GetOrCreateGuid(path);
         ObjLoader.InvalidateCache(path);

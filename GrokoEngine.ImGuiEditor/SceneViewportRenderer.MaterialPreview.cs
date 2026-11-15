@@ -7,6 +7,16 @@ namespace GrokoEngine.ImGuiEditor;
 
 internal sealed partial class SceneViewportRenderer
 {
+    // x = metallic, y = roughness, z = flags (bit 0 specular, bit 1 reflections),
+    // w = subsurface/fabric transmission. Empaquetar los dos bool libera el cuarto
+    // canal para un parámetro real de material sin aumentar el formato de vértice.
+    private static Vector4 PackSurfaceMaterial(float metallic, float roughness, bool specularHighlights, bool environmentReflections, float subsurfaceScattering = 0f)
+        => new(
+            Math.Clamp(metallic, 0f, 1f),
+            Math.Clamp(roughness, 0.04f, 1f),
+            (specularHighlights ? 1f : 0f) + (environmentReflections ? 2f : 0f),
+            Math.Clamp(subsurfaceScattering, 0f, 1f));
+
     // Vista previa de material en arrastre (estilo Unity): mientras se arrastra un .mat
     // sobre el viewport, el objeto/sub-malla bajo el cursor muestra ese material sin soltarlo.
     public string? PreviewMaterialObjectId;
@@ -135,15 +145,15 @@ internal sealed partial class SceneViewportRenderer
     {
         if (GetPreviewOverrideData(obj, -1) is { } over)
             return (
-                new Vector4(Math.Clamp(over.Metallic, 0f, 1f), Math.Clamp(over.Roughness, 0.04f, 1f), over.SpecularHighlights ? 1f : 0f, over.EnvironmentReflections ? 1f : 0f),
+                PackSurfaceMaterial(over.Metallic, over.Roughness, over.SpecularHighlights, over.EnvironmentReflections, over.SubsurfaceScattering),
                 new Vector4(Math.Max(0f, over.EmissionR), Math.Max(0f, over.EmissionG), Math.Max(0f, over.EmissionB), Math.Max(0f, over.EmissionIntensity)));
 
         var material = obj.GetComponent<Material>();
         if (material == null)
-            return (new Vector4(0f, 0.5f, 1f, 1f), Vector4.Zero);
+            return (PackSurfaceMaterial(0f, 0.5f, true, true), Vector4.Zero);
 
         return (
-            new Vector4(Math.Clamp(material.Metallic, 0f, 1f), Math.Clamp(material.Roughness, 0.04f, 1f), material.SpecularHighlights ? 1f : 0f, material.EnvironmentReflections ? 1f : 0f),
+            PackSurfaceMaterial(material.Metallic, material.Roughness, material.SpecularHighlights, material.EnvironmentReflections, material.SubsurfaceScattering),
             new Vector4(Math.Max(0f, material.EmissionR), Math.Max(0f, material.EmissionG), Math.Max(0f, material.EmissionB), Math.Max(0f, material.EmissionIntensity)));
     }
 
@@ -241,7 +251,7 @@ internal sealed partial class SceneViewportRenderer
                 new Vector4(Math.Clamp(data.R, 0f, 1f), Math.Clamp(data.G, 0f, 1f), Math.Clamp(data.B, 0f, 1f), Math.Clamp(data.Alpha, 0f, 1f)),
                 string.IsNullOrWhiteSpace(albedo) ? null : albedo,
                 new SurfaceMaps(data.NormalMapPath, data.RoughnessMapPath, data.MetallicMapPath),
-                new Vector4(Math.Clamp(data.Metallic, 0f, 1f), Math.Clamp(data.Roughness, 0.04f, 1f), data.SpecularHighlights ? 1f : 0f, data.EnvironmentReflections ? 1f : 0f),
+                PackSurfaceMaterial(data.Metallic, data.Roughness, data.SpecularHighlights, data.EnvironmentReflections, data.SubsurfaceScattering),
                 new Vector4(Math.Max(0f, data.EmissionR), Math.Max(0f, data.EmissionG), Math.Max(0f, data.EmissionB), Math.Max(0f, data.EmissionIntensity)),
                 new SurfaceTransparency(data.SurfaceType, Math.Clamp(data.Alpha, 0f, 1f), Math.Clamp(data.AlphaClipThreshold, 0f, 1f), Math.Clamp(data.RefractionStrength, 0f, 1f), Math.Clamp(data.DistortionStrength, 0f, 1f)),
                 string.IsNullOrWhiteSpace(data.ShaderGraphPath) ? null : data.ShaderGraphPath,
@@ -257,7 +267,7 @@ internal sealed partial class SceneViewportRenderer
             color,
             submesh.TexturePath,
             new SurfaceMaps(null, null, null),
-            new Vector4(0f, 0.5f, 1f, 1f),
+            PackSurfaceMaterial(0f, 0.5f, true, true),
             Vector4.Zero,
             SurfaceTransparency.Opaque,
             null, null, null);

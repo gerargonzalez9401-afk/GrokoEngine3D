@@ -8,9 +8,20 @@ internal sealed partial class SceneRenderTarget
 {
     public void ApplyPostProcess(PostProcessSettings? settings)
     {
+        // TAA requiere motion vectors e historial. Hasta que ambos existan, degradar de
+        // forma explícita a SMAA evita presentar un selector que no hace nada.
+        CameraAntiAliasingMode effectiveAa = AntiAliasingMode == CameraAntiAliasingMode.TAA
+            ? CameraAntiAliasingMode.SMAA
+            : AntiAliasingMode;
+        bool useSmaa = effectiveAa == CameraAntiAliasingMode.SMAA;
         bool enabled = settings?.PostProcessEnabled ?? false;
-        float exposure = enabled ? settings!.Exposure : 1f;
-        float gamma = enabled ? settings!.Gamma : 2.2f;
+        bool autoExposure = enabled && settings!.AutoExposure;
+        float autoExposureMinEv = autoExposure ? settings!.AutoExposureMinEV : -4f;
+        float autoExposureMaxEv = autoExposure ? settings!.AutoExposureMaxEV : 4f;
+        float autoExposureCompensation = autoExposure ? settings!.AutoExposureCompensation : 0f;
+        float autoExposureSpeed = autoExposure ? settings!.AutoExposureAdaptationSpeed : 1.5f;
+        float exposure = enabled ? Math.Clamp(settings!.Exposure, 0.001f, 32f) : 1f;
+        float gamma = enabled ? Math.Clamp(settings!.Gamma, 0.1f, 4f) : 2.2f;
         int toneMapping = enabled && settings != null && settings.ToneMapping ? 1 : 0;
         int toneMappingMode = enabled ? settings!.ToneMappingMode : 0;
         float wbTemp = enabled ? settings!.WhiteBalanceTemperature : 0f;
@@ -18,10 +29,10 @@ internal sealed partial class SceneRenderTarget
         int filmGrain = enabled && settings!.FilmGrain ? 1 : 0;
         float filmGrainIntensity = enabled ? settings!.FilmGrainIntensity : 0f;
         float time = (Environment.TickCount64 % 100000L) / 1000f;
-        float bloomStrength = enabled && settings!.Bloom ? settings.BloomStrength : 0f;
-        float bloomThreshold = enabled && settings!.Bloom ? settings.BloomThreshold : 1000f;
-        float bloomScatter = enabled && settings!.Bloom ? settings.BloomScatter : 0.7f;
-        float bloomClamp = enabled && settings!.Bloom ? settings.BloomClamp : 65472f;
+        float bloomStrength = enabled && settings!.Bloom ? Math.Clamp(settings.BloomStrength, 0f, 10f) : 0f;
+        float bloomThreshold = enabled && settings!.Bloom ? Math.Clamp(settings.BloomThreshold, 0f, 100f) : 1000f;
+        float bloomScatter = enabled && settings!.Bloom ? Math.Clamp(settings.BloomScatter, 0f, 1f) : 0.7f;
+        float bloomClamp = enabled && settings!.Bloom ? Math.Clamp(settings.BloomClamp, 0f, 65472f) : 65472f;
         float bloomTintR = enabled && settings!.Bloom ? settings.BloomTintR : 1f;
         float bloomTintG = enabled && settings!.Bloom ? settings.BloomTintG : 1f;
         float bloomTintB = enabled && settings!.Bloom ? settings.BloomTintB : 1f;
@@ -45,8 +56,8 @@ internal sealed partial class SceneRenderTarget
         float vignetteColorG = enabled && settings!.Vignette ? settings.VignetteColorG : 0f;
         float vignetteColorB = enabled && settings!.Vignette ? settings.VignetteColorB : 0f;
         int vignetteRounded = enabled && settings!.Vignette && settings.VignetteRounded ? 1 : 0;
-        float chromaticAberration = enabled && settings!.ChromaticAberration ? settings.ChromaticAberrationIntensity : 0f;
-        float aoStrength = enabled && settings!.AmbientOcclusion ? settings.AmbientOcclusionStrength : 0f;
+        float chromaticAberration = enabled && settings!.ChromaticAberration ? Math.Clamp(settings.ChromaticAberrationIntensity, 0f, 1f) : 0f;
+        float aoStrength = enabled && settings!.AmbientOcclusion ? Math.Clamp(settings.AmbientOcclusionStrength, 0f, 1f) : 0f;
         // Stop NaNs / Dithering son ajustes de salida de la CÁMARA (Camera.StopNaNs/Dithering),
         // independientes de si el PostProcessSettings global está activo o no.
         int stopNaNs = StopNaNsEnabled ? 1 : 0;
@@ -56,7 +67,10 @@ internal sealed partial class SceneRenderTarget
         if (bloomStrength > 0f)
             RenderBloom(bloomThreshold, bloomScatter, bloomClamp);
 
-        GL.BindFramebuffer(FramebufferTarget.Framebuffer, postFramebuffer);
+        if (autoExposure)
+            ApplyAutoExposure(autoExposureMinEv, autoExposureMaxEv, autoExposureCompensation, autoExposureSpeed);
+
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, useSmaa ? smaaSourceFramebuffer : postFramebuffer);
         GL.Viewport(0, 0, Width, Height);
         GL.Disable(EnableCap.Blend);
         GL.Disable(EnableCap.DepthTest);
@@ -105,7 +119,15 @@ internal sealed partial class SceneRenderTarget
         SetUniform(uVignetteRoundedLocation, vignetteRounded);
         SetUniform(uChromaticAberrationLocation, chromaticAberration);
         SetUniform(uAoStrengthLocation, aoStrength);
-        SetUniform(uFxaaEnabledLocation, FxaaEnabled ? 1 : 0);
+        SetUniform(uCameraNearLocation, Math.Max(0.001f, CameraNearClip));
+        SetUniform(uCameraFarLocation, Math.Max(CameraNearClip + 0.001f, CameraFarClip));
+        // SMAA recibe primero una reducción direccional de subpíxel. El segundo pase
+        // SMAA conserva detalle y corrige los patrones largos; juntos se acercan mucho
+        // más al borde de MSAA de Forward+ que el filtro de cinco taps anterior.
+        SetUniform(uFxaaEnabledLocation,
+            effectiveAa is CameraAntiAliasingMode.FXAA or CameraAntiAliasingMode.SMAA ? 1 : 0);
+        SetUniform(uAutoExposureTextureLocation, 3);
+        SetUniform(uAutoExposureEnabledLocation, autoExposure ? 1 : 0);
         SetUniform(uBloomQualityLocation, Math.Clamp(BloomQuality, 0, 3));
         SetUniform(uAoQualityLocation, DepthTextureEnabled ? Math.Clamp(AmbientOcclusionQuality, 0, 3) : 0);
         SetUniform(uStopNaNsLocation, stopNaNs);
@@ -119,6 +141,8 @@ internal sealed partial class SceneRenderTarget
         GL.BindTexture(TextureTarget.Texture2D, depthTexture);
         GL.ActiveTexture(TextureUnit.Texture2);
         GL.BindTexture(TextureTarget.Texture2D, bloomMipCount > 0 ? bloomMipTex[0] : 0);
+        GL.ActiveTexture(TextureUnit.Texture3);
+        GL.BindTexture(TextureTarget.Texture2D, autoExposure ? autoExposureTextures[autoExposureReadIndex] : 0);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindVertexArray(postVertexArray);
         GL.DrawArrays(PrimitiveType.Triangles, 0, 3);
@@ -126,9 +150,14 @@ internal sealed partial class SceneRenderTarget
         GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.ActiveTexture(TextureUnit.Texture1);
         GL.BindTexture(TextureTarget.Texture2D, 0);
+        GL.ActiveTexture(TextureUnit.Texture3);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.UseProgram(0);
         GL.DepthMask(true);
+
+        if (useSmaa)
+            ApplySmaa();
     }
 
     private void CachePostUniformLocations()
@@ -160,8 +189,12 @@ internal sealed partial class SceneRenderTarget
         uVignetteRoundedLocation = GL.GetUniformLocation(postShader, "uVignetteRounded");
         uChromaticAberrationLocation = GL.GetUniformLocation(postShader, "uChromaticAberration");
         uAoStrengthLocation = GL.GetUniformLocation(postShader, "uAoStrength");
+        uCameraNearLocation = GL.GetUniformLocation(postShader, "uCameraNear");
+        uCameraFarLocation = GL.GetUniformLocation(postShader, "uCameraFar");
         uTexelLocation = GL.GetUniformLocation(postShader, "uTexel");
         uFxaaEnabledLocation = GL.GetUniformLocation(postShader, "uFxaaEnabled");
+        uAutoExposureTextureLocation = GL.GetUniformLocation(postShader, "uAutoExposureTex");
+        uAutoExposureEnabledLocation = GL.GetUniformLocation(postShader, "uAutoExposureEnabled");
         uBloomQualityLocation = GL.GetUniformLocation(postShader, "uBloomQuality");
         uAoQualityLocation = GL.GetUniformLocation(postShader, "uAoQuality");
         uToneMappingModeLocation = GL.GetUniformLocation(postShader, "uToneMappingMode");
@@ -242,6 +275,7 @@ internal sealed partial class SceneRenderTarget
             uniform sampler2D uScene;
             uniform sampler2D uDepth;
             uniform sampler2D uBloomTex;
+            uniform sampler2D uAutoExposureTex;
             uniform float uExposure;
             uniform float uGamma;
             uniform int uToneMapping;
@@ -266,8 +300,11 @@ internal sealed partial class SceneRenderTarget
             uniform int uVignetteRounded;
             uniform float uChromaticAberration;
             uniform float uAoStrength;
+            uniform float uCameraNear;
+            uniform float uCameraFar;
             uniform vec2 uTexel;
             uniform int uFxaaEnabled;
+            uniform int uAutoExposureEnabled;
             uniform int uBloomQuality;
             uniform int uAoQuality;
             uniform int uToneMappingMode;
@@ -295,8 +332,9 @@ internal sealed partial class SceneRenderTarget
             float ContactShadow(vec2 uv)
             {
                 if (uContactShadowsEnabled == 0) return 1.0;
-                float originDepth = texture(uDepth, uv).r;
-                if (originDepth >= 0.9999) return 1.0; // cielo: no hay a quien hacerle sombra de contacto
+                float originRawDepth = texture(uDepth, uv).r;
+                if (originRawDepth >= 0.9999) return 1.0; // cielo: no hay a quien hacerle sombra de contacto
+                float originDepth = originRawDepth;
 
                 vec2 toSun = uContactShadowSun - uv;
                 float toSunLen = length(toSun);
@@ -311,18 +349,16 @@ internal sealed partial class SceneRenderTarget
                     vec2 sampleUv = uv + dir * stepLen * float(i);
                     if (sampleUv.x < 0.0 || sampleUv.x > 1.0 || sampleUv.y < 0.0 || sampleUv.y > 1.0)
                         break;
-                    float d = texture(uDepth, sampleUv).r;
-                    float depthDelta = originDepth - d;
-                    // Sesgo creciente con la distancia recorrida (evita auto-sombreado/bandas en
-                    // superficies casi paralelas a la direccion de marcha, el artefacto clasico de
-                    // esta tecnica) + techo de "grosor" maximo: si lo encontrado esta MUY por
-                    // delante, es geometria distinta y lejana (no un contacto real), se descarta
-                    // para no generar artefactos en objetos con superficies curvas/en angulo.
+                    float rawDepth = texture(uDepth, sampleUv).r;
+                    if (rawDepth >= 0.9999) continue;
+                    float depthDelta = originDepth - rawDepth;
+                    // Sesgo creciente y grosor muy limitado: reduce acne, bandas y el contacto
+                    // falso entre objetos separados en la imagen.
                     float t = float(i) / float(samples);
-                    float bias = mix(0.0006, 0.0025, t);
-                    const float maxThickness = 0.01;
+                    float bias = mix(0.0012, 0.0035, t);
+                    const float maxThickness = 0.0075;
                     if (depthDelta > bias && depthDelta < maxThickness)
-                        shadow = min(shadow, mix(0.25, 1.0, t));
+                        shadow = min(shadow, mix(0.65, 1.0, t));
                 }
                 return shadow;
             }
@@ -473,11 +509,19 @@ internal sealed partial class SceneRenderTarget
                 return texture(uBloomTex, uv).rgb * max(uBloomTint, vec3(0.0));
             }
 
+            float LinearDepth(float d)
+            {
+                float n = max(uCameraNear, 0.001);
+                float f = max(uCameraFar, n + 0.001);
+                return (2.0 * n * f) / max(f + n - (d * 2.0 - 1.0) * (f - n), 0.0001);
+            }
+
             float ScreenAO(vec2 uv)
             {
                 if (uAoStrength <= 0.0 || uAoQuality <= 0) return 1.0;
-                float center = texture(uDepth, uv).r;
-                if (center >= 0.9999) return 1.0;
+                float centerRaw = texture(uDepth, uv).r;
+                if (centerRaw >= 0.9999) return 1.0;
+                float center = LinearDepth(centerRaw);
 
                 // GTAO-style screen AO: multi-ring, rotated per pixel, with a
                 // depth-aware range falloff. It is still a single post pass, but
@@ -486,7 +530,7 @@ internal sealed partial class SceneRenderTarget
                 float occ = 0.0;
                 float weight = 0.0;
                 int sampleCount = uAoQuality == 1 ? 8 : (uAoQuality == 2 ? 12 : 16);
-                float radius = uAoQuality == 1 ? 3.0 : (uAoQuality == 2 ? 5.0 : 7.5);
+                float radius = uAoQuality == 1 ? 1.75 : (uAoQuality == 2 ? 2.75 : 4.0);
                 float noise = fract(sin(dot(floor(uv / max(uTexel, vec2(0.000001))), vec2(12.9898, 78.233)) + uTime * 0.37) * 43758.5453);
                 float angle = noise * 6.28318530718;
                 mat2 rot = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
@@ -503,16 +547,17 @@ internal sealed partial class SceneRenderTarget
                     float ring = 0.45 + float(i % 4) * 0.23;
                     vec2 o = rot * offsets[i] * uTexel * radius * ring;
                     float d = texture(uDepth, SafeUv(uv + o)).r;
-                    float dz = center - d;
-                    float range = 1.0 - smoothstep(0.0005, 0.035, abs(dz));
-                    float horizon = smoothstep(0.0006, 0.012, dz);
+                    if (d >= 0.9999) continue;
+                    float dz = center - LinearDepth(d);
+                    float range = 1.0 - smoothstep(0.08, max(0.35, center * 0.12), abs(dz));
+                    float horizon = smoothstep(0.02, max(0.15, center * 0.06), dz);
                     float sampleWeight = range * (1.0 / (1.0 + dot(o / max(uTexel, vec2(0.000001)), o / max(uTexel, vec2(0.000001))) * 0.018));
                     occ += horizon * sampleWeight;
                     weight += sampleWeight;
                 }
 
                 float ao = 1.0 - pow(clamp(occ / max(weight, 0.0001), 0.0, 1.0), 0.82) * uAoStrength;
-                return clamp(ao, 0.28, 1.0);
+                return clamp(ao, 0.58, 1.0);
             }
 
             float Luma(vec3 color)
@@ -523,15 +568,36 @@ internal sealed partial class SceneRenderTarget
             vec3 ApplyFxaa(vec2 uv, vec3 center)
             {
                 if (uFxaaEnabled == 0) return center;
-                vec3 n = texture(uScene, SafeUv(uv + vec2(0.0, -1.0) * uTexel)).rgb;
-                vec3 s = texture(uScene, SafeUv(uv + vec2(0.0,  1.0) * uTexel)).rgb;
-                vec3 e = texture(uScene, SafeUv(uv + vec2( 1.0, 0.0) * uTexel)).rgb;
-                vec3 w = texture(uScene, SafeUv(uv + vec2(-1.0, 0.0) * uTexel)).rgb;
-                float lc = Luma(center);
-                float minL = min(lc, min(min(Luma(n), Luma(s)), min(Luma(e), Luma(w))));
-                float maxL = max(lc, max(max(Luma(n), Luma(s)), max(Luma(e), Luma(w))));
-                if (maxL - minL < max(0.035, maxL * 0.12)) return center;
-                return mix(center, (center + n + s + e + w) * 0.2, 0.45);
+                // FXAA 3-style directional resolve: suaviza a lo largo del borde, no
+                // en cruz. Evita que costuras y detalles de materiales queden lavados.
+                vec3 nw = texture(uScene, SafeUv(uv + vec2(-1.0, -1.0) * uTexel)).rgb;
+                vec3 ne = texture(uScene, SafeUv(uv + vec2( 1.0, -1.0) * uTexel)).rgb;
+                vec3 sw = texture(uScene, SafeUv(uv + vec2(-1.0,  1.0) * uTexel)).rgb;
+                vec3 se = texture(uScene, SafeUv(uv + vec2( 1.0,  1.0) * uTexel)).rgb;
+                float lumaNW = Luma(nw);
+                float lumaNE = Luma(ne);
+                float lumaSW = Luma(sw);
+                float lumaSE = Luma(se);
+                float lumaM = Luma(center);
+                float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+                float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+                if (lumaMax - lumaMin < max(0.025, lumaMax * 0.075)) return center;
+
+                vec2 direction;
+                direction.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
+                direction.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
+                float reduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * 0.03125, 0.0078125);
+                float inverseMin = 1.0 / (min(abs(direction.x), abs(direction.y)) + reduce);
+                direction = clamp(direction * inverseMin, vec2(-8.0), vec2(8.0)) * uTexel;
+
+                vec3 sampleA = 0.5 * (
+                    texture(uScene, SafeUv(uv + direction * (1.0 / 3.0 - 0.5))).rgb +
+                    texture(uScene, SafeUv(uv + direction * (2.0 / 3.0 - 0.5))).rgb);
+                vec3 sampleB = sampleA * 0.5 + 0.25 * (
+                    texture(uScene, SafeUv(uv + direction * -0.5)).rgb +
+                    texture(uScene, SafeUv(uv + direction *  0.5)).rgb);
+                float lumaB = Luma(sampleB);
+                return (lumaB < lumaMin || lumaB > lumaMax) ? sampleA : sampleB;
             }
 
             vec3 ApplyHueShift(vec3 color, float degrees)
@@ -609,7 +675,10 @@ internal sealed partial class SceneRenderTarget
                     hdr += GodRays(vUv);
                 hdr *= ScreenAO(vUv);
                 hdr *= ContactShadow(vUv);
-                hdr *= uExposure * exp2(uPostExposure);
+                float cameraExposure = uAutoExposureEnabled == 1
+                    ? max(texture(uAutoExposureTex, vec2(0.5)).r, 0.0001)
+                    : 1.0;
+                hdr *= uExposure * cameraExposure * exp2(uPostExposure);
                 hdr = WhiteBalance(hdr, uWbTemp, uWbTint);
                 vec3 mapped;
                 if (uToneMapping != 0)

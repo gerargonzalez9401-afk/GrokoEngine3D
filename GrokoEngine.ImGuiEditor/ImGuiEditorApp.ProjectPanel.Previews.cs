@@ -51,16 +51,16 @@ private void DrawAssetDragPreview(string path)
 
 private void DrawProjectAssetPreview(ImDrawListPtr drawList, string path, bool isDirectory, Vector2 min, float size)
     {
-        // PolÃ­tica: lo que YA estÃ¡ en cachÃ© se dibuja SIEMPRE (un AddImage es
-        // barato, no depende del hover ni del profiler). Lo visible y aÃºn no
-        // cacheado entra en cola; la generaciÃ³n estÃ¡ limitada por frame en
+        // Política: lo que YA está en caché se dibuja SIEMPRE (un AddImage es
+        // barato, no depende del hover ni del profiler). Lo visible y aún no
+        // cacheado entra en cola; la generación está limitada por frame en
         // ProcessPreviewGenerationQueue (1 job/frame, presupuesto de ms y de
-        // trabajos de disco), asÃ­ que carga "de a poco" sin bloquear FPS.
+        // trabajos de disco), así que carga "de a poco" sin bloquear FPS.
 
         if (isDirectory)
         {
             // No escanear el contenido de cada carpeta en cada frame.
-            // Para mÃ¡ximo FPS dibujamos icono de carpeta rÃ¡pido.
+            // Para máximo FPS dibujamos icono de carpeta rápido.
             DrawFolderPreview(drawList, min, size, false);
             return;
         }
@@ -80,8 +80,8 @@ private void DrawProjectAssetPreview(ImDrawListPtr drawList, string path, bool i
 
         if (MaterialAsset.IsMaterialPath(path))
         {
-            // Esfera PBR cacheada (Library/Previews); si aÃºn no existe, se encola
-            // su generaciÃ³n en fondo y mientras tanto se ve el placeholder.
+            // Esfera PBR cacheada (Library/Previews); si aún no existe, se encola
+            // su generación en fondo y mientras tanto se ve el placeholder.
             DrawMaterialPreview(drawList, path, min, size, requestPreview: true);
             return;
         }
@@ -427,9 +427,9 @@ private static IEnumerable<string> EnumeratePreviewPrewarmAssets(IEnumerable<str
         }
     }
 
-    // Intervalo de revalidaciÃ³n CON jitter: evita que decenas de previews cacheadas en el mismo
-    // frame expiren todas a la vez (rÃ¡faga de lecturas de disco â†’ tirÃ³n de UI periÃ³dico). Las
-    // reparte a lo largo de ~3 s extra. Random.Shared: esto tambiÃ©n se llama desde los workers
+    // Intervalo de revalidación CON jitter: evita que decenas de previews cacheadas en el mismo
+    // frame expiren todas a la vez (ráfaga de lecturas de disco → tirón de UI periódico). Las
+    // reparte a lo largo de ~3 s extra. Random.Shared: esto también se llama desde los workers
     // de fondo de previews, y un Random normal se corrompe con acceso concurrente.
     private static TimeSpan PreviewValidationDelay() =>
         AssetPreviewValidationInterval + TimeSpan.FromMilliseconds(System.Random.Shared.Next(0, 3000));
@@ -787,7 +787,7 @@ private bool TryGetShaderGraphMaterialPreviewTexture(string path, MaterialAssetD
             QueuePreviewGeneration(path);
 
         // Mantener el Project Panel ligero: no cocinamos previews ShaderGraph dentro del draw del tile.
-        // El preview normal del material se carga por cola/cache y evita caÃ­das de FPS al mostrar muchos assets.
+        // El preview normal del material se carga por cola/cache y evita caídas de FPS al mostrar muchos assets.
         assetPreviewFrameMisses.Add(key);
         return false;
 
@@ -815,9 +815,9 @@ private bool TryGetMaterialPreviewSourceCache(string path, out MaterialPreviewSo
 
         try
         {
-            // Dentro de la ventana de validaciÃ³n (o en Play) NO se toca el disco en absoluto
-            // (ni File.Exists): este mÃ©todo corre en el draw de tiles visibles y del preview
-            // del inspector. Un borrado externo se detecta en la siguiente revalidaciÃ³n.
+            // Dentro de la ventana de validación (o en Play) NO se toca el disco en absoluto
+            // (ni File.Exists): este método corre en el draw de tiles visibles y del preview
+            // del inspector. Un borrado externo se detecta en la siguiente revalidación.
             if (materialPreviewSourceCache.TryGetValue(path, out var existing) &&
                 (existing.NextValidationUtc > DateTime.UtcNow || isPlaying))
             {
@@ -836,8 +836,8 @@ private bool TryGetMaterialPreviewSourceCache(string path, out MaterialPreviewSo
             {
                 var now = DateTime.UtcNow;
 
-                // El .mat no cambiÃ³: revalidar SOLO las dependencias (stats de fecha), sin
-                // re-parsear el JSON (el Load periÃ³dico por material era un coste real,
+                // El .mat no cambió: revalidar SOLO las dependencias (stats de fecha), sin
+                // re-parsear el JSON (el Load periódico por material era un coste real,
                 // peor en OneDrive).
                 DateTime revalidatedStamp = materialWriteUtc;
                 AddDependencyStamp(MaterialAsset.GetAlbedo(existing.Data), ref revalidatedStamp);
@@ -939,21 +939,21 @@ private System.Drawing.Bitmap? GenerateShaderGraphMaterialPreviewBitmap(Material
         }
     }
 
-    // â”€â”€ Esfera de material estilo Unity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Esfera de material estilo Unity ──────────────────────────────────────
     // PBR real en espacio LINEAL (Cook-Torrance GGX + ambiente de estudio
-    // procedural), con albedo/normal/roughness/metallic maps, emisiÃ³n HDR,
+    // procedural), con albedo/normal/roughness/metallic maps, emisión HDR,
     // damero para transparentes y tone mapping ACES. Se rasteriza a 2x del
-    // tamaÃ±o final (SSAA) sobre un buffer bloqueado â€” cero SetPixel/GetPixel.
+    // tamaño final (SSAA) sobre un buffer bloqueado — cero SetPixel/GetPixel.
     // Corre en el hilo de fondo de previews y el resultado va al cache de disco
     // (Library/Previews): el coste por frame del editor es solo un AddImage.
 private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(MaterialAssetData data)
     => GenerateMaterialSpherePreviewBitmap(data, 0f, 0f, null);
 
-    // yaw/pitch giran la BOLA (no la luz): la iluminaciÃ³n de estudio queda fija en cÃ¡mara,
+    // yaw/pitch giran la BOLA (no la luz): la iluminación de estudio queda fija en cámara,
     // como el preview interactivo de Unity, y la textura recorre la superficie al arrastrar.
 private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(MaterialAssetData data, float yawDeg, float pitchDeg, MaterialPreviewMaps? maps)
     {
-        const int size = 256; // EnsureProjectAssetDiskPreview lo reduce a 128 (bicÃºbico) = SSAA 2x
+        const int size = 256; // EnsureProjectAssetDiskPreview lo reduce a 128 (bicúbico) = SSAA 2x
         var bitmap = new System.Drawing.Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
 
         PreviewSampler? albedoMap = maps != null ? maps.Albedo : PreviewSampler.Load(MaterialAsset.GetAlbedo(data), 256);
@@ -969,7 +969,7 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
         float cx = size * 0.50f;
         float cy = size * 0.50f;
 
-        // Color base y emisiÃ³n en LINEAL (los valores/Ã¡lbedo del asset estÃ¡n en sRGB).
+        // Color base y emisión en LINEAL (los valores/álbedo del asset están en sRGB).
         float baseLinR = SrgbToLinear(Math.Clamp(data.R, 0f, 1f));
         float baseLinG = SrgbToLinear(Math.Clamp(data.G, 0f, 1f));
         float baseLinB = SrgbToLinear(Math.Clamp(data.B, 0f, 1f));
@@ -980,8 +980,8 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
         bool transparent = data.SurfaceType == MaterialSurfaceType.Transparent;
         float surfaceAlpha = transparent ? Math.Clamp(data.Alpha, 0f, 1f) : 1f;
 
-        // IluminaciÃ³n de estudio (como el preview de Unity): key cÃ¡lida arriba-izquierda,
-        // fill frÃ­a suave desde la derecha, mÃ¡s ambiente/reflejo procedural.
+        // Iluminación de estudio (como el preview de Unity): key cálida arriba-izquierda,
+        // fill fría suave desde la derecha, más ambiente/reflejo procedural.
         var key = Normalize3(-0.42f, 0.62f, 0.66f);
         var fill = Normalize3(0.65f, -0.10f, 0.55f);
         const float keyIntensity = 2.6f;
@@ -989,7 +989,7 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
 
         var pixels = new byte[size * size * 4];
 
-        // Cada fila escribe un rango disjunto del buffer y solo LEE los samplers â†’
+        // Cada fila escribe un rango disjunto del buffer y solo LEE los samplers →
         // paralelizable sin locks. Importa para el preview interactivo (rota a ~10 ms
         // en vez de ~90 en Debug) y acelera el precalentado de la Library.
         System.Threading.Tasks.Parallel.For(0, size, y =>
@@ -1003,13 +1003,13 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
                 float r2 = sx * sx + sy * sy;
                 float coverage = Math.Clamp((1f - MathF.Sqrt(MathF.Max(r2, 1e-8f))) * radius, 0f, 1f);
                 if (coverage <= 0f)
-                    continue; // fuera de la esfera: transparente (el buffer ya estÃ¡ a cero)
+                    continue; // fuera de la esfera: transparente (el buffer ya está a cero)
 
                 float nz = MathF.Sqrt(MathF.Max(0f, 1f - r2));
                 float nx = sx, ny = sy;
 
-                // Normal en espacio de OBJETO: la rotaciÃ³n del usuario gira la bola bajo la
-                // cÃ¡mara fija. N_obj = Rx(-pitch) Â· Ry(-yaw) Â· N_vista.
+                // Normal en espacio de OBJETO: la rotación del usuario gira la bola bajo la
+                // cámara fija. N_obj = Rx(-pitch) · Ry(-yaw) · N_vista.
                 float ox = nx, oy = ny, oz = nz;
                 if (rotated)
                 {
@@ -1021,7 +1021,7 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
                     oy = ry1;
                 }
 
-                // UV esfÃ©rico sobre la bola rotada (como Unity: la textura envuelve la bola).
+                // UV esférico sobre la bola rotada (como Unity: la textura envuelve la bola).
                 float u = 0.5f + MathF.Atan2(ox, oz) / (MathF.PI * 2f);
                 float v = 0.5f - oy * 0.5f;
 
@@ -1040,7 +1040,7 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
                         t.Y * tnx + b.Y * tny + oy * tnz,
                         t.Z * tnx + b.Z * tny + oz * tnz);
 
-                    // De vuelta a vista: N_vista = Ry(yaw) Â· Rx(pitch) Â· N_obj.
+                    // De vuelta a vista: N_vista = Ry(yaw) · Rx(pitch) · N_obj.
                     float px = pn.X, py = pn.Y, pz = pn.Z;
                     if (rotated)
                     {
@@ -1054,7 +1054,7 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
                     nx = px; ny = py; nz = pz;
                 }
 
-                // ParÃ¡metros de superficie (mapas en lineal; el albedo sÃ­ es sRGB).
+                // Parámetros de superficie (mapas en lineal; el albedo sí es sRGB).
                 float albR = baseLinR, albG = baseLinG, albB = baseLinB;
                 if (albedoMap is { } am)
                 {
@@ -1069,7 +1069,7 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
                 float metallic = Math.Clamp(data.Metallic, 0f, 1f);
                 if (metallicMap is { } mm) { mm.Sample(u, v, out float mm0, out _, out _); metallic *= mm0; }
 
-                // Cook-Torrance: F0 dielÃ©ctrico 4%, metÃ¡lico usa el albedo como F0.
+                // Cook-Torrance: F0 dieléctrico 4%, metálico usa el albedo como F0.
                 float f0R = 0.04f + (albR - 0.04f) * metallic;
                 float f0G = 0.04f + (albG - 0.04f) * metallic;
                 float f0B = 0.04f + (albB - 0.04f) * metallic;
@@ -1081,7 +1081,7 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
 
                 float outR = 0f, outG = 0f, outB = 0f;
                 AccumulateGgxLight(nx, ny, nz, ndv, key, keyIntensity, 1.00f, 0.98f, 0.94f, roughness, f0R, f0G, f0B, kdR, kdG, kdB, specScale: 1f, ref outR, ref outG, ref outB);
-                // El fill es solo difuso (softbox): un segundo lÃ³bulo especular pintaba "dos soles" en metales pulidos.
+                // El fill es solo difuso (softbox): un segundo lóbulo especular pintaba "dos soles" en metales pulidos.
                 AccumulateGgxLight(nx, ny, nz, ndv, fill, fillIntensity, 0.62f, 0.70f, 0.86f, roughness, f0R, f0G, f0B, kdR, kdG, kdB, specScale: 0f, ref outR, ref outG, ref outB);
 
                 // Ambiente difuso: gradiente de estudio (cielo arriba, suelo abajo).
@@ -1092,7 +1092,7 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
                 outR += kdR * ambR; outG += kdG * ambG; outB += kdB * ambB;
 
                 // Reflejo especular de ambiente: R = reflect(-V, N), entorno procedural
-                // (gradiente + "ventana" de estudio) difuminado segÃºn roughness.
+                // (gradiente + "ventana" de estudio) difuminado según roughness.
                 float rx = 2f * ndv * nx, ry = 2f * ndv * ny, rz = 2f * ndv * nz - 1f;
                 SampleStudioEnvironment(rx, ry, rz, roughness, out float envR, out float envG, out float envB);
                 float fresnel = MathF.Pow(1f - ndv, 5f);
@@ -1107,14 +1107,14 @@ private static System.Drawing.Bitmap GenerateMaterialSpherePreviewBitmap(Materia
 
                 outR += emisR; outG += emisG; outB += emisB;
 
-                // ACES + linealâ†’sRGB.
+                // ACES + lineal→sRGB.
                 float srgbR = LinearToSrgb(TonemapAces(outR));
                 float srgbG = LinearToSrgb(TonemapAces(outG));
                 float srgbB = LinearToSrgb(TonemapAces(outB));
 
                 if (transparent)
                 {
-                    // Damero estilo Unity detrÃ¡s de la superficie transparente.
+                    // Damero estilo Unity detrás de la superficie transparente.
                     bool check = (((x / 24) + (y / 24)) & 1) == 0;
                     float checker = check ? 0.44f : 0.30f;
                     srgbR = srgbR * surfaceAlpha + checker * (1f - surfaceAlpha);
@@ -1168,7 +1168,7 @@ private static void AccumulateGgxLight(
         // H = normalize(L + V), V = (0,0,1).
         var h = Normalize3(l.X, l.Y, l.Z + 1f);
         float ndh = MathF.Max(0f, nx * h.X + ny * h.Y + nz * h.Z);
-        float vdh = MathF.Max(1e-4f, h.Z); // VÂ·H = H.Z
+        float vdh = MathF.Max(1e-4f, h.Z); // V·H = H.Z
 
         float a = roughness * roughness;
         float a2 = a * a;
@@ -1193,8 +1193,8 @@ private static void AccumulateGgxLight(
         outB += (kdB * diffCommon + fB * specCommon) * lb;
     }
 
-    // Entorno de estudio procedural: gradiente vertical (sueloâ†’horizonteâ†’cielo)
-    // mÃ¡s una "ventana" suave hacia la key light; el roughness difumina ambos.
+    // Entorno de estudio procedural: gradiente vertical (suelo→horizonte→cielo)
+    // más una "ventana" suave hacia la key light; el roughness difumina ambos.
 private static void SampleStudioEnvironment(float rx, float ry, float rz, float roughness, out float r, out float g, out float b)
     {
         float len = MathF.Sqrt(rx * rx + ry * ry + rz * rz);
@@ -1230,16 +1230,16 @@ private static void SampleStudioEnvironment(float rx, float ry, float rz, float 
         return c <= 0.0031308f ? c * 12.92f : 1.055f * MathF.Pow(c, 1f / 2.4f) - 0.055f;
     }
 
-    // ACES aproximado (Narkowicz): mantiene los brillos especulares/emisiÃ³n sin quemar.
+    // ACES aproximado (Narkowicz): mantiene los brillos especulares/emisión sin quemar.
     private static float TonemapAces(float x)
     {
         return Math.Clamp(x * (2.51f * x + 0.03f) / (x * (2.43f * x + 0.59f) + 0.14f), 0f, 1f);
     }
 
-    // â”€â”€ Preview interactivo del inspector â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Preview interactivo del inspector ────────────────────────────────────
     // Estado de la esfera rotable: solo el preview GRANDE del inspector renderiza
-    // en vivo (y Ãºnicamente cuando cambian Ã¡ngulo o material); las tiles del panel
-    // siguen siendo la imagen estÃ¡tica del cache de disco.
+    // en vivo (y únicamente cuando cambian ángulo o material); las tiles del panel
+    // siguen siendo la imagen estática del cache de disco.
     private string? matSphereLivePath;
     private float matSphereYaw;
     private float matSpherePitch;
@@ -1249,7 +1249,7 @@ private static void SampleStudioEnvironment(float rx, float ry, float rz, float 
     private DateTime matSphereRenderedStamp;
     private MaterialPreviewMaps? matSphereLiveMaps;
 
-    // Render en HILO DE FONDO (latest-wins, mÃ¡x. 1 en vuelo): el hilo de UI solo sube la
+    // Render en HILO DE FONDO (latest-wins, máx. 1 en vuelo): el hilo de UI solo sube la
     // textura cuando hay un bitmap listo (~0.3 ms). Renderizar en el draw bajaba los FPS
     // durante el arrastre (~4 ms/frame con base de 120 FPS = bajada visible).
     private readonly object matSphereRenderLock = new();
@@ -1264,7 +1264,7 @@ private static void SampleStudioEnvironment(float rx, float ry, float rz, float 
         if (!TryGetMaterialPreviewSourceCache(path, out var source))
             return IntPtr.Zero;
 
-        // 1) Si el worker dejÃ³ un bitmap listo, subirlo a GPU (esto es lo Ãºnico que paga la UI).
+        // 1) Si el worker dejó un bitmap listo, subirlo a GPU (esto es lo único que paga la UI).
         System.Drawing.Bitmap? ready = null;
         float readyYaw = 0f, readyPitch = 0f;
         DateTime readyStamp = default;
@@ -1297,7 +1297,7 @@ private static void SampleStudioEnvironment(float rx, float ry, float rz, float 
         }
 
         // 2) Si el estado visible no coincide con el pedido, lanzar OTRO render en fondo
-        //    (como mucho uno en vuelo; si el ratÃ³n siguiÃ³ moviÃ©ndose, el siguiente lo recoge).
+        //    (como mucho uno en vuelo; si el ratón siguió moviéndose, el siguiente lo recoge).
         bool dirty = matSphereLiveTexture == 0 ||
                      matSphereRenderedYaw != matSphereYaw ||
                      matSphereRenderedPitch != matSpherePitch ||
@@ -1305,7 +1305,7 @@ private static void SampleStudioEnvironment(float rx, float ry, float rz, float 
         if (dirty && !matSphereRenderRunning)
         {
             // Los samplers se cargan UNA vez y se reutilizan durante el arrastre; se recargan
-            // solo si el material cambiÃ³ de mapas o de contenido.
+            // solo si el material cambió de mapas o de contenido.
             string mapsKey = MaterialPreviewMaps.KeyFor(source.Data);
             if (matSphereLiveMaps == null || matSphereLiveMaps.Key != mapsKey || matSphereRenderedStamp != source.DependencyStamp)
                 matSphereLiveMaps = MaterialPreviewMaps.Load(source.Data, mapsKey);
@@ -1332,7 +1332,7 @@ private static void SampleStudioEnvironment(float rx, float ry, float rz, float 
                 }
                 catch (Exception ex)
                 {
-                    GrokoEngine.Debug.LogWarning($"[MaterialPreview] Render interactivo fallÃ³: {ex.Message}");
+                    GrokoEngine.Debug.LogWarning($"[MaterialPreview] Render interactivo falló: {ex.Message}");
                 }
                 finally
                 {
@@ -1376,7 +1376,7 @@ private static void SampleStudioEnvironment(float rx, float ry, float rz, float 
         };
     }
 
-    // Textura pequeÃ±a bloqueada en memoria para el generador de previews:
+    // Textura pequeña bloqueada en memoria para el generador de previews:
     // BGRA contigua + muestreo bilineal con wrap. Nada de Bitmap.GetPixel.
     private readonly struct PreviewSampler
     {
@@ -1427,8 +1427,8 @@ private static void SampleStudioEnvironment(float rx, float ry, float rz, float 
             }
         }
 
-        // Bilineal con wrap. Devuelve canales 0..1 tal cual estÃ¡n en la textura (sRGB para
-        // albedo, lineal para mapas de datos); el llamador decide la conversiÃ³n.
+        // Bilineal con wrap. Devuelve canales 0..1 tal cual están en la textura (sRGB para
+        // albedo, lineal para mapas de datos); el llamador decide la conversión.
         public void Sample(float u, float v, out float r, out float g, out float b)
         {
             u -= MathF.Floor(u);
@@ -1483,7 +1483,7 @@ private static System.Drawing.Bitmap GenerateAssetPreviewBitmap(string path, str
         if (kind == "MESH" && TryGenerateMeshAssetPreviewBitmap(path, out var meshBitmap))
             return meshBitmap;
 
-        // Prefab: renderiza la malla real del objeto (como Unity), no un cubo genÃ©rico.
+        // Prefab: renderiza la malla real del objeto (como Unity), no un cubo genérico.
         if (kind == "PREF" && TryGetPrefabMeshPath(path, out var prefabMesh)
             && TryGenerateMeshAssetPreviewBitmap(prefabMesh, out var prefabBitmap))
             return prefabBitmap;
@@ -1906,8 +1906,8 @@ private bool LoadPreviewTextureFromDiskCache(string path, out int texture)
         if (!TryGetCurrentDiskPreview(path, out string previewPath))
             return false;
 
-        // No llamar este mismo mÃ©todo con previewPath: eso causa recursiÃ³n.
-        // AquÃ­ cargamos directamente el PNG pequeÃ±o guardado en Library/Previews.
+        // No llamar este mismo método con previewPath: eso causa recursión.
+        // Aquí cargamos directamente el PNG pequeño guardado en Library/Previews.
         return LoadPreviewTextureFile(previewPath, out texture);
     }
 

@@ -249,7 +249,7 @@ namespace GrokoEngine
             try
             {
                 RelativizeAssetPaths(data, path);
-                File.WriteAllText(path, JsonSerializer.Serialize(data, Options));
+                AtomicFile.WriteAllText(path, JsonSerializer.Serialize(data, Options));
             }
             finally
             {
@@ -268,15 +268,15 @@ namespace GrokoEngine
         private static void RelativizeAssetPaths(AnimationClipData data, string clipPath)
         {
             string? assetsRoot = InferAssetsRoot(clipPath);
-            data.SourceModelPath = AssetDatabase.SerializeReference(data.SourceModelPath, assetsRoot);
-            data.AvatarPath = AssetDatabase.SerializeReference(data.AvatarPath, assetsRoot);
+            data.SourceModelPath = AssetReferences.Serialize(data.SourceModelPath, assetsRoot);
+            data.AvatarPath = AssetReferences.Serialize(data.AvatarPath, assetsRoot);
         }
 
         private static void ResolveAssetPaths(AnimationClipData data, string clipPath)
         {
             string? assetsRoot = InferAssetsRoot(clipPath);
-            data.SourceModelPath = AssetDatabase.ResolveReference(data.SourceModelPath, assetsRoot) ?? "";
-            data.AvatarPath = AssetDatabase.ResolveReference(data.AvatarPath, assetsRoot) ?? "";
+            data.SourceModelPath = AssetReferences.Resolve(data.SourceModelPath, assetsRoot) ?? "";
+            data.AvatarPath = AssetReferences.Resolve(data.AvatarPath, assetsRoot) ?? "";
         }
 
         private static string? InferAssetsRoot(string filePath)

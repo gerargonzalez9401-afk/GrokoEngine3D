@@ -1,0 +1,50 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore locked dependencies
+        run: dotnet restore GrokoEngine.sln --locked-mode
+
+      - name: Build Release
+        run: dotnet build GrokoEngine.sln -c Release --no-restore -p:ContinuousIntegrationBuild=true
+
+      - name: Run engine tests
+        run: dotnet run --project GrokoEngine.Tests/GrokoEngine.Tests.csproj -c Release --no-build
+
+      - name: Check known vulnerable dependencies
+        run: dotnet list GrokoEngine.sln package --include-transitive --vulnerable
+
+  static-check:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run static quality gate
+        run: python verify_static.py

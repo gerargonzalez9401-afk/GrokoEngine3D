@@ -211,6 +211,56 @@ internal sealed partial class ImGuiEditorApp
         statusMessage = "Camera framed scene";
     }
 
+    /// <summary>
+    /// Equivalente a Unity: GameObject → Align With View (Ctrl+Shift+F).
+    /// Copia la pose de la cámara de Scene a la cámara que usa Game, sin alterar su lente,
+    /// post-process ni otras propiedades de cámara.
+    /// </summary>
+    private void AlignGameCameraToSceneView()
+    {
+        if (isPlaying)
+        {
+            statusMessage = "Stop Play mode before aligning the Game Camera.";
+            return;
+        }
+
+        var gameCamera = FindGameCamera(objects);
+        if (gameCamera == null)
+        {
+            statusMessage = "No active Game Camera found to align.";
+            return;
+        }
+
+        var before = CaptureSceneState();
+
+        // Las cámaras de escena se editan en mundo. Para cámaras hijas convertimos primero
+        // la posición a local respecto al padre; las cámaras creadas por el editor son raíz,
+        // que mantiene el camino exacto y sin conversión.
+        Vector3 targetPosition = camera.Position;
+        if (gameCamera.Parent != null)
+        {
+            var parentPosition = gameCamera.Parent.GlobalPosition;
+            targetPosition = WorldOffsetToLocalParentOffset(gameCamera, camera.Position - parentPosition);
+        }
+
+        gameCamera.PosX = targetPosition.X;
+        gameCamera.PosY = targetPosition.Y;
+        gameCamera.PosZ = targetPosition.Z;
+
+        // ComputeGameCameraState usa la conversión inversa: Yaw = 90 - RotY y Pitch = -RotX.
+        // La cámara de editor no tiene roll, por lo que se restablece RotZ para igualar la vista.
+        gameCamera.RotX = -camera.Pitch;
+        gameCamera.RotY = 90f - camera.Yaw;
+        gameCamera.RotZ = 0f;
+
+        NotifyObjectTransformChanged(gameCamera);
+        PushSceneState("Align Game Camera With Scene View", before, CaptureSceneState());
+        sceneDirty = true;
+        selected = gameCamera;
+        selection.SelectSingle(gameCamera);
+        statusMessage = "Game Camera aligned with Scene view (Ctrl+Shift+F).";
+    }
+
     private void FrameObject(GameObject obj)
     {
         var center = GetObjectCenter(obj);

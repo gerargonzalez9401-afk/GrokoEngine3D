@@ -16,12 +16,12 @@ namespace GrokoEngine
     {
         private static IList<GameObject>? roots;
         private static PhysicsEngine? physicsEngine;
-        private static ScriptCompiler? scriptCompiler;
+        private static IScriptTypeResolver? scriptCompiler;
         private static readonly List<PendingDestroy> pendingDestroy = new();
 
         public static bool IsReady => roots != null && physicsEngine != null && scriptCompiler != null;
 
-        public static void SetContext(IList<GameObject> sceneRoots, PhysicsEngine physics, ScriptCompiler compiler)
+        public static void SetContext(IList<GameObject> sceneRoots, PhysicsEngine physics, IScriptTypeResolver compiler)
         {
             bool contextChanged =
                 !ReferenceEquals(roots, sceneRoots) ||

@@ -118,6 +118,14 @@ internal sealed partial class SceneViewportRenderer
         // por objeto con TTL: recalcularla cada frame para cada hijo estático costaba ~5 ms
         // con ~100 hijos (medido). InvalidateStaticBatch limpia el cache al cambiar materiales.
         bool objectNeedsDynamicPass = _activeHierarchyLod.HasValue && meshFilter != null;
+        // Un FBX importado como jerarquía (un hijo por submalla) debe conservar su matriz
+        // individual en Forward/Forward+. El batch estático fusiona esos hijos en un VBO
+        // y algunos interiores de Blender sólo dejaban visibles las submallas transparentes
+        // (ventanas), aunque Deferred sí tuviera G-buffer. La ruta GPU por submalla conserva
+        // la transformación y el material original; Deferred sigue usando su batch habitual.
+        bool forwardImportedSubmesh = !UseDeferredOpaquePath && obj.IsStatic &&
+            meshFilter is { SubmeshIndex: >= 0 } && !string.IsNullOrWhiteSpace(meshFilter.MeshPath);
+        objectNeedsDynamicPass |= forwardImportedSubmesh;
         bool hierarchyLodMesh = (_activeHierarchyLod.HasValue || _activeStaticHierarchyLodFastPath) && TryGetHierarchyLodLevel(obj.Name, out _);
         if (hierarchyLodMesh)
         {
@@ -154,7 +162,7 @@ internal sealed partial class SceneViewportRenderer
                 _staticRouteCache[obj] = route;
             }
 
-            objectNeedsDynamicPass = route.NeedsDynamicPass || meshRendererNeedsCustomShadows;
+            objectNeedsDynamicPass |= route.NeedsDynamicPass || meshRendererNeedsCustomShadows;
         }
 
         if (objectNeedsDynamicPass)
@@ -353,6 +361,7 @@ internal sealed partial class SceneViewportRenderer
                 hash.Add(material.RefractionStrength);
                 hash.Add(material.DistortionStrength);
                 hash.Add(material.Roughness); hash.Add(material.Metallic);
+                hash.Add(material.SubsurfaceScattering);
                 hash.Add(material.EmissionR); hash.Add(material.EmissionG); hash.Add(material.EmissionB); hash.Add(material.EmissionIntensity);
                 hash.Add(material.ShaderGraphPath ?? string.Empty);
                 string? shaderGraphPath = NormalizeExistingAssetPath(material.ShaderGraphPath);

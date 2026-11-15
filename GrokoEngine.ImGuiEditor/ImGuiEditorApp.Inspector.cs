@@ -1443,7 +1443,10 @@ internal sealed partial class ImGuiEditorApp
             if (File.Exists(fullPath))
                 writeUtc = File.GetLastWriteTimeUtc(fullPath);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            EditorDiagnostics.Log($"No se pudo leer la fecha del prefab '{fullPath}': {ex.Message}", "Warning");
+        }
 
         if (prefabInspectorRoot != null &&
             string.Equals(prefabInspectorCachedPath, fullPath, StringComparison.OrdinalIgnoreCase) &&
@@ -2251,6 +2254,7 @@ internal sealed partial class ImGuiEditorApp
         mat.DistortionStrength = Clamp01(data.DistortionStrength);
         mat.SpecularHighlights = data.SpecularHighlights;
         mat.EnvironmentReflections = data.EnvironmentReflections;
+        mat.SubsurfaceScattering = Clamp01(data.SubsurfaceScattering);
         mat.EmissionR = Clamp01(data.EmissionR);
         mat.EmissionG = Clamp01(data.EmissionG);
         mat.EmissionB = Clamp01(data.EmissionB);
@@ -2427,6 +2431,7 @@ internal sealed partial class ImGuiEditorApp
         DistortionStrength = mat.DistortionStrength,
         SpecularHighlights = mat.SpecularHighlights,
         EnvironmentReflections = mat.EnvironmentReflections,
+        SubsurfaceScattering = mat.SubsurfaceScattering,
         EmissionR = mat.EmissionR,
         EmissionG = mat.EmissionG,
         EmissionB = mat.EmissionB,
@@ -2456,6 +2461,7 @@ internal sealed partial class ImGuiEditorApp
         DistortionStrength = data.DistortionStrength,
         SpecularHighlights = data.SpecularHighlights,
         EnvironmentReflections = data.EnvironmentReflections,
+        SubsurfaceScattering = data.SubsurfaceScattering,
         EmissionR = data.EmissionR,
         EmissionG = data.EmissionG,
         EmissionB = data.EmissionB,
@@ -2687,6 +2693,14 @@ internal sealed partial class ImGuiEditorApp
                 data.EnvironmentReflections = environmentReflections;
                 changed = true;
             }
+
+            float subsurface = data.SubsurfaceScattering;
+            if (DrawUnitySliderFloat("Subsurface / Fabric", ref subsurface, 0f, 1f))
+            {
+                data.SubsurfaceScattering = Math.Clamp(subsurface, 0f, 1f);
+                changed = true;
+            }
+            ImGui.TextDisabled("Luz de contra integrada en el material. Recomendado: 0.08-0.22.");
             ImGui.Dummy(new Vector2(0f, 8f));
         }
 

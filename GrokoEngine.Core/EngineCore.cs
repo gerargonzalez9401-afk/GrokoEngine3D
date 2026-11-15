@@ -207,6 +207,10 @@ namespace GrokoEngine
         public float DistortionStrength { get; set; } = 0f;
         public bool SpecularHighlights { get; set; } = true;
         public bool EnvironmentReflections { get; set; } = true;
+        // Iluminación de transmisión artística para piel, tela fina y personajes.
+        // 0 mantiene exactamente el PBR estándar; valores bajos dejan pasar luz de
+        // contra por los bordes sin necesitar luces auxiliares en la escena.
+        public float SubsurfaceScattering { get; set; } = 0f;
         public float EmissionR { get; set; } = 0f;
         public float EmissionG { get; set; } = 0f;
         public float EmissionB { get; set; } = 0f;
@@ -367,6 +371,18 @@ namespace GrokoEngine
         public bool StaticShadowCaster = false;
         public bool ContributeGlobalIllumination = false;
         public int ReceiveGlobalIllumination = 0;   // 0 Light Probes, 1 Lightmaps
+        // Ruta del lightmap horneado asignado por el baker. Se conserva con la escena para que
+        // el renderer pueda usar la iluminación indirecta también después de reiniciar el editor.
+        public string LightmapPath = "";
+        public string ShadowmaskPath = "";
+        public float LightmapIntensity = 1f;
+        // Equivalente a Unity Renderer.lightmapScaleOffset. El renderer usa UV2 generadas
+        // para muestrear la región correcta dentro de un atlas compartido.
+        public float LightmapScaleX = 1f;
+        public float LightmapScaleY = 1f;
+        public float LightmapOffsetX = 0f;
+        public float LightmapOffsetY = 0f;
+        public bool UseGeneratedLightmapUv = false;
         public bool ReceiveShadows = true;
 
         // ── Probes ──

@@ -68,6 +68,7 @@ internal sealed partial class SceneViewportRenderer
             layout (location = 3) in vec2 aUv;
             layout (location = 4) in vec4 aMaterial;
             layout (location = 5) in vec4 aEmission;
+            layout (location = 12) in vec2 aLightmapUv;
             layout (location = 6) in mat4 aInstanceModel;
             layout (location = 10) in vec4 aBoneIndices;
             layout (location = 11) in vec4 aBoneWeights;
@@ -87,6 +88,7 @@ internal sealed partial class SceneViewportRenderer
             out vec2 vUv;
             out vec4 vMaterial;
             out vec4 vEmission;
+            out vec2 vLightmapUv;
             out vec4 vLightPos;
             void main()
             {
@@ -122,6 +124,7 @@ internal sealed partial class SceneViewportRenderer
                 vUv       = aUv;
                 vMaterial = uUseSurfaceUniforms != 0 ? uSurfaceMaterial : aMaterial;
                 vEmission = uUseSurfaceUniforms != 0 ? uSurfaceEmission : aEmission;
+                vLightmapUv = aLightmapUv;
                 vLightPos = world * uLightMvp;
                 gl_Position = world * uMvp;
             }
@@ -139,6 +142,7 @@ internal sealed partial class SceneViewportRenderer
             in vec2 vUv;
             in vec4 vMaterial;
             in vec4 vEmission;
+            in vec2 vLightmapUv;
             in vec4 vLightPos;
 
             // Textura
@@ -150,6 +154,12 @@ internal sealed partial class SceneViewportRenderer
             uniform bool      uHasRoughnessMap;
             uniform sampler2D uMetallicMap;
             uniform bool      uHasMetallicMap;
+            uniform sampler2D uLightmap;
+            uniform int       uHasLightmap;
+            uniform float     uLightmapIntensity;
+            uniform vec4      uLightmapScaleOffset;
+            uniform sampler2D uShadowmask;
+            uniform int       uHasShadowmask;
             uniform int       uRefractivePass;
             uniform sampler2D uOpaqueTexture;
             uniform vec2      uScreenTexel;
@@ -171,15 +181,20 @@ internal sealed partial class SceneViewportRenderer
             // más muestras = penumbra más suave y bordes con menos aliasing.
             uniform int       uShadowPcfRadius;
             uniform float     uShadowBiasScale;
-            uniform sampler2D uSpotShadowMap;
-            uniform mat4      uSpotLightMvp;
-            uniform int       uSpotShadowEnabled;
-            uniform float     uSpotShadowStrength;
+            uniform float     uShadowNormalBias;
+            uniform sampler2DArray uSpotShadowMap;
+            uniform mat4      uSpotLightMvp[MAX_SPOT_LIGHTS];
+            uniform int       uSpotShadowEnabled[MAX_SPOT_LIGHTS];
+            uniform float     uSpotShadowStrength[MAX_SPOT_LIGHTS];
             uniform samplerCube uPointShadowCube;
             uniform int       uPointShadowEnabled;
             uniform float     uPointShadowStrength;
             uniform vec3      uPointShadowPos;
             uniform float     uPointShadowFar;
+            uniform float     uPointShadowTexelSize;
+            // Índice de la PointLight que posee el único cubemap local de este frame.
+            // -1 significa que el presupuesto de sombras locales no asignó uno.
+            uniform int       uPointShadowLightIndex;
 
             // Luz ambiental
             uniform vec3  uAmbientColor;
@@ -190,7 +205,12 @@ internal sealed partial class SceneViewportRenderer
             uniform vec3  uDirDir;
             uniform vec3  uDirColor;
             uniform float uDirIntensity;
+            uniform int uDirShadowmaskChannel;
             uniform vec3  uCameraPos;
+            uniform int uMixedLightingMode;
+            uniform int uDistanceShadowmask;
+            uniform float uShadowmaskDistance;
+            uniform float uShadowmaskDistanceFade;
 
             // Point lights
             uniform int   uPointCount;
@@ -198,6 +218,7 @@ internal sealed partial class SceneViewportRenderer
             uniform vec3  uPointColor[MAX_POINT_LIGHTS];
             uniform float uPointIntensity[MAX_POINT_LIGHTS];
             uniform float uPointRange[MAX_POINT_LIGHTS];
+            uniform int uPointShadowmaskChannel[MAX_POINT_LIGHTS];
 
             // Spot lights
             uniform int   uSpotCount;
@@ -207,6 +228,8 @@ internal sealed partial class SceneViewportRenderer
             uniform float uSpotIntensity[MAX_SPOT_LIGHTS];
             uniform float uSpotRange[MAX_SPOT_LIGHTS];
             uniform float uSpotAngle[MAX_SPOT_LIGHTS];
+            uniform int uSpotShadowSlot[MAX_SPOT_LIGHTS];
+            uniform int uSpotShadowmaskChannel[MAX_SPOT_LIGHTS];
 
             // Cookie + IES POR LUZ (arrays de textura, una capa por indice de luz -- ya no solo
             // la luz [0]). Cookie: textura 2D proyectada. IES: perfil de caida angular real
@@ -257,6 +280,15 @@ internal sealed partial class SceneViewportRenderer
             uniform vec3      uActiveReflectionProbeHalfSize;
             uniform float     uActiveReflectionProbeBlendDistance;
             uniform float     uActiveReflectionProbeIntensity;
+            uniform int       uActiveReflectionProbeBoxProjection;
+            uniform samplerCube uSecondaryReflectionProbeMap;
+            uniform int       uHasSecondaryReflectionProbeMap;
+            uniform float     uSecondaryReflectionProbeMaxLod;
+            uniform vec3      uSecondaryReflectionProbeCenter;
+            uniform vec3      uSecondaryReflectionProbeHalfSize;
+            uniform float     uSecondaryReflectionProbeBlendDistance;
+            uniform float     uSecondaryReflectionProbeIntensity;
+            uniform int       uSecondaryReflectionProbeBoxProjection;
             uniform sampler2D uBrdfLut;
             uniform int       uHasBrdfLut;
             uniform float     uIblDiffuseStrength;
@@ -264,6 +296,8 @@ internal sealed partial class SceneViewportRenderer
             uniform float uAoStrength;
             uniform float uFogDensity;
             uniform vec3  uFogColor;
+            uniform float uFogHeight;
+            uniform float uFogHeightFalloff;
             uniform float uVolumetricStrength;
             uniform int   uDebugView;
 
@@ -292,10 +326,9 @@ internal sealed partial class SceneViewportRenderer
                 return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
             }
 
-            vec3 AddDirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, float intensity, vec3 albedo, float roughness, float metallic, float specularHighlights)
+            vec3 AddDirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, float intensity, vec3 albedo, float roughness, float metallic, float specularHighlights, float subsurface)
             {
                 float ndl = max(dot(N, L), 0.0);
-                if (ndl <= 0.0) return vec3(0.0);
                 vec3 H = normalize(L + V);
                 vec3 F0 = mix(vec3(0.04), albedo, metallic);
                 float D = DistributionGGX(N, H, roughness);
@@ -312,7 +345,13 @@ internal sealed partial class SceneViewportRenderer
                 vec3 specular = D * visF * F * specularHighlights;
                 vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
                 vec3 diffuse = kD * albedo / PI;
-                return (diffuse + specular) * radiance * intensity * ndl;
+                vec3 surface = (diffuse + specular) * radiance * intensity * ndl;
+                // Transmisión de una sola dispersión, estable y asequible: sólo
+                // aparece cuando la luz llega por detrás y se ve por el frente.
+                // Está a cero salvo que el material la active.
+                float backLight = pow(max(dot(-N, L), 0.0), 1.35) * pow(max(dot(-L, V), 0.0), 1.5);
+                vec3 transmission = albedo * radiance * intensity * (0.42 * clamp(subsurface, 0.0, 1.0) * backLight);
+                return surface + transmission;
             }
 
             // PCF (Percentage-Closer Filtering) de radio variable: muestrea un kernel
@@ -425,7 +464,10 @@ internal sealed partial class SceneViewportRenderer
                     }
                 }
 
-                vec4 lightPos = vec4(vWorldPos, 1.0) * uCascadeLightMvp[cascade];
+                // Normal Bias (estilo Unity): desplaza el muestreo a lo largo de la normal para
+                // reducir el shadow acne en superficies inclinadas.
+                vec3 biasedPos = vWorldPos + N * (uShadowNormalBias * (0.02 + 0.03 * float(cascade)));
+                vec4 lightPos = vec4(biasedPos, 1.0) * uCascadeLightMvp[cascade];
                 vec3 proj = lightPos.xyz / max(lightPos.w, 0.0001);
                 proj = proj * 0.5 + 0.5;
                 if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0)
@@ -439,10 +481,13 @@ internal sealed partial class SceneViewportRenderer
                 // ese ruido deja de ser un parpadeo aleatorio y se vuelve un patrón
                 // de anillos/Moiré muy visible si el sesgo es demasiado pequeño.
                 float bias = max(0.0035 * (1.0 - dot(N, normalize(-lightDir))), 0.0012) * uShadowBiasScale;
-                // Penumbra suave (PCSS) en Medium+; en Low (radius 0) sombra dura de 1 muestra.
+                // Penumbra suave y estable: PCF tent-style limitado. El PCSS experimental
+                // extendía el kernel hasta varios metros en interiores y creaba halos claros
+                // alrededor de ventanas y esquinas al rotar el sol. Para una Directional Light
+                // en tiempo real preferimos una penumbra pequeña, sin "light bleeding".
                 float shadow;
                 if (uShadowPcfRadius > 0)
-                    shadow = PcssShadowArray(uShadowMap, proj.xy, cascade, proj.z, bias, float(uShadowPcfRadius) * 2.5 + 2.0);
+                    shadow = PcfShadowArray(uShadowMap, proj.xy, cascade, proj.z, bias, min(uShadowPcfRadius, 2));
                 else
                     shadow = (proj.z - bias > texture(uShadowMap, vec3(proj.xy, float(cascade))).r) ? 1.0 : 0.0;
                 shadow *= ShadowEdgeFade(proj.xy);
@@ -450,18 +495,21 @@ internal sealed partial class SceneViewportRenderer
                 return mix(1.0, 1.0 - shadow, visualStrength);
             }
 
-            float SpotShadowFactor(vec3 N, vec3 lightDir)
+            float SpotShadowFactor(int lightIndex, vec3 N, vec3 lightDir)
             {
-                if (uSpotShadowEnabled == 0) return 1.0;
-                vec4 lp = vec4(vWorldPos, 1.0) * uSpotLightMvp;
+                int slot = uSpotShadowSlot[lightIndex];
+                if (slot < 0 || slot >= MAX_SPOT_LIGHTS || uSpotShadowEnabled[slot] == 0) return 1.0;
+                vec4 lp = vec4(vWorldPos, 1.0) * uSpotLightMvp[slot];
                 vec3 proj = lp.xyz / max(lp.w, 0.0001);
                 proj = proj * 0.5 + 0.5;
                 if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0)
                     return 1.0;
-                float bias = max(0.004 * (1.0 - dot(N, normalize(lightDir))), 0.0014) * uShadowBiasScale;
-                float shadow = PcfShadow(uSpotShadowMap, proj.xy, proj.z, bias, uShadowPcfRadius);
+                // Escala de interior: el sesgo anterior era grande para conos cortos y
+                // separaba visiblemente la sombra de puertas, esquinas y personajes.
+                float bias = max(0.0018 * (1.0 - dot(N, normalize(lightDir))), 0.00045) * uShadowBiasScale;
+                float shadow = PcfShadowArray(uSpotShadowMap, proj.xy, slot, proj.z, bias, uShadowPcfRadius);
                 shadow *= ShadowEdgeFade(proj.xy);
-                return mix(1.0, 1.0 - shadow, uSpotShadowStrength);
+                return mix(1.0, 1.0 - shadow, uSpotShadowStrength[slot]);
             }
 
             // Cookie del spot[index]: proyecta la capa `index` de uSpotCookieArray en la superficie
@@ -509,7 +557,10 @@ internal sealed partial class SceneViewportRenderer
                 // dura, pero al promediar 9-25 muestras (PCF, calidad Medium+) el
                 // ruido de auto-sombreado deja de cancelarse por aleatoriedad y
                 // aparece como anillos concéntricos sobre las paredes/suelo.
-                float bias = clamp(0.05 * (1.0 - dot(N, -dir)), 0.02, 0.12) * uShadowBiasScale;
+                // El cubemap usa profundidad en metros. Un mínimo de 0.02 m creaba
+                // “peter-panning” evidente en una casa; este rango conserva contacto
+                // nítido y deja la corrección por pendiente solo donde hace falta.
+                float bias = clamp(0.018 * (1.0 - dot(N, -dir)), 0.004, 0.025) * uShadowBiasScale;
 
                 if (uShadowPcfRadius <= 0)
                 {
@@ -522,19 +573,28 @@ internal sealed partial class SceneViewportRenderer
 
                 // Las cubemaps no tienen un plano de texels único, así que en vez del
                 // kernel cuadrado del PCF 2D muestreamos un disco perpendicular a la
-                // dirección luz→fragmento (3x3 offsets), creciendo el radio del disco
+                // dirección luz→fragmento (hasta 5x5 offsets), creciendo el radio del disco
                 // con uShadowPcfRadius — el mismo resultado visual: bordes suaves y
                 // graduales en vez de un corte duro "de aliasing".
                 vec3 up    = abs(dir.y) > 0.95 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
                 vec3 right = normalize(cross(up, dir));
                 up = cross(dir, right);
-                float diskRadius = (0.0025 + 0.0025 * float(uShadowPcfRadius)) * uPointShadowFar;
+                // El offset de un cubemap está en dirección, no en metros. Antes se multiplicaba
+                // por el rango de la luz: una point de 5 m con Ultra terminaba filtrando decenas
+                // de texels y dibujaba óvalos/anillos gigantes sobre suelo y techo. El kernel se
+                // expresa ahora en texels reales de la cara del cubemap.
+                // Penumbra ligera: el kernel sigue estando expresado en texels del cubemap
+                // (nunca en metros/rango), pero abarca suficientes texels para que una luz
+                // interior no dibuje bordes de cartón a resolución de juego.
+                float diskRadius = uPointShadowTexelSize * (1.50 + 1.50 * float(uShadowPcfRadius));
 
                 float shadow = 0.0;
                 float taps = 0.0;
-                for (int x = -1; x <= 1; x++)
-                    for (int y = -1; y <= 1; y++)
+                int kernelRadius = min(uShadowPcfRadius, 2);
+                for (int x = -2; x <= 2; x++)
+                    for (int y = -2; y <= 2; y++)
                     {
+                        if (abs(x) > kernelRadius || abs(y) > kernelRadius) continue;
                         vec3 sampleDir = dir + (right * float(x) + up * float(y)) * diskRadius;
                         float closest = texture(uPointShadowCube, sampleDir).r * uPointShadowFar;
                         shadow += current - bias > closest ? 1.0 : 0.0;
@@ -681,6 +741,50 @@ internal sealed partial class SceneViewportRenderer
                 return clamp(fade * uActiveReflectionProbeIntensity, 0.0, 1.0);
             }
 
+            vec3 ReflectionProbeDirection(vec3 worldPos, vec3 reflectionDir)
+            {
+                if (uActiveReflectionProbeBoxProjection == 0)
+                    return reflectionDir;
+                vec3 halfSize = max(uActiveReflectionProbeHalfSize, vec3(0.001));
+                vec3 safeDir = mix(vec3(-0.0001), vec3(0.0001), greaterThanEqual(reflectionDir, vec3(0.0)));
+                safeDir = mix(safeDir, reflectionDir, greaterThanEqual(abs(reflectionDir), vec3(0.0001)));
+                vec3 boxMin = uActiveReflectionProbeCenter - halfSize;
+                vec3 boxMax = uActiveReflectionProbeCenter + halfSize;
+                vec3 toMax = (boxMax - worldPos) / safeDir;
+                vec3 toMin = (boxMin - worldPos) / safeDir;
+                vec3 exitDistance = max(toMax, toMin);
+                float distanceToBox = min(exitDistance.x, min(exitDistance.y, exitDistance.z));
+                if (distanceToBox <= 0.0)
+                    return reflectionDir;
+                return normalize(worldPos + reflectionDir * distanceToBox - uActiveReflectionProbeCenter);
+            }
+
+            float SecondaryReflectionProbeInfluence(vec3 worldPos)
+            {
+                if (uHasSecondaryReflectionProbeMap == 0) return 0.0;
+                vec3 halfSize = max(uSecondaryReflectionProbeHalfSize, vec3(0.001));
+                vec3 normalized = abs(worldPos - uSecondaryReflectionProbeCenter) / halfSize;
+                float boxDistance = max(normalized.x, max(normalized.y, normalized.z));
+                if (boxDistance >= 1.0) return 0.0;
+                float blendWidth = clamp(max(uSecondaryReflectionProbeBlendDistance, 0.0001) /
+                    max(min(halfSize.x, min(halfSize.y, halfSize.z)), 0.001), 0.001, 0.95);
+                return clamp((1.0 - smoothstep(max(0.0, 1.0 - blendWidth), 1.0, boxDistance)) *
+                    uSecondaryReflectionProbeIntensity, 0.0, 1.0);
+            }
+
+            vec3 SecondaryReflectionProbeDirection(vec3 worldPos, vec3 reflectionDir)
+            {
+                if (uSecondaryReflectionProbeBoxProjection == 0) return reflectionDir;
+                vec3 halfSize = max(uSecondaryReflectionProbeHalfSize, vec3(0.001));
+                vec3 safeDir = mix(vec3(-0.0001), vec3(0.0001), greaterThanEqual(reflectionDir, vec3(0.0)));
+                safeDir = mix(safeDir, reflectionDir, greaterThanEqual(abs(reflectionDir), vec3(0.0001)));
+                vec3 toMax = (uSecondaryReflectionProbeCenter + halfSize - worldPos) / safeDir;
+                vec3 toMin = (uSecondaryReflectionProbeCenter - halfSize - worldPos) / safeDir;
+                float distanceToBox = min(max(toMax, toMin).x, min(max(toMax, toMin).y, max(toMax, toMin).z));
+                return distanceToBox <= 0.0 ? reflectionDir :
+                    normalize(worldPos + reflectionDir * distanceToBox - uSecondaryReflectionProbeCenter);
+            }
+
             vec3 IrradianceFromSH(vec3 n)
             {
                 if (uUseEnvSh == 0)
@@ -708,6 +812,30 @@ internal sealed partial class SceneViewportRenderer
                 return max(e / PI, vec3(0.0));
             }
 
+            float ShadowmaskFactor(int channel)
+            {
+                if (uHasShadowmask == 0 || channel < 0 || channel > 3) return 1.0;
+                vec2 uv = vLightmapUv * uLightmapScaleOffset.xy + uLightmapScaleOffset.zw;
+                vec4 mask = texture(uShadowmask, uv);
+                return channel == 0 ? mask.r : channel == 1 ? mask.g : channel == 2 ? mask.b : mask.a;
+            }
+
+            float MixedShadowFactor(float realtimeShadow, int channel, float viewDistance)
+            {
+                if (uMixedLightingMode != 1 || uHasShadowmask == 0 || channel < 0 || channel > 3)
+                    return realtimeShadow;
+
+                float bakedShadow = ShadowmaskFactor(channel);
+                // No se multiplican ambas sombras: eso oscurecía dos veces la oclusión estática.
+                float nearShadow = min(realtimeShadow, bakedShadow);
+                if (uDistanceShadowmask == 0)
+                    return nearShadow;
+
+                float fadeWidth = max(uShadowmaskDistanceFade, 0.01);
+                float distanceFade = smoothstep(uShadowmaskDistance - fadeWidth, uShadowmaskDistance, viewDistance);
+                return mix(nearShadow, bakedShadow, distanceFade);
+            }
+
             void main()
             {
                 vec3  N    = ApplyNormalMap(normalize(vNormal));
@@ -725,8 +853,10 @@ internal sealed partial class SceneViewportRenderer
                 vec3  base = uColorSpaceLinear == 1 ? pow(rawColor, vec3(2.2)) : rawColor;
                 float metallic = clamp(uHasMetallicMap ? texture(uMetallicMap, vUv).r : vMaterial.x, 0.0, 1.0);
                 float roughness = clamp(uHasRoughnessMap ? texture(uRoughnessMap, vUv).r : vMaterial.y, 0.04, 1.0);
-                float specularHighlights = vMaterial.z >= 0.5 ? 1.0 : 0.0;
-                float environmentReflections = vMaterial.w >= 0.5 ? 1.0 : 0.0;
+                float materialFlags = floor(vMaterial.z + 0.5);
+                float specularHighlights = mod(materialFlags, 2.0) >= 1.0 ? 1.0 : 0.0;
+                float environmentReflections = materialFlags >= 2.0 ? 1.0 : 0.0;
+                float subsurface = clamp(vMaterial.w, 0.0, 1.0);
 
                 // Geometric Specular AA (Unity HDRP GeometricNormalFiltering /
                 // Tokuyoshi-Kaplanyan). En bordes, costuras y pliegues la normal
@@ -752,8 +882,8 @@ internal sealed partial class SceneViewportRenderer
 
                 // Direccional
                 vec3 sunL = normalize(-uDirDir);
-                float sunShadow = ShadowFactor(N, uDirDir);
-                vec3 directLight = AddDirectLight(N, V, sunL, uDirColor, uDirIntensity * sunShadow, base, roughness, metallic, specularHighlights);
+                float sunShadow = MixedShadowFactor(ShadowFactor(N, uDirDir), uDirShadowmaskChannel, viewDistance);
+                vec3 directLight = AddDirectLight(N, V, sunL, uDirColor, uDirIntensity * sunShadow, base, roughness, metallic, specularHighlights, subsurface);
 
                 // Point lights
                 for (int i = 0; i < MAX_POINT_LIGHTS; i++)
@@ -763,9 +893,9 @@ internal sealed partial class SceneViewportRenderer
                     float dist    = length(toLight);
                     if (dist >= uPointRange[i]) continue;
                     float atten   = RangeAttenuation(dist, uPointRange[i]);
-                    float pshadow = i == 0 ? PointShadowFactor(N, vWorldPos) : 1.0;
+                    float pshadow = MixedShadowFactor(i == uPointShadowLightIndex ? PointShadowFactor(N, vWorldPos) : 1.0, uPointShadowmaskChannel[i], viewDistance);
                     float pies    = PointIesFactor(i, -toLight);
-                    directLight  += AddDirectLight(N, V, normalize(toLight), uPointColor[i], uPointIntensity[i] * atten * pshadow * pies, base, roughness, metallic, specularHighlights);
+                    directLight  += AddDirectLight(N, V, normalize(toLight), uPointColor[i], uPointIntensity[i] * atten * pshadow * pies, base, roughness, metallic, specularHighlights, subsurface);
                 }
 
                 // Spot lights
@@ -781,10 +911,10 @@ internal sealed partial class SceneViewportRenderer
                     float inner = cos(uSpotAngle[i] * 0.38);
                     float spot = smoothstep(outer, inner, cone);
                     float atten = RangeAttenuation(dist, uSpotRange[i]) * spot;
-                    float sshadow = i == 0 ? SpotShadowFactor(N, -uSpotDir[i]) : 1.0;
+                    float sshadow = MixedShadowFactor(SpotShadowFactor(i, N, -uSpotDir[i]), uSpotShadowmaskChannel[i], viewDistance);
                     float scookie = SpotCookieFactor(i, vWorldPos);
                     float sies = SpotIesFactor(i, uSpotDir[i], -L);
-                    directLight += AddDirectLight(N, V, L, uSpotColor[i], uSpotIntensity[i] * atten * sshadow * scookie * sies, base, roughness, metallic, specularHighlights);
+                    directLight += AddDirectLight(N, V, L, uSpotColor[i], uSpotIntensity[i] * atten * sshadow * scookie * sies, base, roughness, metallic, specularHighlights, subsurface);
                 }
 
                 // Area lights, soft approximation.
@@ -798,7 +928,7 @@ internal sealed partial class SceneViewportRenderer
                     float facing = clamp(dot(normalize(-uAreaDir[i]), L), 0.0, 1.0);
                     float sizeBoost = clamp((uAreaSize[i].x + uAreaSize[i].y) * 0.18, 0.25, 1.6);
                     float atten = RangeAttenuation(dist, uAreaRange[i]) * (0.35 + 0.65 * facing) * sizeBoost;
-                    directLight += AddDirectLight(N, V, L, uAreaColor[i], uAreaIntensity[i] * atten, base, roughness, metallic, specularHighlights);
+                    directLight += AddDirectLight(N, V, L, uAreaColor[i], uAreaIntensity[i] * atten, base, roughness, metallic, specularHighlights, subsurface);
                 }
 
                 float ao = 1.0 - uAoStrength * clamp(1.0 - N.y, 0.0, 1.0) * 0.45;
@@ -845,11 +975,22 @@ internal sealed partial class SceneViewportRenderer
                         else
                             prefiltered = mix(SampleEnv(R), ambientLight, reflectionRoughness);
 
+                        vec3 environmentReflection = prefiltered;
                         float probeInfluence = ReflectionProbeInfluence(vWorldPos);
-                        if (probeInfluence > 0.001)
+                        float secondaryProbeInfluence = SecondaryReflectionProbeInfluence(vWorldPos);
+                        if (probeInfluence + secondaryProbeInfluence > 0.001)
                         {
-                            vec3 probeReflection = textureLod(uActiveReflectionProbeMap, R, reflectionRoughness * uActiveReflectionProbeMaxLod).rgb;
-                            prefiltered = mix(prefiltered, probeReflection, probeInfluence);
+                            vec3 primaryReflection = environmentReflection;
+                            if (probeInfluence > 0.001)
+                                primaryReflection = textureLod(uActiveReflectionProbeMap,
+                                    ReflectionProbeDirection(vWorldPos, R), reflectionRoughness * uActiveReflectionProbeMaxLod).rgb;
+                            vec3 secondaryReflection = environmentReflection;
+                            if (secondaryProbeInfluence > 0.001)
+                                secondaryReflection = textureLod(uSecondaryReflectionProbeMap,
+                                    SecondaryReflectionProbeDirection(vWorldPos, R), reflectionRoughness * uSecondaryReflectionProbeMaxLod).rgb;
+                            float localWeight = probeInfluence + secondaryProbeInfluence;
+                            vec3 localReflection = (primaryReflection * probeInfluence + secondaryReflection * secondaryProbeInfluence) / max(localWeight, 0.0001);
+                            prefiltered = mix(environmentReflection, localReflection, min(localWeight, 1.0));
                         }
 
                         prefiltered = min(prefiltered, vec3(4.0));
@@ -865,6 +1006,18 @@ internal sealed partial class SceneViewportRenderer
                 }
                 ambientTerm *= mix(0.62, 1.0, sunShadow);
                 vec3 hdr = (ambientTerm + directLight) * ao;
+                // Igual que el G-buffer Deferred: el baker guarda irradiancia sRGB.
+                // Se decodifica antes de sumarla y se modula por el albedo, de modo
+                // que sea rebote indirecto físico y no emisión plana. Esto mantiene
+                // la misma iluminación base en Forward, Forward+ y Deferred.
+                if (uHasLightmap != 0)
+                {
+                    vec2 lightmapUv = vLightmapUv * uLightmapScaleOffset.xy + uLightmapScaleOffset.zw;
+                    vec3 bakedIrradiance = texture(uLightmap, lightmapUv).rgb;
+                    if (uColorSpaceLinear == 1)
+                        bakedIrradiance = pow(max(bakedIrradiance, vec3(0.0)), vec3(2.2));
+                    hdr += base * bakedIrradiance * max(uLightmapIntensity, 0.0);
+                }
                 hdr += vEmission.rgb * vEmission.a;
 
                 if (uDebugView == 1) { outColor = vec4(pow(base, vec3(1.0 / 2.2)), surfaceAlpha); return; }
@@ -882,14 +1035,25 @@ internal sealed partial class SceneViewportRenderer
                     if (uHasActiveReflectionProbeMap == 1 && probeInfluence > 0.001 && environmentReflections > 0.5)
                     {
                         vec3 R = reflect(-V, N);
-                        vec3 probeReflection = textureLod(uActiveReflectionProbeMap, R, max(roughness, uHasNormalMap ? 0.12 : 0.05) * uActiveReflectionProbeMaxLod).rgb;
+                        vec3 probeDir = ReflectionProbeDirection(vWorldPos, R);
+                        vec3 probeReflection = textureLod(uActiveReflectionProbeMap, probeDir, max(roughness, uHasNormalMap ? 0.12 : 0.05) * uActiveReflectionProbeMaxLod).rgb;
                         probeDebug = probeReflection * clamp(uIblSpecularStrength, 0.0, 1.0) * probeInfluence;
                     }
                     outColor = vec4(probeDebug / (probeDebug + vec3(1.0)), 1.0);
                     return;
                 }
 
-                float fogAmount = 1.0 - exp(-viewDistance * max(uFogDensity, 0.0));
+                // Integramos una densidad exponencial en los extremos del segmento cámara→pixel.
+                // Falloff cero reproduce la niebla uniforme legacy; con falloff la neblina queda
+                // pegada al suelo, como una capa atmosférica real y no un overlay plano.
+                float heightDensity = 1.0;
+                if (uFogHeightFalloff > 0.0001)
+                {
+                    float startDensity = exp(clamp((uFogHeight - uCameraPos.y) * uFogHeightFalloff, -20.0, 20.0));
+                    float endDensity = exp(clamp((uFogHeight - vWorldPos.y) * uFogHeightFalloff, -20.0, 20.0));
+                    heightDensity = 0.5 * (startDensity + endDensity);
+                }
+                float fogAmount = 1.0 - exp(-viewDistance * max(uFogDensity, 0.0) * heightDensity);
                 float forwardFog = pow(max(dot(normalize(uCameraPos - vWorldPos), normalize(-uDirDir)), 0.0), 8.0);
                 vec3 fog = uFogColor * (1.0 + forwardFog * uVolumetricStrength);
                 hdr = mix(hdr, fog, clamp(fogAmount, 0.0, 0.92));

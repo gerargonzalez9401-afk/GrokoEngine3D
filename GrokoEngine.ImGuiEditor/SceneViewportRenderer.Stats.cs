@@ -38,6 +38,12 @@ internal sealed partial class SceneViewportRenderer
         _statsDirectionalShadowMs = 0f;
         _statsSpotShadowMs = 0f;
         _statsPointShadowMs = 0f;
+        _statsDeferredGBufferMs = 0f;
+        _statsDeferredLightingMs = 0f;
+        _statsDeferredDepthCopyMs = 0f;
+        _statsDeferredSsgiMs = 0f;
+        _statsDeferredSsgiActive = false;
+        _statsDeferredSsrMs = 0f;
         _statsRenderOtherMs = 0f;
         _statsTerrainTreeMesh = 0;
         _statsTerrainTreeBillboard = 0;
@@ -145,7 +151,7 @@ internal sealed partial class SceneViewportRenderer
         try
         {
             string line = string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                $"{DateTime.Now:HH:mm:ss} build={_statsBuildSceneMs:F2} (grid={_perfBuildGridMs:F2} walk={_perfBuildWalkMs:F2} nodes={_perfWalkNodes} comp={TicksToMs(_perfWalkComponentTicks):F2} route={TicksToMs(_perfWalkRouteTicks):F2} geom={TicksToMs(_perfWalkGeometryTicks):F2} solidV={_perfBuildSolidVerts} lineV={_perfBuildLineVerts}) shadows={_statsShadowMs:F2} (dir={_statsDirectionalShadowMs:F2} spot={_statsSpotShadowMs:F2} point={_statsPointShadowMs:F2}) sky={_statsSkyboxMs:F2} static={_statsStaticOpaqueMs:F2} dyn={_statsDynamicOpaqueMs:F2} sgraph={_statsShaderGraphMs:F2} terrain={_statsTerrainMs:F2} occl={_statsOcclusionMs:F2} lines={_statsLinesGizmosMs:F2} part={_statsParticlesMs:F2} | draws={_statsDrawCalls} shadowDraws={_statsShadowDrawCalls} instDraws={_statsInstancedDrawCalls} instances={_statsInstances} tris={_statsTriangles}");
+                $"{DateTime.Now:HH:mm:ss} build={_statsBuildSceneMs:F2} (grid={_perfBuildGridMs:F2} walk={_perfBuildWalkMs:F2} nodes={_perfWalkNodes} comp={TicksToMs(_perfWalkComponentTicks):F2} route={TicksToMs(_perfWalkRouteTicks):F2} geom={TicksToMs(_perfWalkGeometryTicks):F2} solidV={_perfBuildSolidVerts} lineV={_perfBuildLineVerts}) shadows={_statsShadowMs:F2} (dir={_statsDirectionalShadowMs:F2} spot={_statsSpotShadowMs:F2} point={_statsPointShadowMs:F2}) deferred=(gbuf={_statsDeferredGBufferMs:F2} light={_statsDeferredLightingMs:F2} depth={_statsDeferredDepthCopyMs:F2} ssgi={_statsDeferredSsgiMs:F2} ssr={_statsDeferredSsrMs:F2}) sky={_statsSkyboxMs:F2} static={_statsStaticOpaqueMs:F2} dyn={_statsDynamicOpaqueMs:F2} sgraph={_statsShaderGraphMs:F2} terrain={_statsTerrainMs:F2} occl={_statsOcclusionMs:F2} lines={_statsLinesGizmosMs:F2} part={_statsParticlesMs:F2} | draws={_statsDrawCalls} shadowDraws={_statsShadowDrawCalls} instDraws={_statsInstancedDrawCalls} instances={_statsInstances} tris={_statsTriangles}");
             var slow = new System.Text.StringBuilder();
             foreach (var (name, ticks) in _perfSlowNodes)
                 if (ticks > 0)

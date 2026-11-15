@@ -60,7 +60,13 @@ internal sealed partial class SceneViewportRenderer
         }
 
         string meshPath = NormalizeExistingAssetPath(filter.MeshPath) ?? filter.MeshPath;
-        var shadowMode = ResolveMeshRendererShadowMode(obj.GetComponent<MeshRenderer>());
+        var meshRenderer = obj.GetComponent<MeshRenderer>();
+        var shadowMode = ResolveMeshRendererShadowMode(meshRenderer);
+        int bakeVertexStart = filter.SubmeshIndex >= 0 && filter.SubmeshIndex < mesh.Submeshes.Count
+            ? mesh.Submeshes[filter.SubmeshIndex].VertexStart : 0;
+        int bakeVertexCount = filter.SubmeshIndex >= 0 && filter.SubmeshIndex < mesh.Submeshes.Count
+            ? mesh.Submeshes[filter.SubmeshIndex].VertexCount : mesh.Positions.Length / 3;
+        SetActiveLightmap(meshRenderer, bakeVertexStart, bakeVertexCount);
 
         var animator = obj.GetComponent<Animator>();
         bool skinned = animator != null && mesh.HasSkin && mesh.BoneNames.Count > 0
@@ -113,7 +119,7 @@ internal sealed partial class SceneViewportRenderer
                 if (!string.IsNullOrWhiteSpace(PreviewMaterialAssetPath) && PreviewMaterialObjectId == obj.EditorId && PreviewMaterialSubmeshIndex == i)
                     slotPath = PreviewMaterialAssetPath;
                 var surf = GetSubmeshSurface(slotPath, sub, fallbackColor);
-                if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength, alphaClip: surf.Transparency.IsCutout, alphaClipThreshold: surf.Transparency.AlphaClipThreshold, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
+                if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength, alphaClip: surf.Transparency.IsCutout, alphaClipThreshold: surf.Transparency.AlphaClipThreshold, castShadows: shadowMode.Cast && !surf.Transparency.IsTransparent, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
                 {
                     // GPU skinning path.
                 }
@@ -122,7 +128,7 @@ internal sealed partial class SceneViewportRenderer
                     AddSolidRange(surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, surf.Transparency.IsCutout, surf.Transparency.AlphaClipThreshold,
                         () => AddSkinnedMeshTriangles(mesh, skinMats!, transform, surf.Color, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, skinKey));
                 }
-                else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength, alphaClip: surf.Transparency.IsCutout, alphaClipThreshold: surf.Transparency.AlphaClipThreshold, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
+                else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount, surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, transparent: surf.Transparency.IsTransparent, alpha: surf.Transparency.Alpha, refractionStrength: surf.Transparency.RefractionStrength, distortionStrength: surf.Transparency.DistortionStrength, alphaClip: surf.Transparency.IsCutout, alphaClipThreshold: surf.Transparency.AlphaClipThreshold, castShadows: shadowMode.Cast && !surf.Transparency.IsTransparent, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
                 {
                     AddSolidRange(surf.TexturePath, surf.Maps.NormalMapPath, surf.Maps.RoughnessMapPath, surf.Maps.MetallicMapPath, surf.ShaderGraphPath, surf.ShaderGraphProperties, surf.ShaderGraphTextures, surf.Transparency.IsCutout, surf.Transparency.AlphaClipThreshold,
                         () => AddMeshTriangles(mesh, transform, scale, surf.Color, meshPath, surf.Material, surf.Emission, sub.VertexStart, sub.VertexCount));
@@ -138,7 +144,7 @@ internal sealed partial class SceneViewportRenderer
             string? shaderGraphPath = GetObjectShaderGraphPath(obj);
             var shaderGraphProperties = GetObjectShaderGraphProperties(obj);
             var shaderGraphTextures = GetObjectShaderGraphTextures(obj);
-            if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength, alphaClip: transparency.IsCutout, alphaClipThreshold: transparency.AlphaClipThreshold, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
+            if (skinned && TryQueueSkinnedMeshDraw(mesh, skinMats!, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength, alphaClip: transparency.IsCutout, alphaClipThreshold: transparency.AlphaClipThreshold, castShadows: shadowMode.Cast && !transparency.IsTransparent, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
             {
                 // GPU skinning path.
             }
@@ -147,7 +153,7 @@ internal sealed partial class SceneViewportRenderer
                 AddSolidRange(texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparency.IsCutout, transparency.AlphaClipThreshold,
                     () => AddSkinnedMeshTriangles(mesh, skinMats!, transform, color, material, emission, 0, mesh.Positions.Length / 3, skinKey));
             }
-            else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength, alphaClip: transparency.IsCutout, alphaClipThreshold: transparency.AlphaClipThreshold, castShadows: shadowMode.Cast, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
+            else if (!TryQueueDynamicMeshDraw(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3, texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparent: transparency.IsTransparent, alpha: transparency.Alpha, refractionStrength: transparency.RefractionStrength, distortionStrength: transparency.DistortionStrength, alphaClip: transparency.IsCutout, alphaClipThreshold: transparency.AlphaClipThreshold, castShadows: shadowMode.Cast && !transparency.IsTransparent, receiveShadows: shadowMode.Receive, twoSidedShadows: shadowMode.TwoSided, shadowsOnly: shadowMode.ShadowsOnly))
             {
                 AddSolidRange(texturePath, maps.NormalMapPath, maps.RoughnessMapPath, maps.MetallicMapPath, shaderGraphPath, shaderGraphProperties, shaderGraphTextures, transparency.IsCutout, transparency.AlphaClipThreshold,
                     () => AddMeshTriangles(mesh, transform, scale, color, meshPath, material, emission, 0, mesh.Positions.Length / 3));
@@ -219,7 +225,11 @@ internal sealed partial class SceneViewportRenderer
         for (int i = from; i < to; i++)
         {
             ref readonly var src = ref v2[i];
-            ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(src.Position, transform), Vector3.TransformNormal(src.Normal, transform).Normalized(), color, src.Uv, material, emission));
+            var lightmapUv = LightmapUvUtility.GetTriangleChartUv(
+                i,
+                _activeLightmapVertexStart,
+                _activeLightmapVertexCount > 0 ? _activeLightmapVertexCount : to - from);
+            ActiveSolidVertices.Add(new SolidVertex(Vector3.TransformPosition(src.Position, transform), Vector3.TransformNormal(src.Normal, transform).Normalized(), color, src.Uv, material, emission, new Vector2(lightmapUv.U, lightmapUv.V)));
         }
     }
 

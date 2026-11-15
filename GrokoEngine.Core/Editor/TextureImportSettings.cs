@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace GrokoEngine
@@ -86,6 +87,13 @@ namespace GrokoEngine
 
     public static class TextureImportSettingsAsset
     {
+        // El renderer consulta los normal maps al dibujar. Sin este cache cada consulta
+        // acababa en GetOrCreateTextureSettings + SaveTextureSettings, es decir, dos
+        // escrituras del .meta por material y por frame. Eso bloquea el hilo de render,
+        // especialmente si Assets está bajo OneDrive.
+        private static readonly HashSet<string> ensuredNormalMaps = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly object ensuredNormalMapsLock = new();
+
         public static TextureImportSettings Load(string texturePath)
         {
             string? assetsRoot = InferAssetsRoot(texturePath);
@@ -109,13 +117,24 @@ namespace GrokoEngine
             if (string.IsNullOrWhiteSpace(texturePath) || !File.Exists(texturePath) || !MaterialAsset.IsTexturePath(texturePath))
                 return false;
 
-            var settings = Load(texturePath);
+            string fullPath = Path.GetFullPath(texturePath);
+            lock (ensuredNormalMapsLock)
+            {
+                if (ensuredNormalMaps.Contains(fullPath))
+                    return false;
+            }
+
+            var settings = Load(fullPath);
             bool changed = !settings.IsNormalMap || settings.SRgb;
             settings.TextureType = "Normal Map";
             settings.SRgb = false;
             settings.AlphaIsTransparency = false;
-            settings.Normalize(texturePath);
-            Save(texturePath, settings);
+            settings.Normalize(fullPath);
+            if (changed)
+                Save(fullPath, settings);
+
+            lock (ensuredNormalMapsLock)
+                ensuredNormalMaps.Add(fullPath);
             return changed;
         }
 

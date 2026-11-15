@@ -126,6 +126,8 @@ internal sealed partial class ImGuiEditorApp
         if (ImGui.CollapsingHeader("Render", ImGuiTreeNodeFlags.DefaultOpen))
         {
             DrawProfilerBar("Scene Renderer", profiler.SceneRendererMs, frameBudget);
+            if (profiler.GpuSceneMs > 0.001f)
+                DrawProfilerBar("GPU Scene", profiler.GpuSceneMs, frameBudget);
             DrawProfilerBar("Post Process", profiler.PostProcessMs, frameBudget);
 
             var stats = profiler.RenderStats;
@@ -145,9 +147,18 @@ internal sealed partial class ImGuiEditorApp
             DrawProfilerBar("  Gizmos/Lines", stats.LinesGizmosMs, frameBudget);
             DrawProfilerBar("  Particles", stats.ParticlesMs, frameBudget);
             DrawProfilerBar("  Occlusion", stats.OcclusionMs, frameBudget);
+            if (stats.DeferredGBufferActive)
+            {
+                DrawProfilerBar("  Deferred GBuffer", stats.DeferredGBufferMs, frameBudget);
+                DrawProfilerBar("  Deferred Lighting", stats.DeferredLightingMs, frameBudget);
+                DrawProfilerBar("  Deferred Depth Copy", stats.DeferredDepthCopyMs, frameBudget);
+                DrawProfilerBar("  Deferred SSGI", stats.DeferredSsgiMs, frameBudget);
+                DrawProfilerBar("  Deferred SSR", stats.DeferredSsrMs, frameBudget);
+            }
             DrawProfilerBar("  Other / Driver", stats.RenderOtherMs, frameBudget);
             DrawProfilerMetric("Rendering Path", stats.RenderingPath.ToString());
             DrawProfilerMetric("Deferred GBuffer", stats.DeferredGBufferActive ? "Active" : "Off");
+            DrawProfilerMetric("Deferred SSGI", stats.DeferredSsgiActive ? "Active (GPU pass)" : "Off");
             DrawProfilerMetric("Resolution", $"{profiler.RenderWidth} x {profiler.RenderHeight}");
             DrawProfilerMetric("Render Scale", $"{profiler.RenderScale:F2}x");
             DrawProfilerMetric("Draw Calls", stats.DrawCalls.ToString());
@@ -255,6 +266,7 @@ internal sealed partial class ImGuiEditorApp
         public float UpdateMs;
         public float RenderSceneMs;
         public float SceneRendererMs;
+        public float GpuSceneMs;
         public float PostProcessMs;
         public float UiMs;
         public float UiBuildMs;
@@ -339,6 +351,7 @@ internal sealed partial class ImGuiEditorApp
         public void SampleUpdate(float value) { RawUpdateMs = value; Sample(ref UpdateMs, value); }
         public void SampleRenderScene(float value) { RawRenderSceneMs = value; Sample(ref RenderSceneMs, value); }
         public void SampleSceneRenderer(float value) => Sample(ref SceneRendererMs, value);
+        public void SampleGpuScene(float value) => Sample(ref GpuSceneMs, value);
         public void SamplePostProcess(float value) => Sample(ref PostProcessMs, value);
         public void SampleUi(float value) { RawUiMs = value; Sample(ref UiMs, value); }
         public void SampleUiBuild(float value) => Sample(ref UiBuildMs, value);

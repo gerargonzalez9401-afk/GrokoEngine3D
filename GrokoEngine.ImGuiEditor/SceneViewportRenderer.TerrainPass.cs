@@ -62,7 +62,7 @@ internal sealed partial class SceneViewportRenderer
     private readonly int[] _tpLayerNormLoc = new int[4];
     private readonly int[] _tpHasLayerNormLoc = new int[4];
     private int _tpShadowMapLoc, _tpShadowEnabledLoc, _tpShadowStrengthLoc, _tpCascadeCountLoc;
-    private int _tpShadowCameraPosLoc, _tpShadowPcfRadiusLoc, _tpShadowBiasScaleLoc;
+    private int _tpShadowCameraPosLoc, _tpShadowPcfRadiusLoc, _tpShadowBiasScaleLoc, _tpShadowNormalBiasLoc;
     private readonly int[] _tpCascadeLightMvpLoc = new int[MaxDirectionalShadowCascades];
     private readonly int[] _tpCascadeSplitLoc = new int[MaxDirectionalShadowCascades];
 
@@ -103,6 +103,7 @@ internal sealed partial class SceneViewportRenderer
         _tpShadowCameraPosLoc = GL.GetUniformLocation(_terrainCdlodShader, "uShadowCameraPos");
         _tpShadowPcfRadiusLoc = GL.GetUniformLocation(_terrainCdlodShader, "uShadowPcfRadius");
         _tpShadowBiasScaleLoc = GL.GetUniformLocation(_terrainCdlodShader, "uShadowBiasScale");
+        _tpShadowNormalBiasLoc = GL.GetUniformLocation(_terrainCdlodShader, "uShadowNormalBias");
         for (int i = 0; i < MaxDirectionalShadowCascades; i++)
         {
             _tpCascadeLightMvpLoc[i] = GL.GetUniformLocation(_terrainCdlodShader, $"uCascadeLightMvp[{i}]");
@@ -424,7 +425,8 @@ internal sealed partial class SceneViewportRenderer
         GL.Uniform1(_tpShadowEnabledLoc, shadow.Enabled ? 1 : 0);
         GL.Uniform1(_tpShadowStrengthLoc, shadow.Strength);
         GL.Uniform1(_tpShadowPcfRadiusLoc, ShadowPcfRadiusFor(_shadowQuality));
-        GL.Uniform1(_tpShadowBiasScaleLoc, Math.Clamp(ShadowBias, 0.1f, 4f));
+        GL.Uniform1(_tpShadowBiasScaleLoc, EffectiveShadowBiasScale());
+        GL.Uniform1(_tpShadowNormalBiasLoc, _frameDir != null ? _frameDir.ShadowNormalBias : 0f);
         GL.Uniform1(_tpShadowMapLoc, 1);
         GL.ActiveTexture(TextureUnit.Texture1);
         GL.BindTexture(TextureTarget.Texture2DArray, shadow.Enabled ? _shadowArrayTex : 0);
@@ -719,6 +721,7 @@ internal sealed partial class SceneViewportRenderer
             uniform vec3  uShadowCameraPos;
             uniform int   uShadowPcfRadius;
             uniform float uShadowBiasScale;
+            uniform float uShadowNormalBias;
 
             out vec4 outColor;
 
@@ -823,7 +826,8 @@ internal sealed partial class SceneViewportRenderer
                     if (viewDistance <= uCascadeSplit[i]) { cascade = i; break; }
                 }
 
-                vec4 lightPos = vec4(vWorldPos, 1.0) * uCascadeLightMvp[cascade];
+                vec3 biasedPos = vWorldPos + N * (uShadowNormalBias * (0.02 + 0.03 * float(cascade)));
+                vec4 lightPos = vec4(biasedPos, 1.0) * uCascadeLightMvp[cascade];
                 vec3 proj = lightPos.xyz / max(lightPos.w, 0.0001);
                 proj = proj * 0.5 + 0.5;
                 if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0)

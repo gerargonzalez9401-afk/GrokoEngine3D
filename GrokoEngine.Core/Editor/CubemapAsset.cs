@@ -78,34 +78,34 @@ namespace GrokoEngine
                 ? Path.GetFileNameWithoutExtension(path)
                 : data.Name;
             RelativizeAssetPaths(data, path);
-            File.WriteAllText(path, JsonSerializer.Serialize(data, Options));
+            AtomicFile.WriteAllText(path, JsonSerializer.Serialize(data, Options));
             EnsureMetaIfInsideAssets(path);
         }
 
         private static void RelativizeAssetPaths(CubemapAssetData data, string cubemapPath)
         {
             string? assetsRoot = InferAssetsRoot(cubemapPath);
-            data.SourceTexturePath = AssetDatabase.SerializeReference(data.SourceTexturePath, assetsRoot);
-            data.PositiveXPath = AssetDatabase.SerializeReference(data.PositiveXPath, assetsRoot);
-            data.NegativeXPath = AssetDatabase.SerializeReference(data.NegativeXPath, assetsRoot);
-            data.PositiveYPath = AssetDatabase.SerializeReference(data.PositiveYPath, assetsRoot);
-            data.NegativeYPath = AssetDatabase.SerializeReference(data.NegativeYPath, assetsRoot);
-            data.PositiveZPath = AssetDatabase.SerializeReference(data.PositiveZPath, assetsRoot);
-            data.NegativeZPath = AssetDatabase.SerializeReference(data.NegativeZPath, assetsRoot);
-            data.PreviewTexturePath = AssetDatabase.SerializeReference(data.PreviewTexturePath, assetsRoot);
+            data.SourceTexturePath = AssetReferences.Serialize(data.SourceTexturePath, assetsRoot);
+            data.PositiveXPath = AssetReferences.Serialize(data.PositiveXPath, assetsRoot);
+            data.NegativeXPath = AssetReferences.Serialize(data.NegativeXPath, assetsRoot);
+            data.PositiveYPath = AssetReferences.Serialize(data.PositiveYPath, assetsRoot);
+            data.NegativeYPath = AssetReferences.Serialize(data.NegativeYPath, assetsRoot);
+            data.PositiveZPath = AssetReferences.Serialize(data.PositiveZPath, assetsRoot);
+            data.NegativeZPath = AssetReferences.Serialize(data.NegativeZPath, assetsRoot);
+            data.PreviewTexturePath = AssetReferences.Serialize(data.PreviewTexturePath, assetsRoot);
         }
 
         private static void ResolveAssetPaths(CubemapAssetData data, string cubemapPath)
         {
             string? assetsRoot = InferAssetsRoot(cubemapPath);
-            data.SourceTexturePath = AssetDatabase.ResolveReference(data.SourceTexturePath, assetsRoot) ?? "";
-            data.PositiveXPath = AssetDatabase.ResolveReference(data.PositiveXPath, assetsRoot) ?? "";
-            data.NegativeXPath = AssetDatabase.ResolveReference(data.NegativeXPath, assetsRoot) ?? "";
-            data.PositiveYPath = AssetDatabase.ResolveReference(data.PositiveYPath, assetsRoot) ?? "";
-            data.NegativeYPath = AssetDatabase.ResolveReference(data.NegativeYPath, assetsRoot) ?? "";
-            data.PositiveZPath = AssetDatabase.ResolveReference(data.PositiveZPath, assetsRoot) ?? "";
-            data.NegativeZPath = AssetDatabase.ResolveReference(data.NegativeZPath, assetsRoot) ?? "";
-            data.PreviewTexturePath = AssetDatabase.ResolveReference(data.PreviewTexturePath, assetsRoot) ?? "";
+            data.SourceTexturePath = AssetReferences.Resolve(data.SourceTexturePath, assetsRoot) ?? "";
+            data.PositiveXPath = AssetReferences.Resolve(data.PositiveXPath, assetsRoot) ?? "";
+            data.NegativeXPath = AssetReferences.Resolve(data.NegativeXPath, assetsRoot) ?? "";
+            data.PositiveYPath = AssetReferences.Resolve(data.PositiveYPath, assetsRoot) ?? "";
+            data.NegativeYPath = AssetReferences.Resolve(data.NegativeYPath, assetsRoot) ?? "";
+            data.PositiveZPath = AssetReferences.Resolve(data.PositiveZPath, assetsRoot) ?? "";
+            data.NegativeZPath = AssetReferences.Resolve(data.NegativeZPath, assetsRoot) ?? "";
+            data.PreviewTexturePath = AssetReferences.Resolve(data.PreviewTexturePath, assetsRoot) ?? "";
         }
 
         private static string? InferAssetsRoot(string filePath)
@@ -127,7 +127,7 @@ namespace GrokoEngine
             if (string.IsNullOrWhiteSpace(assetsRoot) || !File.Exists(path))
                 return;
 
-            AssetDatabase.Get(assetsRoot).GetOrCreateGuid(path);
+            AssetReferences.GetOrCreateGuid(path);
         }
 
         private static string GetUniquePath(string desiredPath)

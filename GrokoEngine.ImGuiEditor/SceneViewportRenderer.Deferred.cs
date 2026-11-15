@@ -9,12 +9,24 @@ internal sealed partial class SceneViewportRenderer
 {
     private int _deferredWidth;
     private int _deferredHeight;
+    private int _deferredSamples = 1;
     private int _gbufferFbo;
     private int _gbufferAlbedo;
     private int _gbufferNormalRoughness;
     private int _gbufferMaterial;
     private int _gbufferEmission;
+    private int _gbufferShadowmask;
     private int _gbufferDepth;
+    // En Deferred se dibuja el G-buffer multisample y se resuelve a las texturas
+    // normales antes de iluminar. Un sampler2D no puede leer directamente un MSAA
+    // renderbuffer, pero resolverlo aquí conserva el coverage de los bordes.
+    private int _gbufferMsaaFbo;
+    private int _gbufferMsaaAlbedo;
+    private int _gbufferMsaaNormalRoughness;
+    private int _gbufferMsaaMaterial;
+    private int _gbufferMsaaEmission;
+    private int _gbufferMsaaShadowmask;
+    private int _gbufferMsaaDepth;
     private int _gbufferShader;
     private int _deferredLightingShader;
     private int _deferredQuadVao;
@@ -22,24 +34,28 @@ internal sealed partial class SceneViewportRenderer
 
     private int _gbMvpLoc, _gbModelLoc, _gbUseInstancingLoc, _gbUseSkinningLoc, _gbUseSurfaceUniformsLoc;
     private int _gbSurfaceColorLoc, _gbSurfaceMaterialLoc, _gbSurfaceEmissionLoc;
-    private int _gbTextureLoc, _gbHasTextureLoc, _gbNormalMapLoc, _gbHasNormalMapLoc, _gbRoughnessMapLoc, _gbHasRoughnessMapLoc, _gbMetallicMapLoc, _gbHasMetallicMapLoc;
+    private int _gbTextureLoc, _gbHasTextureLoc, _gbNormalMapLoc, _gbHasNormalMapLoc, _gbRoughnessMapLoc, _gbHasRoughnessMapLoc, _gbMetallicMapLoc, _gbHasMetallicMapLoc, _gbLightmapLoc, _gbHasLightmapLoc, _gbLightmapIntensityLoc, _gbLightmapScaleOffsetLoc, _gbShadowmaskLoc, _gbHasShadowmaskLoc;
     private int _gbAlphaClipEnabledLoc, _gbAlphaClipThresholdLoc, _gbColorSpaceLinearLoc;
     private readonly int[] _gbBoneLocs = new int[MaxGpuBones];
 
-    private int _dlAlbedoLoc, _dlNormalLoc, _dlMaterialLoc, _dlEmissionLoc, _dlDepthLoc;
+    private int _dlAlbedoLoc, _dlNormalLoc, _dlMaterialLoc, _dlEmissionLoc, _dlShadowmaskLoc, _dlDepthLoc;
     private int _dlInvViewProjLoc, _dlCameraPosLoc, _dlAmbientColorLoc, _dlAmbientIntensityLoc, _dlSkyStrengthLoc;
     private int _dlDirDirLoc, _dlDirColorLoc, _dlDirIntensityLoc;
+    private int _dlDirShadowmaskChannelLoc;
+    private int _dlMixedLightingModeLoc, _dlDistanceShadowmaskLoc, _dlShadowmaskDistanceLoc, _dlShadowmaskDistanceFadeLoc;
     private int _dlPointCountLoc, _dlSpotCountLoc, _dlAreaCountLoc;
     private readonly int[] _dlPointPosLoc = new int[MaxPointLights];
     private readonly int[] _dlPointColorLoc = new int[MaxPointLights];
     private readonly int[] _dlPointIntensityLoc = new int[MaxPointLights];
     private readonly int[] _dlPointRangeLoc = new int[MaxPointLights];
+    private readonly int[] _dlPointShadowmaskChannelLoc = new int[MaxPointLights];
     private readonly int[] _dlSpotPosLoc = new int[MaxSpotLights];
     private readonly int[] _dlSpotDirLoc = new int[MaxSpotLights];
     private readonly int[] _dlSpotColorLoc = new int[MaxSpotLights];
     private readonly int[] _dlSpotIntensityLoc = new int[MaxSpotLights];
     private readonly int[] _dlSpotRangeLoc = new int[MaxSpotLights];
     private readonly int[] _dlSpotAngleLoc = new int[MaxSpotLights];
+    private readonly int[] _dlSpotShadowmaskChannelLoc = new int[MaxSpotLights];
     private readonly int[] _dlAreaPosLoc = new int[MaxAreaLights];
     private readonly int[] _dlAreaDirLoc = new int[MaxAreaLights];
     private readonly int[] _dlAreaColorLoc = new int[MaxAreaLights];
@@ -51,19 +67,38 @@ internal sealed partial class SceneViewportRenderer
     private readonly int[] _dlEnvShLoc = new int[9];
     private int _dlBrdfLutLoc, _dlHasBrdfLutLoc, _dlIblDiffuseStrengthLoc, _dlIblSpecularStrengthLoc;
     private int _dlActiveReflectionProbeMapLoc, _dlHasActiveReflectionProbeMapLoc, _dlActiveReflectionProbeMaxLodLoc;
-    private int _dlActiveReflectionProbeCenterLoc, _dlActiveReflectionProbeHalfSizeLoc, _dlActiveReflectionProbeBlendDistanceLoc, _dlActiveReflectionProbeIntensityLoc;
-    private int _dlShadowMapLoc, _dlShadowEnabledLoc, _dlShadowStrengthLoc, _dlShadowPcfRadiusLoc, _dlShadowBiasScaleLoc, _dlCascadeCountLoc, _dlShadowCameraPosLoc;
+    private int _dlActiveReflectionProbeCenterLoc, _dlActiveReflectionProbeHalfSizeLoc, _dlActiveReflectionProbeBlendDistanceLoc, _dlActiveReflectionProbeIntensityLoc, _dlActiveReflectionProbeBoxProjectionLoc;
+    private int _dlSecondaryReflectionProbeMapLoc, _dlHasSecondaryReflectionProbeMapLoc, _dlSecondaryReflectionProbeMaxLodLoc;
+    private int _dlSecondaryReflectionProbeCenterLoc, _dlSecondaryReflectionProbeHalfSizeLoc, _dlSecondaryReflectionProbeBlendDistanceLoc, _dlSecondaryReflectionProbeIntensityLoc, _dlSecondaryReflectionProbeBoxProjectionLoc;
+    private int _dlShadowMapLoc, _dlShadowEnabledLoc, _dlShadowStrengthLoc, _dlShadowPcfRadiusLoc, _dlShadowBiasScaleLoc, _dlShadowNormalBiasLoc, _dlCascadeCountLoc, _dlShadowCameraPosLoc;
+    // Deferred comparte los mapas ya generados por el sistema de sombras. Los spots usan un
+    // atlas; la point local seleccionada por importancia usa un cubemap, manteniendo el coste
+    // estable sin depender del orden de la jerarquía.
+    private int _dlSpotShadowMapLoc;
+    private readonly int[] _dlSpotLightMvpLoc = new int[MaxSpotLights];
+    private readonly int[] _dlSpotShadowEnabledLoc = new int[MaxSpotLights];
+    private readonly int[] _dlSpotShadowStrengthLoc = new int[MaxSpotLights];
+    private readonly int[] _dlSpotShadowSlotLoc = new int[MaxSpotLights];
+    private int _dlPointShadowCubeLoc, _dlPointShadowEnabledLoc, _dlPointShadowStrengthLoc, _dlPointShadowPosLoc, _dlPointShadowFarLoc, _dlPointShadowTexelSizeLoc, _dlPointShadowLightIndexLoc;
+
+    // Bias de sombra efectivo (escala del shader). Toma el Bias del DirectionalLight primario del
+    // frame (Unity: 0.05 → escala 1.0); si no hay luz, usa el bias global del renderer.
+    private float EffectiveShadowBiasScale() =>
+        _frameDir != null
+            ? Math.Clamp(_frameDir.ShadowBias * 20f, 0.1f, 4f)
+            : Math.Clamp(ShadowBias, 0.1f, 4f);
     private readonly int[] _dlCascadeLightMvpLoc = new int[MaxDirectionalShadowCascades];
     private readonly int[] _dlCascadeSplitLoc = new int[MaxDirectionalShadowCascades];
-    private int _dlFogDensityLoc, _dlFogColorLoc, _dlVolumetricStrengthLoc, _dlDebugViewLoc;
+    private int _dlFogDensityLoc, _dlFogColorLoc, _dlFogHeightLoc, _dlFogHeightFalloffLoc, _dlVolumetricStrengthLoc, _dlDebugViewLoc;
 
     private bool UseDeferredOpaquePath =>
         RenderingPath == RendererRenderingPath.Deferred;
 
-    private void EnsureDeferredResources(int width, int height)
+    private void EnsureDeferredResources(int width, int height, int requestedSamples)
     {
         width = Math.Max(1, width);
         height = Math.Max(1, height);
+        int samples = requestedSamples <= 1 ? 1 : requestedSamples <= 2 ? 2 : requestedSamples <= 4 ? 4 : 8;
 
         if (_gbufferShader == 0)
         {
@@ -80,13 +115,14 @@ internal sealed partial class SceneViewportRenderer
         if (_deferredQuadVao == 0)
             CreateDeferredFullscreenQuad();
 
-        if (_gbufferFbo != 0 && _deferredWidth == width && _deferredHeight == height)
+        if (_gbufferFbo != 0 && _deferredWidth == width && _deferredHeight == height && _deferredSamples == samples)
             return;
 
         ReleaseDeferredTargets();
 
         _deferredWidth = width;
         _deferredHeight = height;
+        _deferredSamples = samples;
         _gbufferFbo = GL.GenFramebuffer();
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _gbufferFbo);
 
@@ -94,6 +130,7 @@ internal sealed partial class SceneViewportRenderer
         _gbufferNormalRoughness = CreateGBufferTexture(width, height, PixelInternalFormat.Rgba16f);
         _gbufferMaterial = CreateGBufferTexture(width, height, PixelInternalFormat.Rgba8);
         _gbufferEmission = CreateGBufferTexture(width, height, PixelInternalFormat.Rgba16f);
+        _gbufferShadowmask = CreateGBufferTexture(width, height, PixelInternalFormat.Rgba8);
         _gbufferDepth = GL.GenTexture();
         GL.BindTexture(TextureTarget.Texture2D, _gbufferDepth);
         GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.DepthComponent24, width, height, 0, PixelFormat.DepthComponent, PixelType.Float, IntPtr.Zero);
@@ -106,13 +143,50 @@ internal sealed partial class SceneViewportRenderer
         GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment1, TextureTarget.Texture2D, _gbufferNormalRoughness, 0);
         GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment2, TextureTarget.Texture2D, _gbufferMaterial, 0);
         GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment3, TextureTarget.Texture2D, _gbufferEmission, 0);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment4, TextureTarget.Texture2D, _gbufferShadowmask, 0);
         GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, _gbufferDepth, 0);
-        GL.DrawBuffers(4, new[] { DrawBuffersEnum.ColorAttachment0, DrawBuffersEnum.ColorAttachment1, DrawBuffersEnum.ColorAttachment2, DrawBuffersEnum.ColorAttachment3 });
+        GL.DrawBuffers(5, new[] { DrawBuffersEnum.ColorAttachment0, DrawBuffersEnum.ColorAttachment1, DrawBuffersEnum.ColorAttachment2, DrawBuffersEnum.ColorAttachment3, DrawBuffersEnum.ColorAttachment4 });
 
         var status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         if (status != FramebufferErrorCode.FramebufferComplete)
             throw new InvalidOperationException($"Deferred G-buffer incompleto: {status}");
+
+        if (samples > 1)
+            CreateDeferredMsaaGBuffer(width, height, samples);
+    }
+
+    private void CreateDeferredMsaaGBuffer(int width, int height, int samples)
+    {
+        _gbufferMsaaFbo = GL.GenFramebuffer();
+        _gbufferMsaaAlbedo = CreateDeferredMsaaRenderbuffer(width, height, samples, RenderbufferStorage.Rgba8);
+        _gbufferMsaaNormalRoughness = CreateDeferredMsaaRenderbuffer(width, height, samples, RenderbufferStorage.Rgba16f);
+        _gbufferMsaaMaterial = CreateDeferredMsaaRenderbuffer(width, height, samples, RenderbufferStorage.Rgba8);
+        _gbufferMsaaEmission = CreateDeferredMsaaRenderbuffer(width, height, samples, RenderbufferStorage.Rgba16f);
+        _gbufferMsaaShadowmask = CreateDeferredMsaaRenderbuffer(width, height, samples, RenderbufferStorage.Rgba8);
+        _gbufferMsaaDepth = CreateDeferredMsaaRenderbuffer(width, height, samples, RenderbufferStorage.DepthComponent24);
+
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _gbufferMsaaFbo);
+        GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, _gbufferMsaaAlbedo);
+        GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment1, RenderbufferTarget.Renderbuffer, _gbufferMsaaNormalRoughness);
+        GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment2, RenderbufferTarget.Renderbuffer, _gbufferMsaaMaterial);
+        GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment3, RenderbufferTarget.Renderbuffer, _gbufferMsaaEmission);
+        GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment4, RenderbufferTarget.Renderbuffer, _gbufferMsaaShadowmask);
+        GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, _gbufferMsaaDepth);
+        GL.DrawBuffers(5, new[] { DrawBuffersEnum.ColorAttachment0, DrawBuffersEnum.ColorAttachment1, DrawBuffersEnum.ColorAttachment2, DrawBuffersEnum.ColorAttachment3, DrawBuffersEnum.ColorAttachment4 });
+
+        var status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        if (status != FramebufferErrorCode.FramebufferComplete)
+            throw new InvalidOperationException($"Deferred MSAA G-buffer incompleto: {status}");
+    }
+
+    private static int CreateDeferredMsaaRenderbuffer(int width, int height, int samples, RenderbufferStorage format)
+    {
+        int renderbuffer = GL.GenRenderbuffer();
+        GL.BindRenderbuffer(RenderbufferTarget.Renderbuffer, renderbuffer);
+        GL.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, samples, format, width, height);
+        return renderbuffer;
     }
 
     private static int CreateGBufferTexture(int width, int height, PixelInternalFormat format)
@@ -136,12 +210,24 @@ internal sealed partial class SceneViewportRenderer
         int height,
         IReadOnlyList<GameObject> objects,
         Vector3 cameraPosition,
-        ShadowInfo shadowInfo)
+        ShadowInfo shadowInfo,
+        ShadowInfo spotShadowInfo,
+        PointShadowInfo pointShadowInfo,
+        int targetFramebuffer,
+        int targetSamples)
     {
-        EnsureDeferredResources(width, height);
+        targetSamples = targetSamples <= 1 ? 1 : targetSamples <= 2 ? 2 : targetSamples <= 4 ? 4 : 8;
+        EnsureDeferredResources(width, height, targetSamples);
 
-        GL.GetInteger(GetPName.FramebufferBinding, out int targetFramebuffer);
-        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _gbufferFbo);
+        // glGet(FrameBufferBinding) fuerza sincronización con el driver en algunos
+        // controladores. SceneRenderTarget ya conoce el FBO que acaba de enlazar; los
+        // renderizados auxiliares sin ese dato conservan el fallback seguro.
+        if (targetFramebuffer < 0)
+            GL.GetInteger(GetPName.FramebufferBinding, out targetFramebuffer);
+
+        long gBufferStart = RenderTimestamp();
+        int geometryFramebuffer = _deferredSamples > 1 ? _gbufferMsaaFbo : _gbufferFbo;
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, geometryFramebuffer);
         GL.Viewport(0, 0, width, height);
         GL.DrawBuffers(4, new[] { DrawBuffersEnum.ColorAttachment0, DrawBuffersEnum.ColorAttachment1, DrawBuffersEnum.ColorAttachment2, DrawBuffersEnum.ColorAttachment3 });
         GL.ClearColor(0f, 0f, 0f, 0f);
@@ -165,7 +251,10 @@ internal sealed partial class SceneViewportRenderer
         GL.BindVertexArray(0);
         GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.UseProgram(0);
+        ResolveDeferredGBuffer(width, height);
+        _statsDeferredGBufferMs = RenderElapsedMs(gBufferStart);
 
+        long lightingStart = RenderTimestamp();
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, targetFramebuffer);
         GL.DrawBuffer(targetFramebuffer == 0 ? DrawBufferMode.Back : DrawBufferMode.ColorAttachment0);
         GL.Disable(EnableCap.DepthTest);
@@ -173,21 +262,58 @@ internal sealed partial class SceneViewportRenderer
         GL.Disable(EnableCap.Blend);
 
         GL.UseProgram(_deferredLightingShader);
-        BindDeferredLightingUniforms(objects, cameraPosition, shadowInfo, ref mvp, ref view, ref projection);
+        BindDeferredLightingUniforms(objects, cameraPosition, shadowInfo, spotShadowInfo, pointShadowInfo, ref mvp, ref view, ref projection);
         GL.BindVertexArray(_deferredQuadVao);
         GL.DrawArrays(PrimitiveType.Triangles, 0, 3);
         GL.BindVertexArray(0);
         GL.UseProgram(0);
         GL.DepthMask(true);
         GL.Enable(EnableCap.DepthTest);
+        _statsDeferredLightingMs = RenderElapsedMs(lightingStart);
 
-        GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _gbufferFbo);
+        long depthCopyStart = RenderTimestamp();
+        // Si el destino es MSAA, la profundidad debe conservar exactamente el mismo
+        // número de muestras. Antes se intentaba copiar una profundidad simple a un
+        // FBO multisample: OpenGL la rechaza y el MSAA de Deferred quedaba inactivo.
+        int depthSourceFramebuffer = _deferredSamples > 1 ? _gbufferMsaaFbo : _gbufferFbo;
+        GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, depthSourceFramebuffer);
         GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, targetFramebuffer);
         GL.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, targetFramebuffer);
+        _statsDeferredDepthCopyMs = RenderElapsedMs(depthCopyStart);
+
+        // Rebote difuso de color en pantalla. Se ejecuta antes de SSR para que los reflejos
+        // puedan incluir la iluminación indirecta recién compuesta.
+        long ssgiStart = RenderTimestamp();
+        RenderScreenSpaceGlobalIllumination(ref mvp, cameraPosition, width, height, targetFramebuffer);
+        _statsDeferredSsgiMs = RenderElapsedMs(ssgiStart);
 
         // SSR: reflejos de la escena real en pantalla sobre la geometría deferred ya iluminada.
+        long ssrStart = RenderTimestamp();
         RenderScreenSpaceReflections(ref mvp, cameraPosition, width, height, targetFramebuffer);
+        _statsDeferredSsrMs = RenderElapsedMs(ssrStart);
+    }
+
+    private void ResolveDeferredGBuffer(int width, int height)
+    {
+        if (_deferredSamples <= 1)
+            return;
+
+        GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _gbufferMsaaFbo);
+        GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _gbufferFbo);
+        ResolveDeferredGBufferColorAttachment(ReadBufferMode.ColorAttachment0, DrawBufferMode.ColorAttachment0, width, height);
+        ResolveDeferredGBufferColorAttachment(ReadBufferMode.ColorAttachment1, DrawBufferMode.ColorAttachment1, width, height);
+        ResolveDeferredGBufferColorAttachment(ReadBufferMode.ColorAttachment2, DrawBufferMode.ColorAttachment2, width, height);
+        ResolveDeferredGBufferColorAttachment(ReadBufferMode.ColorAttachment3, DrawBufferMode.ColorAttachment3, width, height);
+        ResolveDeferredGBufferColorAttachment(ReadBufferMode.ColorAttachment4, DrawBufferMode.ColorAttachment4, width, height);
+        GL.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
+    }
+
+    private static void ResolveDeferredGBufferColorAttachment(ReadBufferMode readAttachment, DrawBufferMode drawAttachment, int width, int height)
+    {
+        GL.ReadBuffer(readAttachment);
+        GL.DrawBuffer(drawAttachment);
+        GL.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
     }
 
     private void DrawDeferredStaticRanges()
@@ -317,7 +443,7 @@ internal sealed partial class SceneViewportRenderer
         SetIntUniform(_gbUseSkinningLoc, 0);
     }
 
-    private void BindDeferredLightingUniforms(IReadOnlyList<GameObject> objects, Vector3 cameraPosition, ShadowInfo shadowInfo, ref Matrix4 mvp, ref Matrix4 view, ref Matrix4 projection)
+    private void BindDeferredLightingUniforms(IReadOnlyList<GameObject> objects, Vector3 cameraPosition, ShadowInfo shadowInfo, ShadowInfo spotShadowInfo, PointShadowInfo pointShadowInfo, ref Matrix4 mvp, ref Matrix4 view, ref Matrix4 projection)
     {
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _gbufferAlbedo);
@@ -327,29 +453,41 @@ internal sealed partial class SceneViewportRenderer
         GL.BindTexture(TextureTarget.Texture2D, _gbufferMaterial);
         GL.ActiveTexture(TextureUnit.Texture3);
         GL.BindTexture(TextureTarget.Texture2D, _gbufferEmission);
-        GL.ActiveTexture(TextureUnit.Texture4);
+        // 0..15 ya están ocupadas por G-buffer base, sombras, IBL, probes, cookies
+        // e IES. Shadowmask/depth se dejan en 16/17: nunca pueden ser sobrescritas
+        // por ApplyDeferredShadowUniforms (la causa de texturas "transparentes").
+        GL.ActiveTexture(TextureUnit.Texture16);
+        GL.BindTexture(TextureTarget.Texture2D, _gbufferShadowmask);
+        GL.ActiveTexture(TextureUnit.Texture17);
         GL.BindTexture(TextureTarget.Texture2D, _gbufferDepth);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.Uniform1(_dlAlbedoLoc, 0);
         GL.Uniform1(_dlNormalLoc, 1);
         GL.Uniform1(_dlMaterialLoc, 2);
         GL.Uniform1(_dlEmissionLoc, 3);
-        GL.Uniform1(_dlDepthLoc, 4);
+        GL.Uniform1(_dlShadowmaskLoc, 16);
+        GL.Uniform1(_dlDepthLoc, 17);
 
         Matrix4.Invert(mvp, out Matrix4 invViewProj);
         GL.UniformMatrix4(_dlInvViewProjLoc, true, ref invViewProj);
         GL.Uniform3(_dlCameraPosLoc, cameraPosition);
+        GL.Uniform1(_dlMixedLightingModeLoc, (int)MixedLightingMode);
+        GL.Uniform1(_dlDistanceShadowmaskLoc, DistanceShadowmask ? 1 : 0);
+        GL.Uniform1(_dlShadowmaskDistanceLoc, Math.Clamp(ShadowmaskDistance, 1f, 500f));
+        GL.Uniform1(_dlShadowmaskDistanceFadeLoc, Math.Clamp(ShadowmaskDistanceFade, 0.01f, Math.Max(ShadowmaskDistance, 0.01f)));
 
         CollectFrameLighting(objects, cameraPosition);
         var ambient = _frameAmbient;
-        var ambColor = ambient != null ? new Vector3(ambient.R, ambient.G, ambient.B) : new Vector3(0.3f, 0.32f, 0.36f);
-        float ambIntensity = ambient?.Intensity ?? 0.22f;
+        // Sin Ambient Light, HDRI ni cielo procedural no se inventa iluminación global.
+        // Así una casa cerrada queda oscura al apagar sus luminarias, como en un motor físico.
+        var ambColor = ambient != null ? new Vector3(ambient.R, ambient.G, ambient.B) : Vector3.Zero;
+        float ambIntensity = ambient?.Intensity ?? 0f;
         if (_frameDir != null) ambIntensity *= _frameDir.IndirectMultiplier;
         GL.Uniform3(_dlAmbientColorLoc, ambColor);
         GL.Uniform1(_dlAmbientIntensityLoc, ambIntensity);
-        GL.Uniform1(_dlSkyStrengthLoc, ambient?.SkyStrength ?? 0.08f);
+        GL.Uniform1(_dlSkyStrengthLoc, ambient?.SkyStrength ?? 0f);
         ApplyDeferredIblUniforms(cameraPosition);
-        ApplyDeferredShadowUniforms(shadowInfo);
+        ApplyDeferredShadowUniforms(shadowInfo, spotShadowInfo, pointShadowInfo);
 
         var dir = _frameDir;
         if (dir != null && dir.gameObject != null)
@@ -357,12 +495,14 @@ internal sealed partial class SceneViewportRenderer
             GL.Uniform3(_dlDirDirLoc, ToTk(dir.GetNormalizedDirection()).Normalized());
             GL.Uniform3(_dlDirColorLoc, ToTk(dir.GetEffectiveColor()));
             GL.Uniform1(_dlDirIntensityLoc, dir.Intensity);
+            GL.Uniform1(_dlDirShadowmaskChannelLoc, dir.Mode == LightMode.Mixed ? dir.ShadowmaskChannel : -1);
         }
         else
         {
             GL.Uniform3(_dlDirDirLoc, new Vector3(0f, -1f, 0f));
             GL.Uniform3(_dlDirColorLoc, Vector3.Zero);
             GL.Uniform1(_dlDirIntensityLoc, 0f);
+            GL.Uniform1(_dlDirShadowmaskChannelLoc, -1);
         }
 
         GL.Uniform1(_dlPointCountLoc, _framePointLights.Count);
@@ -373,6 +513,7 @@ internal sealed partial class SceneViewportRenderer
             GL.Uniform3(_dlPointColorLoc[i], ToTk(pl.GetEffectiveColor()));
             GL.Uniform1(_dlPointIntensityLoc[i], pl.Intensity);
             GL.Uniform1(_dlPointRangeLoc[i], pl.Range);
+            GL.Uniform1(_dlPointShadowmaskChannelLoc[i], pl.Mode == LightMode.Mixed ? pl.ShadowmaskChannel : -1);
         }
 
         GL.Uniform1(_dlSpotCountLoc, _frameSpotLights.Count);
@@ -385,6 +526,17 @@ internal sealed partial class SceneViewportRenderer
             GL.Uniform1(_dlSpotIntensityLoc[i], sl.Intensity);
             GL.Uniform1(_dlSpotRangeLoc[i], sl.Range);
             GL.Uniform1(_dlSpotAngleLoc[i], MathHelper.DegreesToRadians(sl.Angle));
+            GL.Uniform1(_dlSpotShadowmaskChannelLoc[i], sl.Mode == LightMode.Mixed ? sl.ShadowmaskChannel : -1);
+            int shadowSlot = -1;
+            for (int slot = 0; slot < MaxSpotLights; slot++)
+            {
+                if (ReferenceEquals(_cachedSpotShadowLights[slot], sl))
+                {
+                    shadowSlot = slot;
+                    break;
+                }
+            }
+            GL.Uniform1(_dlSpotShadowSlotLoc[i], shadowSlot);
         }
 
         int areaCount = Math.Min(MaxAreaLights, _frameAreaLights.Count + _frameRectLights.Count);
@@ -405,6 +557,8 @@ internal sealed partial class SceneViewportRenderer
         bool ppEnabled = pp?.Enabled ?? false;
         GL.Uniform1(_dlFogDensityLoc, ppEnabled && pp!.Fog ? pp.FogDensity : 0f);
         GL.Uniform3(_dlFogColorLoc, ppEnabled ? new Vector3(pp!.FogR, pp.FogG, pp.FogB) : new Vector3(0.48f, 0.58f, 0.68f));
+        GL.Uniform1(_dlFogHeightLoc, ppEnabled && pp!.Fog ? pp.FogHeight : 0f);
+        GL.Uniform1(_dlFogHeightFalloffLoc, ppEnabled && pp!.Fog ? Math.Clamp(pp.FogHeightFalloff, 0f, 4f) : 0f);
         GL.Uniform1(_dlVolumetricStrengthLoc, ppEnabled ? pp!.VolumetricLightStrength : 0f);
         GL.Uniform1(_dlDebugViewLoc, DebugView);
     }
@@ -446,7 +600,7 @@ internal sealed partial class SceneViewportRenderer
             if (EnvironmentMode == EnvironmentMode.ProceduralSky)
                 UpdateProceduralSkyAmbient(_frameDir);
             else
-                _flatAmbientColor = new Vector3(0.3f, 0.32f, 0.36f);
+                _flatAmbientColor = Vector3.Zero;
 
             GL.Uniform1(_dlHasEnvMapLoc, 0);
             GL.Uniform3(_dlEnvDiffuseColorLoc, _flatAmbientColor);
@@ -461,72 +615,25 @@ internal sealed partial class SceneViewportRenderer
         _activeReflectionProbeCubemapPath = null;
         _activeReflectionProbeTexture = 0;
         _activeReflectionProbeMaxLod = 0f;
-
-        ReflectionProbe? best = null;
-        Vector3 bestCenter = Vector3.Zero;
-        Vector3 bestHalfSize = Vector3.One;
-        float bestScore = float.NegativeInfinity;
-
-        foreach (var probe in _frameReflectionProbes)
+        var (primary, secondary) = SelectReflectionProbes(cameraPosition);
+        if (primary is { } probe)
         {
-            if (probe == null || !probe.Enabled || probe.gameObject == null)
-                continue;
-
-            string path = probe.EffectiveCubemapPath;
-            if (string.IsNullOrWhiteSpace(path))
-                continue;
-
-            var probePos = ComputeWorldPosition(probe.gameObject);
-            var center = new Vector3(probePos.X + probe.CenterX, probePos.Y + probe.CenterY, probePos.Z + probe.CenterZ);
-            var half = new Vector3(
-                MathF.Max(0.01f, probe.SizeX) * 0.5f,
-                MathF.Max(0.01f, probe.SizeY) * 0.5f,
-                MathF.Max(0.01f, probe.SizeZ) * 0.5f);
-
-            float distance = (cameraPosition - center).Length;
-            float score = probe.Importance * 1000f - distance * 0.01f;
-            if (score > bestScore)
-            {
-                best = probe;
-                bestCenter = center;
-                bestHalfSize = half;
-                bestScore = score;
-            }
+            _activeReflectionProbeCubemapPath = NormalizeExistingAssetPath(probe.Probe.EffectiveCubemapPath) ?? probe.Probe.EffectiveCubemapPath;
+            _activeReflectionProbeTexture = probe.Texture;
+            _activeReflectionProbeMaxLod = probe.MaxLod;
         }
 
-        if (best != null && TryGetReflectionProbeCubeTexture(best.EffectiveCubemapPath, out int tex, out float maxLod))
-        {
-            _activeReflectionProbeCubemapPath = NormalizeExistingAssetPath(best.EffectiveCubemapPath) ?? best.EffectiveCubemapPath;
-            _activeReflectionProbeTexture = tex;
-            _activeReflectionProbeMaxLod = maxLod;
-
-            GL.ActiveTexture(TextureUnit.Texture10);
-            GL.BindTexture(TextureTarget.TextureCubeMap, tex);
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.Uniform1(_dlActiveReflectionProbeMapLoc, 10);
-            GL.Uniform1(_dlHasActiveReflectionProbeMapLoc, 1);
-            GL.Uniform1(_dlActiveReflectionProbeMaxLodLoc, maxLod);
-            GL.Uniform3(_dlActiveReflectionProbeCenterLoc, bestCenter);
-            GL.Uniform3(_dlActiveReflectionProbeHalfSizeLoc, bestHalfSize);
-            GL.Uniform1(_dlActiveReflectionProbeBlendDistanceLoc, MathF.Max(0.001f, best.BlendDistance));
-            GL.Uniform1(_dlActiveReflectionProbeIntensityLoc, Math.Clamp(best.Intensity, 0f, 2f));
-        }
-        else
-        {
-            GL.ActiveTexture(TextureUnit.Texture10);
-            GL.BindTexture(TextureTarget.TextureCubeMap, 0);
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.Uniform1(_dlActiveReflectionProbeMapLoc, 10);
-            GL.Uniform1(_dlHasActiveReflectionProbeMapLoc, 0);
-            GL.Uniform1(_dlActiveReflectionProbeMaxLodLoc, 0f);
-            GL.Uniform3(_dlActiveReflectionProbeCenterLoc, Vector3.Zero);
-            GL.Uniform3(_dlActiveReflectionProbeHalfSizeLoc, Vector3.One);
-            GL.Uniform1(_dlActiveReflectionProbeBlendDistanceLoc, 0.001f);
-            GL.Uniform1(_dlActiveReflectionProbeIntensityLoc, 0f);
-        }
+        UploadReflectionProbe(primary, 10,
+            _dlActiveReflectionProbeMapLoc, _dlHasActiveReflectionProbeMapLoc, _dlActiveReflectionProbeMaxLodLoc,
+            _dlActiveReflectionProbeCenterLoc, _dlActiveReflectionProbeHalfSizeLoc, _dlActiveReflectionProbeBlendDistanceLoc,
+            _dlActiveReflectionProbeIntensityLoc, _dlActiveReflectionProbeBoxProjectionLoc);
+        UploadReflectionProbe(secondary, 14,
+            _dlSecondaryReflectionProbeMapLoc, _dlHasSecondaryReflectionProbeMapLoc, _dlSecondaryReflectionProbeMaxLodLoc,
+            _dlSecondaryReflectionProbeCenterLoc, _dlSecondaryReflectionProbeHalfSizeLoc, _dlSecondaryReflectionProbeBlendDistanceLoc,
+            _dlSecondaryReflectionProbeIntensityLoc, _dlSecondaryReflectionProbeBoxProjectionLoc);
     }
 
-    private void ApplyDeferredShadowUniforms(ShadowInfo shadow)
+    private void ApplyDeferredShadowUniforms(ShadowInfo shadow, ShadowInfo spotShadow, PointShadowInfo pointShadow)
     {
         GL.ActiveTexture(TextureUnit.Texture5);
         GL.BindTexture(TextureTarget.Texture2DArray, shadow.Enabled ? _shadowArrayTex : 0);
@@ -535,7 +642,10 @@ internal sealed partial class SceneViewportRenderer
         GL.Uniform1(_dlShadowEnabledLoc, shadow.Enabled ? 1 : 0);
         GL.Uniform1(_dlShadowStrengthLoc, shadow.Strength);
         GL.Uniform1(_dlShadowPcfRadiusLoc, ShadowPcfRadiusFor(_shadowQuality));
-        GL.Uniform1(_dlShadowBiasScaleLoc, Math.Clamp(ShadowBias, 0.1f, 4f));
+        // Bias por-luz (estilo Unity): el Bias del DirectionalLight (0.05 por defecto) se mapea a la
+        // escala del shader (1.0 = look actual). Si no hay luz, cae al bias global del renderer.
+        GL.Uniform1(_dlShadowBiasScaleLoc, EffectiveShadowBiasScale());
+        GL.Uniform1(_dlShadowNormalBiasLoc, _frameDir != null ? _frameDir.ShadowNormalBias : 0f);
         GL.Uniform1(_dlCascadeCountLoc, shadow.CascadeCount);
         GL.Uniform3(_dlShadowCameraPosLoc, shadow.CameraPosition);
         for (int i = 0; i < MaxDirectionalShadowCascades; i++)
@@ -544,6 +654,29 @@ internal sealed partial class SceneViewportRenderer
             GL.UniformMatrix4(_dlCascadeLightMvpLoc[i], true, ref cascadeMvp);
             GL.Uniform1(_dlCascadeSplitLoc[i], shadow.Splits[i]);
         }
+
+        GL.ActiveTexture(TextureUnit.Texture15);
+        GL.BindTexture(TextureTarget.Texture2DArray, _spotShadowArrayTex);
+        GL.Uniform1(_dlSpotShadowMapLoc, 15);
+        for (int i = 0; i < MaxSpotLights; i++)
+        {
+            var info = _cachedSpotShadows[i];
+            var spotMvp = info.LightMvp;
+            GL.UniformMatrix4(_dlSpotLightMvpLoc[i], true, ref spotMvp);
+            GL.Uniform1(_dlSpotShadowEnabledLoc[i], info.Enabled ? 1 : 0);
+            GL.Uniform1(_dlSpotShadowStrengthLoc[i], info.Strength);
+        }
+
+        GL.Uniform1(_dlPointShadowEnabledLoc, pointShadow.Enabled ? 1 : 0);
+        GL.Uniform1(_dlPointShadowStrengthLoc, pointShadow.Strength);
+        GL.Uniform3(_dlPointShadowPosLoc, pointShadow.Position);
+        GL.Uniform1(_dlPointShadowFarLoc, pointShadow.FarPlane);
+        GL.Uniform1(_dlPointShadowTexelSizeLoc, 1f / Math.Max(1, _pointShadowSize));
+        GL.Uniform1(_dlPointShadowLightIndexLoc, ResolvePointShadowLightIndex(pointShadow));
+        GL.ActiveTexture(TextureUnit.Texture6);
+        GL.BindTexture(TextureTarget.TextureCubeMap, pointShadow.Enabled ? _pointShadowCube : 0);
+        GL.Uniform1(_dlPointShadowCubeLoc, 6);
+        GL.ActiveTexture(TextureUnit.Texture0);
     }
 
     private void UploadDeferredAreaLight(int index, GameObject? obj, float r, float g, float b, float intensity, float range, float width, float height)
@@ -572,6 +705,11 @@ internal sealed partial class SceneViewportRenderer
     {
         ApplyDeferredAlphaClip(range.AlphaClip, range.AlphaClipThreshold);
         ApplyDeferredSurfaceTextures(range.TexturePath, range.NormalMapPath, range.RoughnessMapPath, range.MetallicMapPath);
+        BindDeferredOptionalTexture(TextureUnit.Texture5, _gbLightmapLoc, _gbHasLightmapLoc, range.LightmapPath);
+        BindDeferredOptionalTexture(TextureUnit.Texture6, _gbShadowmaskLoc, _gbHasShadowmaskLoc, range.ShadowmaskPath);
+        GL.Uniform1(_gbLightmapIntensityLoc, range.LightmapIntensity);
+        GL.Uniform4(_gbLightmapScaleOffsetLoc, range.LightmapScaleOffset == default ? new Vector4(1f, 1f, 0f, 0f) : range.LightmapScaleOffset);
+        GL.ActiveTexture(TextureUnit.Texture0);
     }
 
     private void ApplyDeferredSurfaceTexturesIfChanged(string? texturePath, string? normalMapPath, string? roughnessMapPath, string? metallicMapPath, ref bool bound, ref string? boundTexture, ref string? boundNormal, ref string? boundRoughness, ref string? boundMetallic)
@@ -597,6 +735,12 @@ internal sealed partial class SceneViewportRenderer
         BindDeferredOptionalTexture(TextureUnit.Texture2, _gbNormalMapLoc, _gbHasNormalMapLoc, normalMapPath);
         BindDeferredOptionalTexture(TextureUnit.Texture3, _gbRoughnessMapLoc, _gbHasRoughnessMapLoc, roughnessMapPath);
         BindDeferredOptionalTexture(TextureUnit.Texture4, _gbMetallicMapLoc, _gbHasMetallicMapLoc, metallicMapPath);
+        // Los draws dinámicos no llevan UV de lightmap asignado; se desactiva explícitamente
+        // para que no hereden el mapa del último rango estático.
+        BindDeferredOptionalTexture(TextureUnit.Texture5, _gbLightmapLoc, _gbHasLightmapLoc, null);
+        BindDeferredOptionalTexture(TextureUnit.Texture6, _gbShadowmaskLoc, _gbHasShadowmaskLoc, null);
+        GL.Uniform1(_gbLightmapIntensityLoc, 1f);
+        GL.Uniform4(_gbLightmapScaleOffsetLoc, new Vector4(1f, 1f, 0f, 0f));
         GL.ActiveTexture(TextureUnit.Texture0);
     }
 
@@ -639,14 +783,23 @@ internal sealed partial class SceneViewportRenderer
 
     private void ReleaseDeferredTargets()
     {
+        if (_gbufferMsaaDepth != 0) { GL.DeleteRenderbuffer(_gbufferMsaaDepth); _gbufferMsaaDepth = 0; }
+        if (_gbufferMsaaEmission != 0) { GL.DeleteRenderbuffer(_gbufferMsaaEmission); _gbufferMsaaEmission = 0; }
+        if (_gbufferMsaaShadowmask != 0) { GL.DeleteRenderbuffer(_gbufferMsaaShadowmask); _gbufferMsaaShadowmask = 0; }
+        if (_gbufferMsaaMaterial != 0) { GL.DeleteRenderbuffer(_gbufferMsaaMaterial); _gbufferMsaaMaterial = 0; }
+        if (_gbufferMsaaNormalRoughness != 0) { GL.DeleteRenderbuffer(_gbufferMsaaNormalRoughness); _gbufferMsaaNormalRoughness = 0; }
+        if (_gbufferMsaaAlbedo != 0) { GL.DeleteRenderbuffer(_gbufferMsaaAlbedo); _gbufferMsaaAlbedo = 0; }
+        if (_gbufferMsaaFbo != 0) { GL.DeleteFramebuffer(_gbufferMsaaFbo); _gbufferMsaaFbo = 0; }
         if (_gbufferAlbedo != 0) { GL.DeleteTexture(_gbufferAlbedo); _gbufferAlbedo = 0; }
         if (_gbufferNormalRoughness != 0) { GL.DeleteTexture(_gbufferNormalRoughness); _gbufferNormalRoughness = 0; }
         if (_gbufferMaterial != 0) { GL.DeleteTexture(_gbufferMaterial); _gbufferMaterial = 0; }
         if (_gbufferEmission != 0) { GL.DeleteTexture(_gbufferEmission); _gbufferEmission = 0; }
+        if (_gbufferShadowmask != 0) { GL.DeleteTexture(_gbufferShadowmask); _gbufferShadowmask = 0; }
         if (_gbufferDepth != 0) { GL.DeleteTexture(_gbufferDepth); _gbufferDepth = 0; }
         if (_gbufferFbo != 0) { GL.DeleteFramebuffer(_gbufferFbo); _gbufferFbo = 0; }
         _deferredWidth = 0;
         _deferredHeight = 0;
+        _deferredSamples = 1;
     }
 
     private void CacheDeferredGBufferUniforms()
@@ -667,6 +820,12 @@ internal sealed partial class SceneViewportRenderer
         _gbHasRoughnessMapLoc = GL.GetUniformLocation(_gbufferShader, "uHasRoughnessMap");
         _gbMetallicMapLoc = GL.GetUniformLocation(_gbufferShader, "uMetallicMap");
         _gbHasMetallicMapLoc = GL.GetUniformLocation(_gbufferShader, "uHasMetallicMap");
+        _gbLightmapLoc = GL.GetUniformLocation(_gbufferShader, "uLightmap");
+        _gbHasLightmapLoc = GL.GetUniformLocation(_gbufferShader, "uHasLightmap");
+        _gbLightmapIntensityLoc = GL.GetUniformLocation(_gbufferShader, "uLightmapIntensity");
+        _gbLightmapScaleOffsetLoc = GL.GetUniformLocation(_gbufferShader, "uLightmapScaleOffset");
+        _gbShadowmaskLoc = GL.GetUniformLocation(_gbufferShader, "uShadowmask");
+        _gbHasShadowmaskLoc = GL.GetUniformLocation(_gbufferShader, "uHasShadowmask");
         _gbAlphaClipEnabledLoc = GL.GetUniformLocation(_gbufferShader, "uAlphaClipEnabled");
         _gbAlphaClipThresholdLoc = GL.GetUniformLocation(_gbufferShader, "uAlphaClipThreshold");
         _gbColorSpaceLinearLoc = GL.GetUniformLocation(_gbufferShader, "uColorSpaceLinear");
@@ -680,6 +839,7 @@ internal sealed partial class SceneViewportRenderer
         _dlNormalLoc = GL.GetUniformLocation(_deferredLightingShader, "uGNormalRoughness");
         _dlMaterialLoc = GL.GetUniformLocation(_deferredLightingShader, "uGMaterial");
         _dlEmissionLoc = GL.GetUniformLocation(_deferredLightingShader, "uGEmission");
+        _dlShadowmaskLoc = GL.GetUniformLocation(_deferredLightingShader, "uGShadowmask");
         _dlDepthLoc = GL.GetUniformLocation(_deferredLightingShader, "uGDepth");
         _dlInvViewProjLoc = GL.GetUniformLocation(_deferredLightingShader, "uInvViewProj");
         _dlCameraPosLoc = GL.GetUniformLocation(_deferredLightingShader, "uCameraPos");
@@ -708,13 +868,38 @@ internal sealed partial class SceneViewportRenderer
         _dlActiveReflectionProbeHalfSizeLoc = GL.GetUniformLocation(_deferredLightingShader, "uActiveReflectionProbeHalfSize");
         _dlActiveReflectionProbeBlendDistanceLoc = GL.GetUniformLocation(_deferredLightingShader, "uActiveReflectionProbeBlendDistance");
         _dlActiveReflectionProbeIntensityLoc = GL.GetUniformLocation(_deferredLightingShader, "uActiveReflectionProbeIntensity");
+        _dlActiveReflectionProbeBoxProjectionLoc = GL.GetUniformLocation(_deferredLightingShader, "uActiveReflectionProbeBoxProjection");
+        _dlSecondaryReflectionProbeMapLoc = GL.GetUniformLocation(_deferredLightingShader, "uSecondaryReflectionProbeMap");
+        _dlHasSecondaryReflectionProbeMapLoc = GL.GetUniformLocation(_deferredLightingShader, "uHasSecondaryReflectionProbeMap");
+        _dlSecondaryReflectionProbeMaxLodLoc = GL.GetUniformLocation(_deferredLightingShader, "uSecondaryReflectionProbeMaxLod");
+        _dlSecondaryReflectionProbeCenterLoc = GL.GetUniformLocation(_deferredLightingShader, "uSecondaryReflectionProbeCenter");
+        _dlSecondaryReflectionProbeHalfSizeLoc = GL.GetUniformLocation(_deferredLightingShader, "uSecondaryReflectionProbeHalfSize");
+        _dlSecondaryReflectionProbeBlendDistanceLoc = GL.GetUniformLocation(_deferredLightingShader, "uSecondaryReflectionProbeBlendDistance");
+        _dlSecondaryReflectionProbeIntensityLoc = GL.GetUniformLocation(_deferredLightingShader, "uSecondaryReflectionProbeIntensity");
+        _dlSecondaryReflectionProbeBoxProjectionLoc = GL.GetUniformLocation(_deferredLightingShader, "uSecondaryReflectionProbeBoxProjection");
         _dlShadowMapLoc = GL.GetUniformLocation(_deferredLightingShader, "uShadowMap");
         _dlShadowEnabledLoc = GL.GetUniformLocation(_deferredLightingShader, "uShadowEnabled");
         _dlShadowStrengthLoc = GL.GetUniformLocation(_deferredLightingShader, "uShadowStrength");
         _dlShadowPcfRadiusLoc = GL.GetUniformLocation(_deferredLightingShader, "uShadowPcfRadius");
         _dlShadowBiasScaleLoc = GL.GetUniformLocation(_deferredLightingShader, "uShadowBiasScale");
+        _dlShadowNormalBiasLoc = GL.GetUniformLocation(_deferredLightingShader, "uShadowNormalBias");
         _dlCascadeCountLoc = GL.GetUniformLocation(_deferredLightingShader, "uCascadeCount");
         _dlShadowCameraPosLoc = GL.GetUniformLocation(_deferredLightingShader, "uShadowCameraPos");
+        _dlSpotShadowMapLoc = GL.GetUniformLocation(_deferredLightingShader, "uSpotShadowMap");
+        for (int i = 0; i < MaxSpotLights; i++)
+        {
+            _dlSpotLightMvpLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uSpotLightMvp[{i}]");
+            _dlSpotShadowEnabledLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uSpotShadowEnabled[{i}]");
+            _dlSpotShadowStrengthLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uSpotShadowStrength[{i}]");
+            _dlSpotShadowSlotLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uSpotShadowSlot[{i}]");
+        }
+        _dlPointShadowCubeLoc = GL.GetUniformLocation(_deferredLightingShader, "uPointShadowCube");
+        _dlPointShadowEnabledLoc = GL.GetUniformLocation(_deferredLightingShader, "uPointShadowEnabled");
+        _dlPointShadowStrengthLoc = GL.GetUniformLocation(_deferredLightingShader, "uPointShadowStrength");
+        _dlPointShadowPosLoc = GL.GetUniformLocation(_deferredLightingShader, "uPointShadowPos");
+        _dlPointShadowFarLoc = GL.GetUniformLocation(_deferredLightingShader, "uPointShadowFar");
+        _dlPointShadowTexelSizeLoc = GL.GetUniformLocation(_deferredLightingShader, "uPointShadowTexelSize");
+        _dlPointShadowLightIndexLoc = GL.GetUniformLocation(_deferredLightingShader, "uPointShadowLightIndex");
         for (int i = 0; i < MaxDirectionalShadowCascades; i++)
         {
             _dlCascadeLightMvpLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uCascadeLightMvp[{i}]");
@@ -723,6 +908,11 @@ internal sealed partial class SceneViewportRenderer
         _dlDirDirLoc = GL.GetUniformLocation(_deferredLightingShader, "uDirDir");
         _dlDirColorLoc = GL.GetUniformLocation(_deferredLightingShader, "uDirColor");
         _dlDirIntensityLoc = GL.GetUniformLocation(_deferredLightingShader, "uDirIntensity");
+        _dlDirShadowmaskChannelLoc = GL.GetUniformLocation(_deferredLightingShader, "uDirShadowmaskChannel");
+        _dlMixedLightingModeLoc = GL.GetUniformLocation(_deferredLightingShader, "uMixedLightingMode");
+        _dlDistanceShadowmaskLoc = GL.GetUniformLocation(_deferredLightingShader, "uDistanceShadowmask");
+        _dlShadowmaskDistanceLoc = GL.GetUniformLocation(_deferredLightingShader, "uShadowmaskDistance");
+        _dlShadowmaskDistanceFadeLoc = GL.GetUniformLocation(_deferredLightingShader, "uShadowmaskDistanceFade");
         _dlPointCountLoc = GL.GetUniformLocation(_deferredLightingShader, "uPointCount");
         for (int i = 0; i < MaxPointLights; i++)
         {
@@ -730,6 +920,7 @@ internal sealed partial class SceneViewportRenderer
             _dlPointColorLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uPointColor[{i}]");
             _dlPointIntensityLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uPointIntensity[{i}]");
             _dlPointRangeLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uPointRange[{i}]");
+            _dlPointShadowmaskChannelLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uPointShadowmaskChannel[{i}]");
         }
         _dlSpotCountLoc = GL.GetUniformLocation(_deferredLightingShader, "uSpotCount");
         for (int i = 0; i < MaxSpotLights; i++)
@@ -740,6 +931,7 @@ internal sealed partial class SceneViewportRenderer
             _dlSpotIntensityLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uSpotIntensity[{i}]");
             _dlSpotRangeLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uSpotRange[{i}]");
             _dlSpotAngleLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uSpotAngle[{i}]");
+            _dlSpotShadowmaskChannelLoc[i] = GL.GetUniformLocation(_deferredLightingShader, $"uSpotShadowmaskChannel[{i}]");
         }
         _dlAreaCountLoc = GL.GetUniformLocation(_deferredLightingShader, "uAreaCount");
         for (int i = 0; i < MaxAreaLights; i++)
@@ -753,6 +945,8 @@ internal sealed partial class SceneViewportRenderer
         }
         _dlFogDensityLoc = GL.GetUniformLocation(_deferredLightingShader, "uFogDensity");
         _dlFogColorLoc = GL.GetUniformLocation(_deferredLightingShader, "uFogColor");
+        _dlFogHeightLoc = GL.GetUniformLocation(_deferredLightingShader, "uFogHeight");
+        _dlFogHeightFalloffLoc = GL.GetUniformLocation(_deferredLightingShader, "uFogHeightFalloff");
         _dlVolumetricStrengthLoc = GL.GetUniformLocation(_deferredLightingShader, "uVolumetricStrength");
         _dlDebugViewLoc = GL.GetUniformLocation(_deferredLightingShader, "uDebugView");
     }
@@ -786,6 +980,7 @@ internal sealed partial class SceneViewportRenderer
             layout (location = 3) in vec2 aUv;
             layout (location = 4) in vec4 aMaterial;
             layout (location = 5) in vec4 aEmission;
+            layout (location = 12) in vec2 aLightmapUv;
             layout (location = 6) in mat4 aInstanceModel;
             layout (location = 10) in vec4 aBoneIndices;
             layout (location = 11) in vec4 aBoneWeights;
@@ -804,6 +999,7 @@ internal sealed partial class SceneViewportRenderer
             out vec2 vUv;
             out vec4 vMaterial;
             out vec4 vEmission;
+            out vec2 vLightmapUv;
             void main()
             {
                 mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
@@ -838,6 +1034,7 @@ internal sealed partial class SceneViewportRenderer
                 vUv = aUv;
                 vMaterial = uUseSurfaceUniforms != 0 ? uSurfaceMaterial : aMaterial;
                 vEmission = uUseSurfaceUniforms != 0 ? uSurfaceEmission : aEmission;
+                vLightmapUv = aLightmapUv;
                 gl_Position = world * uMvp;
             }
             """;
@@ -850,6 +1047,7 @@ internal sealed partial class SceneViewportRenderer
             in vec2 vUv;
             in vec4 vMaterial;
             in vec4 vEmission;
+            in vec2 vLightmapUv;
             uniform sampler2D uTexture;
             uniform bool uHasTexture;
             uniform sampler2D uNormalMap;
@@ -858,6 +1056,12 @@ internal sealed partial class SceneViewportRenderer
             uniform bool uHasRoughnessMap;
             uniform sampler2D uMetallicMap;
             uniform bool uHasMetallicMap;
+            uniform sampler2D uLightmap;
+            uniform bool uHasLightmap;
+            uniform float uLightmapIntensity;
+            uniform vec4 uLightmapScaleOffset;
+            uniform sampler2D uShadowmask;
+            uniform bool uHasShadowmask;
             uniform int uAlphaClipEnabled;
             uniform float uAlphaClipThreshold;
             uniform int uColorSpaceLinear;
@@ -865,6 +1069,7 @@ internal sealed partial class SceneViewportRenderer
             layout (location = 1) out vec4 gNormalRoughness;
             layout (location = 2) out vec4 gMaterial;
             layout (location = 3) out vec4 gEmission;
+            layout (location = 4) out vec4 gShadowmask;
 
             vec3 ApplyNormalMap(vec3 n)
             {
@@ -904,12 +1109,22 @@ internal sealed partial class SceneViewportRenderer
                 vec3 normal = ApplyNormalMap(normalize(vNormal));
                 float metallic = clamp(uHasMetallicMap ? texture(uMetallicMap, vUv).r : vMaterial.x, 0.0, 1.0);
                 float roughness = clamp(uHasRoughnessMap ? texture(uRoughnessMap, vUv).r : vMaterial.y, 0.04, 1.0);
-                float specularHighlights = vMaterial.z >= 0.5 ? 1.0 : 0.0;
-                float environmentReflections = vMaterial.w >= 0.5 ? 1.0 : 0.0;
+                float materialFlags = floor(vMaterial.z + 0.5);
+                float specularHighlights = mod(materialFlags, 2.0) >= 1.0 ? 1.0 : 0.0;
+                float environmentReflections = materialFlags >= 2.0 ? 1.0 : 0.0;
+                float subsurface = clamp(vMaterial.w, 0.0, 1.0);
                 gAlbedo = vec4(base, alpha);
                 gNormalRoughness = vec4(normal * 0.5 + 0.5, roughness);
-                gMaterial = vec4(metallic, specularHighlights, environmentReflections, 1.0);
-                gEmission = vEmission;
+                gMaterial = vec4(metallic, specularHighlights, environmentReflections, subsurface);
+                // El baker guarda irradiancia en espacio sRGB. Se convierte antes de mezclarla
+                // y se modula por el albedo: así queda como luz indirecta, no como un "emission"
+                // plano que lave los materiales.
+                vec2 lightmapUv = vLightmapUv * uLightmapScaleOffset.xy + uLightmapScaleOffset.zw;
+                vec3 bakedIrradiance = uHasLightmap ? texture(uLightmap, lightmapUv).rgb : vec3(0.0);
+                if (uColorSpaceLinear == 1)
+                    bakedIrradiance = pow(max(bakedIrradiance, vec3(0.0)), vec3(2.2));
+                gEmission = vec4(vEmission.rgb + base * bakedIrradiance * max(uLightmapIntensity, 0.0), vEmission.a);
+                gShadowmask = uHasShadowmask ? texture(uShadowmask, lightmapUv) : vec4(1.0);
             }
             """;
 
@@ -940,6 +1155,7 @@ internal sealed partial class SceneViewportRenderer
             uniform sampler2D uGNormalRoughness;
             uniform sampler2D uGMaterial;
             uniform sampler2D uGEmission;
+            uniform sampler2D uGShadowmask;
             uniform sampler2D uGDepth;
             uniform mat4 uInvViewProj;
             uniform vec3 uCameraPos;
@@ -963,6 +1179,15 @@ internal sealed partial class SceneViewportRenderer
             uniform vec3      uActiveReflectionProbeHalfSize;
             uniform float     uActiveReflectionProbeBlendDistance;
             uniform float     uActiveReflectionProbeIntensity;
+            uniform int       uActiveReflectionProbeBoxProjection;
+            uniform samplerCube uSecondaryReflectionProbeMap;
+            uniform int       uHasSecondaryReflectionProbeMap;
+            uniform float     uSecondaryReflectionProbeMaxLod;
+            uniform vec3      uSecondaryReflectionProbeCenter;
+            uniform vec3      uSecondaryReflectionProbeHalfSize;
+            uniform float     uSecondaryReflectionProbeBlendDistance;
+            uniform float     uSecondaryReflectionProbeIntensity;
+            uniform int       uSecondaryReflectionProbeBoxProjection;
             uniform sampler2D uBrdfLut;
             uniform int       uHasBrdfLut;
             uniform float     uIblDiffuseStrength;
@@ -972,18 +1197,36 @@ internal sealed partial class SceneViewportRenderer
             uniform float uShadowStrength;
             uniform int   uShadowPcfRadius;
             uniform float uShadowBiasScale;
+            uniform float uShadowNormalBias;
             uniform int   uCascadeCount;
             uniform mat4  uCascadeLightMvp[5];
             uniform float uCascadeSplit[5];
             uniform vec3  uShadowCameraPos;
+            uniform sampler2DArray uSpotShadowMap;
+            uniform mat4      uSpotLightMvp[MAX_SPOT_LIGHTS];
+            uniform int       uSpotShadowEnabled[MAX_SPOT_LIGHTS];
+            uniform float     uSpotShadowStrength[MAX_SPOT_LIGHTS];
+            uniform samplerCube uPointShadowCube;
+            uniform int       uPointShadowEnabled;
+            uniform float     uPointShadowStrength;
+            uniform vec3      uPointShadowPos;
+            uniform float     uPointShadowFar;
+            uniform float     uPointShadowTexelSize;
+            uniform int       uPointShadowLightIndex;
             uniform vec3 uDirDir;
             uniform vec3 uDirColor;
             uniform float uDirIntensity;
+            uniform int uDirShadowmaskChannel;
+            uniform int uMixedLightingMode;
+            uniform int uDistanceShadowmask;
+            uniform float uShadowmaskDistance;
+            uniform float uShadowmaskDistanceFade;
             uniform int uPointCount;
             uniform vec3 uPointPos[MAX_POINT_LIGHTS];
             uniform vec3 uPointColor[MAX_POINT_LIGHTS];
             uniform float uPointIntensity[MAX_POINT_LIGHTS];
             uniform float uPointRange[MAX_POINT_LIGHTS];
+            uniform int uPointShadowmaskChannel[MAX_POINT_LIGHTS];
             uniform int uSpotCount;
             uniform vec3 uSpotPos[MAX_SPOT_LIGHTS];
             uniform vec3 uSpotDir[MAX_SPOT_LIGHTS];
@@ -991,6 +1234,8 @@ internal sealed partial class SceneViewportRenderer
             uniform float uSpotIntensity[MAX_SPOT_LIGHTS];
             uniform float uSpotRange[MAX_SPOT_LIGHTS];
             uniform float uSpotAngle[MAX_SPOT_LIGHTS];
+            uniform int uSpotShadowSlot[MAX_SPOT_LIGHTS];
+            uniform int uSpotShadowmaskChannel[MAX_SPOT_LIGHTS];
             uniform int uAreaCount;
             uniform vec3 uAreaPos[MAX_AREA_LIGHTS];
             uniform vec3 uAreaDir[MAX_AREA_LIGHTS];
@@ -1000,6 +1245,8 @@ internal sealed partial class SceneViewportRenderer
             uniform vec2 uAreaSize[MAX_AREA_LIGHTS];
             uniform float uFogDensity;
             uniform vec3 uFogColor;
+            uniform float uFogHeight;
+            uniform float uFogHeightFalloff;
             uniform float uVolumetricStrength;
             uniform int uDebugView;
 
@@ -1103,6 +1350,50 @@ internal sealed partial class SceneViewportRenderer
                 return clamp(fade * uActiveReflectionProbeIntensity, 0.0, 1.0);
             }
 
+            vec3 ReflectionProbeDirection(vec3 worldPos, vec3 reflectionDir)
+            {
+                if (uActiveReflectionProbeBoxProjection == 0)
+                    return reflectionDir;
+                vec3 halfSize = max(uActiveReflectionProbeHalfSize, vec3(0.001));
+                vec3 safeDir = mix(vec3(-0.0001), vec3(0.0001), greaterThanEqual(reflectionDir, vec3(0.0)));
+                safeDir = mix(safeDir, reflectionDir, greaterThanEqual(abs(reflectionDir), vec3(0.0001)));
+                vec3 boxMin = uActiveReflectionProbeCenter - halfSize;
+                vec3 boxMax = uActiveReflectionProbeCenter + halfSize;
+                vec3 toMax = (boxMax - worldPos) / safeDir;
+                vec3 toMin = (boxMin - worldPos) / safeDir;
+                vec3 exitDistance = max(toMax, toMin);
+                float distanceToBox = min(exitDistance.x, min(exitDistance.y, exitDistance.z));
+                if (distanceToBox <= 0.0)
+                    return reflectionDir;
+                return normalize(worldPos + reflectionDir * distanceToBox - uActiveReflectionProbeCenter);
+            }
+
+            float SecondaryReflectionProbeInfluence(vec3 worldPos)
+            {
+                if (uHasSecondaryReflectionProbeMap == 0) return 0.0;
+                vec3 halfSize = max(uSecondaryReflectionProbeHalfSize, vec3(0.001));
+                vec3 normalized = abs(worldPos - uSecondaryReflectionProbeCenter) / halfSize;
+                float boxDistance = max(normalized.x, max(normalized.y, normalized.z));
+                if (boxDistance >= 1.0) return 0.0;
+                float blendWidth = clamp(max(uSecondaryReflectionProbeBlendDistance, 0.0001) /
+                    max(min(halfSize.x, min(halfSize.y, halfSize.z)), 0.001), 0.001, 0.95);
+                return clamp((1.0 - smoothstep(max(0.0, 1.0 - blendWidth), 1.0, boxDistance)) *
+                    uSecondaryReflectionProbeIntensity, 0.0, 1.0);
+            }
+
+            vec3 SecondaryReflectionProbeDirection(vec3 worldPos, vec3 reflectionDir)
+            {
+                if (uSecondaryReflectionProbeBoxProjection == 0) return reflectionDir;
+                vec3 halfSize = max(uSecondaryReflectionProbeHalfSize, vec3(0.001));
+                vec3 safeDir = mix(vec3(-0.0001), vec3(0.0001), greaterThanEqual(reflectionDir, vec3(0.0)));
+                safeDir = mix(safeDir, reflectionDir, greaterThanEqual(abs(reflectionDir), vec3(0.0001)));
+                vec3 toMax = (uSecondaryReflectionProbeCenter + halfSize - worldPos) / safeDir;
+                vec3 toMin = (uSecondaryReflectionProbeCenter - halfSize - worldPos) / safeDir;
+                float distanceToBox = min(max(toMax, toMin).x, min(max(toMax, toMin).y, max(toMax, toMin).z));
+                return distanceToBox <= 0.0 ? reflectionDir :
+                    normalize(worldPos + reflectionDir * distanceToBox - uSecondaryReflectionProbeCenter);
+            }
+
             float PcfShadowArray(sampler2DArray shadowMap, vec2 uv, int layer, float currentDepth, float bias, int radius)
             {
                 vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0).xy);
@@ -1140,18 +1431,75 @@ internal sealed partial class SceneViewportRenderer
                         break;
                     }
                 }
-                vec4 lightPos = vec4(worldPos, 1.0) * uCascadeLightMvp[cascade];
+                // Normal Bias (estilo Unity): desplaza la posición muestreada a lo largo de la normal
+                // → reduce el "shadow acne" en superficies inclinadas. Escala con la distancia/cascada.
+                float nbScale = uShadowNormalBias * (0.02 + 0.03 * float(cascade));
+                vec3 biasedPos = worldPos + N * nbScale;
+                vec4 lightPos = vec4(biasedPos, 1.0) * uCascadeLightMvp[cascade];
                 vec3 proj = lightPos.xyz / max(lightPos.w, 0.0001);
                 proj = proj * 0.5 + 0.5;
                 if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0)
                     return 1.0;
                 float bias = max(0.0035 * (1.0 - dot(N, normalize(-lightDir))), 0.0012) * uShadowBiasScale;
+                // PCF limitado para interiores. Un filtro PCSS de radio grande produjo halos
+                // luminosos alrededor de las ventanas y sombras inestables al cambiar el sol.
                 float shadow = uShadowPcfRadius > 0
                     ? PcfShadowArray(uShadowMap, proj.xy, cascade, proj.z, bias, min(uShadowPcfRadius, 2))
                     : ((proj.z - bias > texture(uShadowMap, vec3(proj.xy, float(cascade))).r) ? 1.0 : 0.0);
                 shadow *= ShadowEdgeFade(proj.xy);
                 float visualStrength = clamp(uShadowStrength + clamp(uSkyStrength, 0.0, 1.0) * 0.18, 0.0, 0.95);
                 return mix(1.0, 1.0 - shadow, visualStrength);
+            }
+
+            // Los mapas se construyen para el primer Spot/Point con Shadows. Aplicarlos
+            // también en Deferred elimina la luz que atravesaba paredes en interiores.
+            float SpotShadowFactor(int lightIndex, vec3 N, vec3 worldPos, vec3 lightDir)
+            {
+                int slot = uSpotShadowSlot[lightIndex];
+                if (slot < 0 || slot >= MAX_SPOT_LIGHTS || uSpotShadowEnabled[slot] == 0) return 1.0;
+                vec4 lp = vec4(worldPos, 1.0) * uSpotLightMvp[slot];
+                vec3 proj = lp.xyz / max(lp.w, 0.0001);
+                proj = proj * 0.5 + 0.5;
+                if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0)
+                    return 1.0;
+                float bias = max(0.004 * (1.0 - dot(N, normalize(lightDir))), 0.0014) * uShadowBiasScale;
+                float shadow = PcfShadowArray(uSpotShadowMap, proj.xy, slot, proj.z, bias, uShadowPcfRadius);
+                shadow *= ShadowEdgeFade(proj.xy);
+                return mix(1.0, 1.0 - shadow, uSpotShadowStrength[slot]);
+            }
+
+            float PointShadowFactor(vec3 N, vec3 worldPos)
+            {
+                if (uPointShadowEnabled == 0) return 1.0;
+                vec3 toFrag = worldPos - uPointShadowPos;
+                float current = length(toFrag);
+                vec3 dir = normalize(toFrag);
+                float bias = clamp(0.018 * (1.0 - dot(N, -dir)), 0.004, 0.025) * uShadowBiasScale;
+                if (uShadowPcfRadius <= 0)
+                {
+                    float closest = texture(uPointShadowCube, dir).r * uPointShadowFar;
+                    float hard = current - bias > closest ? 1.0 : 0.0;
+                    return mix(1.0, 1.0 - hard, uPointShadowStrength);
+                }
+                vec3 up = abs(dir.y) > 0.95 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+                vec3 right = normalize(cross(up, dir));
+                up = cross(dir, right);
+                // El filtro de cubemap se expresa en texels, no en distancia de mundo.
+                // Esta amplitud da una penumbra suave sin reconstruir el disco de alcance.
+                float diskRadius = uPointShadowTexelSize * (1.50 + 1.50 * float(uShadowPcfRadius));
+                float shadow = 0.0;
+                float taps = 0.0;
+                int kernelRadius = min(uShadowPcfRadius, 2);
+                for (int x = -2; x <= 2; x++)
+                    for (int y = -2; y <= 2; y++)
+                    {
+                        if (abs(x) > kernelRadius || abs(y) > kernelRadius) continue;
+                        vec3 sampleDir = dir + (right * float(x) + up * float(y)) * diskRadius;
+                        float closest = texture(uPointShadowCube, sampleDir).r * uPointShadowFar;
+                        shadow += current - bias > closest ? 1.0 : 0.0;
+                        taps += 1.0;
+                    }
+                return mix(1.0, 1.0 - shadow / max(taps, 1.0), uPointShadowStrength);
             }
 
             vec3 CascadeDebugColor(float viewDistance)
@@ -1188,10 +1536,9 @@ internal sealed partial class SceneViewportRenderer
                 return mix(mix(ok, warn, warning), bad, error);
             }
 
-            vec3 AddDirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, float intensity, vec3 albedo, float roughness, float metallic, float specularHighlights)
+            vec3 AddDirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, float intensity, vec3 albedo, float roughness, float metallic, float specularHighlights, float subsurface)
             {
                 float ndl = max(dot(N, L), 0.0);
-                if (ndl <= 0.0) return vec3(0.0);
                 vec3 H = normalize(L + V);
                 vec3 F0 = mix(vec3(0.04), albedo, metallic);
                 float D = DistributionGGX(N, H, roughness);
@@ -1202,7 +1549,10 @@ internal sealed partial class SceneViewportRenderer
                 vec3 specular = D * visF * F * specularHighlights;
                 vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
                 vec3 diffuse = kD * albedo / PI;
-                return (diffuse + specular) * radiance * intensity * ndl;
+                vec3 surface = (diffuse + specular) * radiance * intensity * ndl;
+                float backLight = pow(max(dot(-N, L), 0.0), 1.35) * pow(max(dot(-L, V), 0.0), 1.5);
+                vec3 transmission = albedo * radiance * intensity * (0.42 * clamp(subsurface, 0.0, 1.0) * backLight);
+                return surface + transmission;
             }
 
             vec3 ReconstructWorld(float depth)
@@ -1210,6 +1560,27 @@ internal sealed partial class SceneViewportRenderer
                 vec4 clip = vec4(vUv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
                 vec4 world = clip * uInvViewProj;
                 return world.xyz / max(world.w, 0.0001);
+            }
+
+            float ShadowmaskFactor(vec4 mask, int channel)
+            {
+                if (channel < 0 || channel > 3) return 1.0;
+                return channel == 0 ? mask.r : channel == 1 ? mask.g : channel == 2 ? mask.b : mask.a;
+            }
+
+            float MixedShadowFactor(vec4 mask, float realtimeShadow, int channel, float viewDistance)
+            {
+                if (uMixedLightingMode != 1 || channel < 0 || channel > 3)
+                    return realtimeShadow;
+
+                float bakedShadow = ShadowmaskFactor(mask, channel);
+                float nearShadow = min(realtimeShadow, bakedShadow);
+                if (uDistanceShadowmask == 0)
+                    return nearShadow;
+
+                float fadeWidth = max(uShadowmaskDistanceFade, 0.01);
+                float distanceFade = smoothstep(uShadowmaskDistance - fadeWidth, uShadowmaskDistance, viewDistance);
+                return mix(nearShadow, bakedShadow, distanceFade);
             }
 
             void main()
@@ -1227,7 +1598,9 @@ internal sealed partial class SceneViewportRenderer
                 float metallic = clamp(mat.x, 0.0, 1.0);
                 float specularHighlights = mat.y >= 0.5 ? 1.0 : 0.0;
                 float environmentReflections = mat.z >= 0.5 ? 1.0 : 0.0;
+                float subsurface = clamp(mat.w, 0.0, 1.0);
                 vec4 emission = texture(uGEmission, vUv);
+                vec4 shadowmask = texture(uGShadowmask, vUv);
                 vec3 worldPos = ReconstructWorld(depth);
                 vec3 V = normalize(uCameraPos - worldPos);
 
@@ -1244,7 +1617,7 @@ internal sealed partial class SceneViewportRenderer
                 vec3 ground = uAmbientColor * uAmbientIntensity * 0.35 * max(-N.y, 0.0);
                 vec3 ambientLight = sky + ground;
                 float viewDistance = length(uCameraPos - worldPos);
-                float sunShadow = ShadowFactor(N, worldPos, uDirDir);
+                float sunShadow = MixedShadowFactor(shadowmask, ShadowFactor(N, worldPos, uDirDir), uDirShadowmaskChannel, viewDistance);
                 vec3 ambient;
                 vec3 debugIblSpecular = vec3(0.0);
                 if (uUseIBL == 1)
@@ -1269,11 +1642,22 @@ internal sealed partial class SceneViewportRenderer
                         else
                             prefiltered = mix(SampleEnv(R), ambientLight, reflectionRoughness);
 
+                        vec3 environmentReflection = prefiltered;
                         float probeInfluence = ReflectionProbeInfluence(worldPos);
-                        if (probeInfluence > 0.001)
+                        float secondaryProbeInfluence = SecondaryReflectionProbeInfluence(worldPos);
+                        if (probeInfluence + secondaryProbeInfluence > 0.001)
                         {
-                            vec3 probeReflection = textureLod(uActiveReflectionProbeMap, R, reflectionRoughness * uActiveReflectionProbeMaxLod).rgb;
-                            prefiltered = mix(prefiltered, probeReflection, probeInfluence);
+                            vec3 primaryReflection = environmentReflection;
+                            if (probeInfluence > 0.001)
+                                primaryReflection = textureLod(uActiveReflectionProbeMap,
+                                    ReflectionProbeDirection(worldPos, R), reflectionRoughness * uActiveReflectionProbeMaxLod).rgb;
+                            vec3 secondaryReflection = environmentReflection;
+                            if (secondaryProbeInfluence > 0.001)
+                                secondaryReflection = textureLod(uSecondaryReflectionProbeMap,
+                                    SecondaryReflectionProbeDirection(worldPos, R), reflectionRoughness * uSecondaryReflectionProbeMaxLod).rgb;
+                            float localWeight = probeInfluence + secondaryProbeInfluence;
+                            vec3 localReflection = (primaryReflection * probeInfluence + secondaryReflection * secondaryProbeInfluence) / max(localWeight, 0.0001);
+                            prefiltered = mix(environmentReflection, localReflection, min(localWeight, 1.0));
                         }
 
                         prefiltered = min(prefiltered, vec3(4.0));
@@ -1287,11 +1671,10 @@ internal sealed partial class SceneViewportRenderer
                 {
                     ambient = base * ambientLight;
                 }
-                ambient *= mix(0.62, 1.0, sunShadow);
                 vec3 hdr = ambient;
                 vec3 directLightingDebug = vec3(0.0);
 
-                directLightingDebug += AddDirectLight(N, V, normalize(-uDirDir), uDirColor, uDirIntensity * sunShadow, base, roughness, metallic, specularHighlights);
+                directLightingDebug += AddDirectLight(N, V, normalize(-uDirDir), uDirColor, uDirIntensity * sunShadow, base, roughness, metallic, specularHighlights, subsurface);
 
                 for (int i = 0; i < MAX_POINT_LIGHTS; i++)
                 {
@@ -1300,7 +1683,9 @@ internal sealed partial class SceneViewportRenderer
                     float dist = length(toLight);
                     if (dist >= uPointRange[i]) continue;
                     float atten = RangeAttenuation(dist, uPointRange[i]);
-                    directLightingDebug += AddDirectLight(N, V, normalize(toLight), uPointColor[i], uPointIntensity[i] * atten, base, roughness, metallic, specularHighlights);
+                    float pointShadow = i == uPointShadowLightIndex ? PointShadowFactor(N, worldPos) : 1.0;
+                    float mixedPointShadow = MixedShadowFactor(shadowmask, pointShadow, uPointShadowmaskChannel[i], viewDistance);
+                    directLightingDebug += AddDirectLight(N, V, normalize(toLight), uPointColor[i], uPointIntensity[i] * atten * mixedPointShadow, base, roughness, metallic, specularHighlights, subsurface);
                 }
 
                 for (int i = 0; i < MAX_SPOT_LIGHTS; i++)
@@ -1315,7 +1700,9 @@ internal sealed partial class SceneViewportRenderer
                     float inner = cos(uSpotAngle[i] * 0.38);
                     float spot = smoothstep(outer, inner, cone);
                     float atten = RangeAttenuation(dist, uSpotRange[i]) * spot;
-                    directLightingDebug += AddDirectLight(N, V, L, uSpotColor[i], uSpotIntensity[i] * atten, base, roughness, metallic, specularHighlights);
+                    float spotShadow = SpotShadowFactor(i, N, worldPos, -uSpotDir[i]);
+                    float mixedSpotShadow = MixedShadowFactor(shadowmask, spotShadow, uSpotShadowmaskChannel[i], viewDistance);
+                    directLightingDebug += AddDirectLight(N, V, L, uSpotColor[i], uSpotIntensity[i] * atten * mixedSpotShadow, base, roughness, metallic, specularHighlights, subsurface);
                 }
 
                 for (int i = 0; i < MAX_AREA_LIGHTS; i++)
@@ -1328,7 +1715,7 @@ internal sealed partial class SceneViewportRenderer
                     float facing = clamp(dot(normalize(-uAreaDir[i]), L), 0.0, 1.0);
                     float sizeBoost = clamp((uAreaSize[i].x + uAreaSize[i].y) * 0.18, 0.25, 1.6);
                     float atten = RangeAttenuation(dist, uAreaRange[i]) * (0.35 + 0.65 * facing) * sizeBoost;
-                    directLightingDebug += AddDirectLight(N, V, L, uAreaColor[i], uAreaIntensity[i] * atten, base, roughness, metallic, specularHighlights);
+                    directLightingDebug += AddDirectLight(N, V, L, uAreaColor[i], uAreaIntensity[i] * atten, base, roughness, metallic, specularHighlights, subsurface);
                 }
 
                 hdr += directLightingDebug;
@@ -1350,14 +1737,22 @@ internal sealed partial class SceneViewportRenderer
                     if (uHasActiveReflectionProbeMap == 1 && probeInfluence > 0.001 && environmentReflections > 0.5)
                     {
                         vec3 R = reflect(-V, N);
-                        vec3 probeReflection = textureLod(uActiveReflectionProbeMap, R, max(roughness, 0.05) * uActiveReflectionProbeMaxLod).rgb;
+                        vec3 probeDir = ReflectionProbeDirection(worldPos, R);
+                        vec3 probeReflection = textureLod(uActiveReflectionProbeMap, probeDir, max(roughness, 0.05) * uActiveReflectionProbeMaxLod).rgb;
                         probeDebug = probeReflection * clamp(uIblSpecularStrength, 0.0, 1.0) * probeInfluence;
                     }
                     outColor = vec4(probeDebug / (probeDebug + vec3(1.0)), 1.0);
                     return;
                 }
 
-                float fogAmount = 1.0 - exp(-viewDistance * max(uFogDensity, 0.0));
+                float heightDensity = 1.0;
+                if (uFogHeightFalloff > 0.0001)
+                {
+                    float startDensity = exp(clamp((uFogHeight - uCameraPos.y) * uFogHeightFalloff, -20.0, 20.0));
+                    float endDensity = exp(clamp((uFogHeight - worldPos.y) * uFogHeightFalloff, -20.0, 20.0));
+                    heightDensity = 0.5 * (startDensity + endDensity);
+                }
+                float fogAmount = 1.0 - exp(-viewDistance * max(uFogDensity, 0.0) * heightDensity);
                 float forwardFog = pow(max(dot(normalize(uCameraPos - worldPos), normalize(-uDirDir)), 0.0), 8.0);
                 vec3 fog = uFogColor * (1.0 + forwardFog * uVolumetricStrength);
                 hdr = mix(hdr, fog, clamp(fogAmount, 0.0, 0.92));

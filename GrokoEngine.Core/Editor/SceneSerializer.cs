@@ -44,13 +44,12 @@ namespace GrokoEngine
 
         public static void Save(string path, IReadOnlyList<GameObject> objects)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             string? assetsRoot = InferAssetsRoot(path);
-            File.WriteAllText(path, Serialize(objects, assetsRoot));
+            AtomicFile.WriteAllText(path, Serialize(objects, assetsRoot));
             EnsureMetaIfInsideAssets(path, assetsRoot);
         }
 
-        public static List<GameObject> Load(string path, PhysicsEngine physicsEngine, ScriptCompiler scriptCompiler)
+        public static List<GameObject> Load(string path, PhysicsEngine physicsEngine, IScriptTypeResolver scriptCompiler)
         {
             var json = File.ReadAllText(path);
             return Deserialize(json, physicsEngine, scriptCompiler, InferAssetsRoot(path));
@@ -74,10 +73,10 @@ namespace GrokoEngine
             finally { _serializeOwnerIndex = null; }
         }
 
-        public static List<GameObject> Deserialize(string json, PhysicsEngine physicsEngine, ScriptCompiler scriptCompiler) =>
+        public static List<GameObject> Deserialize(string json, PhysicsEngine physicsEngine, IScriptTypeResolver scriptCompiler) =>
             Deserialize(json, physicsEngine, scriptCompiler, baseAssetsPath: null);
 
-        private static List<GameObject> Deserialize(string json, PhysicsEngine physicsEngine, ScriptCompiler scriptCompiler, string? baseAssetsPath)
+        private static List<GameObject> Deserialize(string json, PhysicsEngine physicsEngine, IScriptTypeResolver scriptCompiler, string? baseAssetsPath)
         {
             var scene = JsonSerializer.Deserialize<SceneData>(json, JsonOptions) ?? new SceneData();
             scene.Normalize();
@@ -93,7 +92,6 @@ namespace GrokoEngine
 
         public static void SavePrefab(string path, GameObject obj)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             _serializeOwnerIndex = BuildOwnerIndex(new[] { obj });
             try
             {
@@ -102,13 +100,13 @@ namespace GrokoEngine
                     Version = CurrentPrefabVersion,
                     Root = ToData(obj, InferAssetsRoot(path))
                 };
-                File.WriteAllText(path, JsonSerializer.Serialize(prefab, JsonOptions));
+                AtomicFile.WriteAllText(path, JsonSerializer.Serialize(prefab, JsonOptions));
                 EnsureMetaIfInsideAssets(path, InferAssetsRoot(path));
             }
             finally { _serializeOwnerIndex = null; }
         }
 
-        public static GameObject LoadPrefab(string path, PhysicsEngine physicsEngine, ScriptCompiler scriptCompiler)
+        public static GameObject LoadPrefab(string path, PhysicsEngine physicsEngine, IScriptTypeResolver scriptCompiler)
         {
             var json = File.ReadAllText(path);
             var baseAssetsPath = InferAssetsRoot(path);
@@ -136,7 +134,7 @@ namespace GrokoEngine
             finally { _serializeOwnerIndex = null; }
         }
 
-        public static GameObject DeserializeObject(string json, PhysicsEngine physicsEngine, ScriptCompiler scriptCompiler)
+        public static GameObject DeserializeObject(string json, PhysicsEngine physicsEngine, IScriptTypeResolver scriptCompiler)
         {
             var data = JsonSerializer.Deserialize<GameObjectData>(json, JsonOptions)
                 ?? throw new InvalidDataException("Objeto invalido.");
@@ -339,6 +337,12 @@ namespace GrokoEngine
                     data.Fields["B"] = dl.B.ToString(CultureInfo.InvariantCulture);
                     data.Fields["Shadows"] = dl.Shadows.ToString();
                     data.Fields["ShadowStrength"] = dl.ShadowStrength.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["Mode"] = ((int)dl.Mode).ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ShadowmaskChannel"] = dl.ShadowmaskChannel.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ShadowmaskBakedFallback"] = dl.ShadowmaskBakedFallback.ToString();
+                    data.Fields["ShadowBias"] = dl.ShadowBias.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ShadowNormalBias"] = dl.ShadowNormalBias.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ShadowNearPlane"] = dl.ShadowNearPlane.ToString(CultureInfo.InvariantCulture);
                     data.Fields["UseTemperature"] = dl.UseTemperature.ToString();
                     data.Fields["Temperature"] = dl.Temperature.ToString(CultureInfo.InvariantCulture);
                     data.Fields["IndirectMultiplier"] = dl.IndirectMultiplier.ToString(CultureInfo.InvariantCulture);
@@ -353,6 +357,9 @@ namespace GrokoEngine
                     data.Fields["SkyExposure"] = dl.SkyExposure.ToString(CultureInfo.InvariantCulture);
                     return data;
                 case PointLight pl:
+                    data.Fields["Mode"] = ((int)pl.Mode).ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ShadowmaskChannel"] = pl.ShadowmaskChannel.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ShadowmaskBakedFallback"] = pl.ShadowmaskBakedFallback.ToString();
                     data.Fields["Intensity"] = pl.Intensity.ToString(CultureInfo.InvariantCulture);
                     data.Fields["Range"] = pl.Range.ToString(CultureInfo.InvariantCulture);
                     data.Fields["R"] = pl.R.ToString(CultureInfo.InvariantCulture);
@@ -365,6 +372,9 @@ namespace GrokoEngine
                     data.Fields["IesProfilePath"] = SerializeAssetPath(pl.IesProfilePath, baseAssetsPath);
                     return data;
                 case SpotLight sl:
+                    data.Fields["Mode"] = ((int)sl.Mode).ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ShadowmaskChannel"] = sl.ShadowmaskChannel.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ShadowmaskBakedFallback"] = sl.ShadowmaskBakedFallback.ToString();
                     data.Fields["Intensity"] = sl.Intensity.ToString(CultureInfo.InvariantCulture);
                     data.Fields["Range"] = sl.Range.ToString(CultureInfo.InvariantCulture);
                     data.Fields["Angle"] = sl.Angle.ToString(CultureInfo.InvariantCulture);
@@ -412,6 +422,11 @@ namespace GrokoEngine
                     data.Fields["Gamma"] = pp.Gamma.ToString(CultureInfo.InvariantCulture);
                     data.Fields["ToneMapping"] = pp.ToneMapping.ToString();
                     data.Fields["ToneMappingMode"] = pp.ToneMappingMode.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["AutoExposure"] = pp.AutoExposure.ToString();
+                    data.Fields["AutoExposureMinEV"] = pp.AutoExposureMinEV.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["AutoExposureMaxEV"] = pp.AutoExposureMaxEV.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["AutoExposureCompensation"] = pp.AutoExposureCompensation.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["AutoExposureAdaptationSpeed"] = pp.AutoExposureAdaptationSpeed.ToString(CultureInfo.InvariantCulture);
                     data.Fields["WhiteBalanceTemperature"] = pp.WhiteBalanceTemperature.ToString(CultureInfo.InvariantCulture);
                     data.Fields["WhiteBalanceTint"] = pp.WhiteBalanceTint.ToString(CultureInfo.InvariantCulture);
                     data.Fields["FilmGrain"] = pp.FilmGrain.ToString();
@@ -460,7 +475,12 @@ namespace GrokoEngine
                     data.Fields["FogR"] = pp.FogR.ToString(CultureInfo.InvariantCulture);
                     data.Fields["FogG"] = pp.FogG.ToString(CultureInfo.InvariantCulture);
                     data.Fields["FogB"] = pp.FogB.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["FogHeight"] = pp.FogHeight.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["FogHeightFalloff"] = pp.FogHeightFalloff.ToString(CultureInfo.InvariantCulture);
                     data.Fields["VolumetricLightStrength"] = pp.VolumetricLightStrength.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ScreenSpaceGlobalIllumination"] = pp.ScreenSpaceGlobalIllumination.ToString();
+                    data.Fields["ScreenSpaceGiIntensity"] = pp.ScreenSpaceGiIntensity.ToString(CultureInfo.InvariantCulture);
+                    data.Fields["ScreenSpaceGiRadius"] = pp.ScreenSpaceGiRadius.ToString(CultureInfo.InvariantCulture);
                     return data;
                 case Terrain terrain:
                     data.Fields["Resolution"] = terrain.Resolution.ToString(CultureInfo.InvariantCulture);
@@ -621,7 +641,7 @@ namespace GrokoEngine
             }
         }
 
-        private static GameObject FromData(GameObjectData data, GameObject? parent, PhysicsEngine physicsEngine, ScriptCompiler scriptCompiler, string? baseAssetsPath)
+        private static GameObject FromData(GameObjectData data, GameObject? parent, PhysicsEngine physicsEngine, IScriptTypeResolver scriptCompiler, string? baseAssetsPath)
         {
             var obj = new GameObject
             {
@@ -655,7 +675,7 @@ namespace GrokoEngine
             return obj;
         }
 
-        private static void AddComponent(GameObject obj, ComponentData data, PhysicsEngine physicsEngine, ScriptCompiler scriptCompiler, string? baseAssetsPath)
+        private static void AddComponent(GameObject obj, ComponentData data, PhysicsEngine physicsEngine, IScriptTypeResolver scriptCompiler, string? baseAssetsPath)
         {
             string componentName = GetShortTypeName(data.TypeName);
             Component? comp = componentName switch
@@ -717,7 +737,7 @@ namespace GrokoEngine
             ApplyFields(comp, data.Fields, physicsEngine, scriptCompiler, baseAssetsPath);
         }
 
-        private static Component? CreateScriptComponent(GameObject obj, string typeName, PhysicsEngine physicsEngine, ScriptCompiler scriptCompiler)
+        private static Component? CreateScriptComponent(GameObject obj, string typeName, PhysicsEngine physicsEngine, IScriptTypeResolver scriptCompiler)
         {
             var type = scriptCompiler.FindTypeByName(typeName);
             if (type == null || !type.IsSubclassOf(typeof(MonoBehaviour))) return null;
@@ -737,7 +757,7 @@ namespace GrokoEngine
             return lastDot >= 0 ? typeName[(lastDot + 1)..] : typeName;
         }
 
-        private static void ApplyFields(Component comp, Dictionary<string, string> fields, PhysicsEngine physicsEngine, ScriptCompiler scriptCompiler, string? baseAssetsPath)
+        private static void ApplyFields(Component comp, Dictionary<string, string> fields, PhysicsEngine physicsEngine, IScriptTypeResolver scriptCompiler, string? baseAssetsPath)
         {
             if (comp is Terrain terrain)
             {
@@ -1003,6 +1023,66 @@ namespace GrokoEngine
                     GetFloat(fields, "DirectionX", dl.Direction.X),
                     GetFloat(fields, "DirectionY", dl.Direction.Y),
                     GetFloat(fields, "DirectionZ", dl.Direction.Z));
+                dl.Intensity = GetFloat(fields, "Intensity", dl.Intensity);
+                dl.R = GetFloat(fields, "R", dl.R);
+                dl.G = GetFloat(fields, "G", dl.G);
+                dl.B = GetFloat(fields, "B", dl.B);
+                dl.Shadows = GetBool(fields, "Shadows", dl.Shadows);
+                dl.ShadowStrength = GetFloat(fields, "ShadowStrength", dl.ShadowStrength);
+                dl.Mode = (LightMode)GetInt(fields, "Mode", (int)dl.Mode);
+                dl.ShadowmaskChannel = GetInt(fields, "ShadowmaskChannel", dl.ShadowmaskChannel);
+                dl.ShadowmaskBakedFallback = GetBool(fields, "ShadowmaskBakedFallback", dl.ShadowmaskBakedFallback);
+                dl.ShadowBias = GetFloat(fields, "ShadowBias", dl.ShadowBias);
+                dl.ShadowNormalBias = GetFloat(fields, "ShadowNormalBias", dl.ShadowNormalBias);
+                dl.ShadowNearPlane = GetFloat(fields, "ShadowNearPlane", dl.ShadowNearPlane);
+                dl.UseTemperature = GetBool(fields, "UseTemperature", dl.UseTemperature);
+                dl.Temperature = GetFloat(fields, "Temperature", dl.Temperature);
+                dl.IndirectMultiplier = GetFloat(fields, "IndirectMultiplier", dl.IndirectMultiplier);
+                dl.ShowSunDisk = GetBool(fields, "ShowSunDisk", dl.ShowSunDisk);
+                dl.AngularDiameter = GetFloat(fields, "AngularDiameter", dl.AngularDiameter);
+                dl.GodRays = GetBool(fields, "GodRays", dl.GodRays);
+                dl.GodRaysStrength = GetFloat(fields, "GodRaysStrength", dl.GodRaysStrength);
+                dl.ContactShadows = GetBool(fields, "ContactShadows", dl.ContactShadows);
+                dl.ContactShadowLength = GetFloat(fields, "ContactShadowLength", dl.ContactShadowLength);
+                dl.ContactShadowSamples = GetInt(fields, "ContactShadowSamples", dl.ContactShadowSamples);
+                dl.Turbidity = GetFloat(fields, "Turbidity", dl.Turbidity);
+                dl.SkyExposure = GetFloat(fields, "SkyExposure", dl.SkyExposure);
+            }
+
+            if (comp is PointLight pl)
+            {
+                pl.Mode = (LightMode)GetInt(fields, "Mode", (int)pl.Mode);
+                pl.ShadowmaskChannel = GetInt(fields, "ShadowmaskChannel", pl.ShadowmaskChannel);
+                pl.ShadowmaskBakedFallback = GetBool(fields, "ShadowmaskBakedFallback", pl.ShadowmaskBakedFallback);
+                pl.Intensity = GetFloat(fields, "Intensity", pl.Intensity);
+                pl.Range = GetFloat(fields, "Range", pl.Range);
+                pl.R = GetFloat(fields, "R", pl.R);
+                pl.G = GetFloat(fields, "G", pl.G);
+                pl.B = GetFloat(fields, "B", pl.B);
+                pl.Shadows = GetBool(fields, "Shadows", pl.Shadows);
+                pl.ShadowStrength = GetFloat(fields, "ShadowStrength", pl.ShadowStrength);
+                pl.UseTemperature = GetBool(fields, "UseTemperature", pl.UseTemperature);
+                pl.Temperature = GetFloat(fields, "Temperature", pl.Temperature);
+                pl.IesProfilePath = ResolveAssetPath(fields.TryGetValue("IesProfilePath", out var iesPath) ? iesPath : pl.IesProfilePath, baseAssetsPath) ?? "";
+            }
+
+            if (comp is SpotLight sl)
+            {
+                sl.Mode = (LightMode)GetInt(fields, "Mode", (int)sl.Mode);
+                sl.ShadowmaskChannel = GetInt(fields, "ShadowmaskChannel", sl.ShadowmaskChannel);
+                sl.ShadowmaskBakedFallback = GetBool(fields, "ShadowmaskBakedFallback", sl.ShadowmaskBakedFallback);
+                sl.Intensity = GetFloat(fields, "Intensity", sl.Intensity);
+                sl.Range = GetFloat(fields, "Range", sl.Range);
+                sl.Angle = GetFloat(fields, "Angle", sl.Angle);
+                sl.R = GetFloat(fields, "R", sl.R);
+                sl.G = GetFloat(fields, "G", sl.G);
+                sl.B = GetFloat(fields, "B", sl.B);
+                sl.Shadows = GetBool(fields, "Shadows", sl.Shadows);
+                sl.ShadowStrength = GetFloat(fields, "ShadowStrength", sl.ShadowStrength);
+                sl.UseTemperature = GetBool(fields, "UseTemperature", sl.UseTemperature);
+                sl.Temperature = GetFloat(fields, "Temperature", sl.Temperature);
+                sl.CookiePath = ResolveAssetPath(fields.TryGetValue("CookiePath", out var cookiePath) ? cookiePath : sl.CookiePath, baseAssetsPath) ?? "";
+                sl.IesProfilePath = ResolveAssetPath(fields.TryGetValue("IesProfilePath", out var iesPath) ? iesPath : sl.IesProfilePath, baseAssetsPath) ?? "";
             }
 
             if (comp is Material shaderGraphMaterial && fields.TryGetValue("ShaderGraphProperties", out var sgPropsRaw))
@@ -1228,10 +1308,10 @@ namespace GrokoEngine
             => data.Fields[key] = value.ToString(CultureInfo.InvariantCulture);
 
         internal static string SerializeAssetPath(string? path, string? baseAssetsPath)
-            => AssetDatabase.SerializeReference(path, baseAssetsPath);
+            => AssetReferences.Serialize(path, baseAssetsPath);
 
         internal static string? ResolveAssetPath(string? path, string? baseAssetsPath)
-            => AssetDatabase.ResolveReference(path, baseAssetsPath);
+            => AssetReferences.Resolve(path, baseAssetsPath);
 
         internal static string? InferAssetsRoot(string filePath)
         {
@@ -1257,7 +1337,7 @@ namespace GrokoEngine
             if (string.IsNullOrWhiteSpace(assetsRoot) || !File.Exists(path))
                 return;
 
-            AssetDatabase.Get(assetsRoot).GetOrCreateGuid(path);
+            AssetReferences.GetOrCreateGuid(path);
         }
 
         private static float GetFloat(Dictionary<string, string> fields, string name, float fallback)

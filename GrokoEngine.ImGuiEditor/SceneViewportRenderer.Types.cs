@@ -92,6 +92,7 @@ internal readonly record struct SceneRenderStats(
     int HierarchyLodGpuParts,
     RendererRenderingPath RenderingPath,
     bool DeferredGBufferActive,
+    bool DeferredSsgiActive,
     int RenderWidth,
     int RenderHeight,
     float BuildSceneMs,
@@ -110,6 +111,11 @@ internal readonly record struct SceneRenderStats(
     float DirectionalShadowMs,
     float SpotShadowMs,
     float PointShadowMs,
+    float DeferredGBufferMs,
+    float DeferredLightingMs,
+    float DeferredDepthCopyMs,
+    float DeferredSsgiMs,
+    float DeferredSsrMs,
     float RenderOtherMs)
 {
     public static readonly SceneRenderStats Empty = default;
@@ -127,13 +133,19 @@ internal sealed partial class SceneViewportRenderer
         public readonly Vector2 Uv;
         public readonly Vector4 Material;
         public readonly Vector4 Emission;
+        public readonly Vector2 LightmapUv;
 
         public SolidVertex(Vector3 position, Vector3 normal, Vector4 color, Vector2 uv)
-            : this(position, normal, color, uv, new Vector4(0f, 0.5f, 1f, 1f), Vector4.Zero)
+            : this(position, normal, color, uv, new Vector4(0f, 0.5f, 3f, 0f), Vector4.Zero)
         {
         }
 
         public SolidVertex(Vector3 position, Vector3 normal, Vector4 color, Vector2 uv, Vector4 material, Vector4 emission)
+            : this(position, normal, color, uv, material, emission, uv)
+        {
+        }
+
+        public SolidVertex(Vector3 position, Vector3 normal, Vector4 color, Vector2 uv, Vector4 material, Vector4 emission, Vector2 lightmapUv)
         {
             Position = position;
             Normal = normal;
@@ -141,6 +153,7 @@ internal sealed partial class SceneViewportRenderer
             Uv = uv;
             Material = material;
             Emission = emission;
+            LightmapUv = lightmapUv;
         }
     }
 
@@ -155,7 +168,11 @@ internal sealed partial class SceneViewportRenderer
         IReadOnlyDictionary<string, float[]>? ShaderGraphProperties = null,
         IReadOnlyDictionary<string, string>? ShaderGraphTextures = null,
         bool AlphaClip = false,
-        float AlphaClipThreshold = 0.5f);
+        float AlphaClipThreshold = 0.5f,
+        string? LightmapPath = null,
+        string? ShadowmaskPath = null,
+        float LightmapIntensity = 1f,
+        Vector4 LightmapScaleOffset = default);
 
     private readonly record struct DynamicMeshDraw(
         CachedGpuMesh Mesh,
@@ -208,7 +225,8 @@ internal sealed partial class SceneViewportRenderer
         int TextureId,
         float MaxLod,
         DateTime CubemapWriteTime,
-        DateTime FaceWriteTime);
+        DateTime FaceWriteTime,
+        int LastValidationFrame);
 
     private readonly record struct SurfaceTransparency(
         MaterialSurfaceType SurfaceType,
@@ -237,6 +255,7 @@ internal sealed partial class SceneViewportRenderer
         public readonly Vector2 Uv;
         public readonly Vector4 Material;
         public readonly Vector4 Emission;
+        public readonly Vector2 LightmapUv;
         public readonly Vector4 BoneIndices;
         public readonly Vector4 BoneWeights;
 
@@ -248,6 +267,7 @@ internal sealed partial class SceneViewportRenderer
             Uv = uv;
             Material = material;
             Emission = emission;
+            LightmapUv = uv;
             BoneIndices = boneIndices;
             BoneWeights = boneWeights;
         }

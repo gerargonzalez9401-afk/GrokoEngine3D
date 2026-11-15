@@ -60,6 +60,8 @@ namespace GrokoEngine
             ObjLoader.InvalidateCache(meshPath);
             mesh = ObjLoader.Load(meshPath);
             if (mesh == null) return false;
+            foreach (string warning in mesh.ImportWarnings)
+                Debug.LogWarning($"[AssetService] {Path.GetFileName(meshPath)}: {warning}");
             var filter = obj.GetComponent<MeshFilter>() ?? obj.AddComponent<MeshFilter>();
             filter.MeshPath = meshPath;
             return true;

@@ -8,6 +8,7 @@ internal sealed partial class SceneViewportRenderer
 {
     private void BuildCube(GameObject obj, bool selected, Matrix4 transform)
     {
+        SetActiveLightmap(obj.GetComponent<MeshRenderer>());
         Vector4 color = GetObjectColor(obj, new Vector4(0.72f, 0.76f, 0.82f, 1f));
         Vector4 lineColor = selected ? new Vector4(1f, 0.78f, 0.12f, 1f) : color;
         string? texturePath = GetObjectTexturePath(obj);
@@ -49,6 +50,7 @@ internal sealed partial class SceneViewportRenderer
 
     private void BuildPlane(GameObject obj, bool selected, Matrix4 transform)
     {
+        SetActiveLightmap(obj.GetComponent<MeshRenderer>());
         Vector4 color = GetObjectColor(obj, new Vector4(0.58f, 0.72f, 0.64f, 1f));
         Vector4 lineColor = selected ? new Vector4(1f, 0.78f, 0.12f, 1f) : color;
         string? texturePath = GetObjectTexturePath(obj);
@@ -75,6 +77,7 @@ internal sealed partial class SceneViewportRenderer
 
     private void BuildPrimitive(GameObject obj, bool selected, Matrix4 transform)
     {
+        SetActiveLightmap(obj.GetComponent<MeshRenderer>());
         Vector4 color = GetObjectColor(obj, obj.Type switch
         {
             3 => new Vector4(0.62f, 0.72f, 0.95f, 1f),

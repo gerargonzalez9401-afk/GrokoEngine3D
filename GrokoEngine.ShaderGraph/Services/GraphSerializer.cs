@@ -24,7 +24,7 @@ public static class GraphSerializer
         ShaderGraphDynamicTypes.Synchronize(graph);
         graph.ModifiedUtc = DateTime.UtcNow;
         var json = JsonSerializer.Serialize(graph, Options);
-        File.WriteAllText(path, json, Encoding.UTF8);
+        AtomicFileWriter.WriteAllText(path, json, Encoding.UTF8);
     }
 
     public static ShaderGraphModel Load(string path)
@@ -47,7 +47,11 @@ public static class GraphSerializer
         ShaderGraphDynamicTypes.Synchronize(graph);
         graph.ModifiedUtc = DateTime.UtcNow;
         var json = JsonSerializer.Serialize(graph, Options);
-        await File.WriteAllTextAsync(path, json, Encoding.UTF8, ct).ConfigureAwait(false);
+        await Task.Run(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            AtomicFileWriter.WriteAllText(path, json, Encoding.UTF8);
+        }, ct).ConfigureAwait(false);
     }
 
     public static async Task<ShaderGraphModel> LoadAsync(string path, CancellationToken ct = default)

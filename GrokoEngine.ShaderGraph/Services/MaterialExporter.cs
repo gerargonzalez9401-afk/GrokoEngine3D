@@ -40,18 +40,18 @@ public static class MaterialExporter
         var safeName = MakeSafeName(graph.Name);
         var paths = BuildPaths(folderPath, safeName);
 
-        File.WriteAllText(paths.VertexGlsl, vertexGlsl ?? DefaultVertexShader(), Encoding.UTF8);
-        File.WriteAllText(paths.FragmentGlsl, glsl, Encoding.UTF8);
-        File.WriteAllText(paths.PixelHlsl, hlsl, Encoding.UTF8);
-        File.WriteAllText(paths.VertexHlsl, vertexHlsl ?? DefaultVertexHlsl(), Encoding.UTF8);
+        AtomicFileWriter.WriteAllText(paths.VertexGlsl, vertexGlsl ?? DefaultVertexShader(), Encoding.UTF8);
+        AtomicFileWriter.WriteAllText(paths.FragmentGlsl, glsl, Encoding.UTF8);
+        AtomicFileWriter.WriteAllText(paths.PixelHlsl, hlsl, Encoding.UTF8);
+        AtomicFileWriter.WriteAllText(paths.VertexHlsl, vertexHlsl ?? DefaultVertexHlsl(), Encoding.UTF8);
 
         GraphSerializer.Save(paths.Graph, graph);
         if (preview is not null)
             SavePreviewPng(paths.Preview, preview);
 
-        File.WriteAllText(paths.Material, JsonSerializer.Serialize(BuildManifest(graph, paths, preview is not null), JsonOpts), Encoding.UTF8);
-        File.WriteAllText(paths.Dependencies, JsonSerializer.Serialize(BuildDependencies(graph, paths), JsonOpts), Encoding.UTF8);
-        File.WriteAllText(paths.Readme, BuildReadme(graph, paths), Encoding.UTF8);
+        AtomicFileWriter.WriteAllText(paths.Material, JsonSerializer.Serialize(BuildManifest(graph, paths, preview is not null), JsonOpts), Encoding.UTF8);
+        AtomicFileWriter.WriteAllText(paths.Dependencies, JsonSerializer.Serialize(BuildDependencies(graph, paths), JsonOpts), Encoding.UTF8);
+        AtomicFileWriter.WriteAllText(paths.Readme, BuildReadme(graph, paths), Encoding.UTF8);
     }
 
     public static void Export(string folderPath, ShaderGraphModel graph, string glsl)

@@ -12,6 +12,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrokoEngine.ShaderGraph", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrokoEngine.Tests", "GrokoEngine.Tests\GrokoEngine.Tests.csproj", "{0E4D0CB1-7667-44B8-92C3-0C5B0864028F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrokoEngine.Scripting", "GrokoEngine.Scripting\GrokoEngine.Scripting.csproj", "{5341C2E8-2B3C-4D40-8B5D-4E7A11DE8E7D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrokoEngine.Assets", "GrokoEngine.Assets\GrokoEngine.Assets.csproj", "{A2F97D8E-497C-47AB-9F6F-E3DF244EB642}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -38,6 +42,14 @@ Global
 		{0E4D0CB1-7667-44B8-92C3-0C5B0864028F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0E4D0CB1-7667-44B8-92C3-0C5B0864028F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0E4D0CB1-7667-44B8-92C3-0C5B0864028F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5341C2E8-2B3C-4D40-8B5D-4E7A11DE8E7D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5341C2E8-2B3C-4D40-8B5D-4E7A11DE8E7D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5341C2E8-2B3C-4D40-8B5D-4E7A11DE8E7D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5341C2E8-2B3C-4D40-8B5D-4E7A11DE8E7D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A2F97D8E-497C-47AB-9F6F-E3DF244EB642}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A2F97D8E-497C-47AB-9F6F-E3DF244EB642}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A2F97D8E-497C-47AB-9F6F-E3DF244EB642}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A2F97D8E-497C-47AB-9F6F-E3DF244EB642}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

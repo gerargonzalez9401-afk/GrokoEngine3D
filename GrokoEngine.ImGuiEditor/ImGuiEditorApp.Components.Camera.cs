@@ -39,12 +39,9 @@ internal sealed partial class ImGuiEditorApp
             DrawCameraRenderingPathCombo(cam);
             DrawCameraDebugViewCombo();
             DrawCheckRow("Post Processing", cam.PostProcessing, v => cam.PostProcessing = v);
-            DrawEnumCombo("Anti-aliasing", cam.AntiAliasingMode, v =>
-            {
-                cam.AntiAliasingMode = v;
-                cam.AntiAliasing = v != CameraAntiAliasingMode.None;
-            });
-            using (new DisabledScope(cam.AntiAliasingMode == CameraAntiAliasingMode.None))
+            DrawCameraAntiAliasingCombo(cam);
+            bool deferredCamera = ResolveRendererRenderingPath(cam) == RendererRenderingPath.Deferred;
+            using (new DisabledScope(cam.AntiAliasingMode == CameraAntiAliasingMode.None || deferredCamera))
             {
                 int samples = cam.AntiAliasingSamples;
                 FieldRow("Samples");
@@ -61,6 +58,8 @@ internal sealed partial class ImGuiEditorApp
                     ImGui.EndCombo();
                 }
             }
+            if (deferredCamera)
+                ImGui.TextDisabled("Deferred usa SMAA de postproceso; MSAA solo funciona en Forward/Forward+.");
             DrawCheckRow("Stop NaNs", cam.StopNaNs, v => cam.StopNaNs = v);
             DrawCheckRow("Dithering", cam.Dithering, v => cam.Dithering = v);
             DrawCheckRow("Render Shadows", cam.RenderShadows, v => cam.RenderShadows = v);
@@ -108,7 +107,7 @@ internal sealed partial class ImGuiEditorApp
             DrawCameraRenderingPathOption(cam, CameraRenderingPath.UseProjectSettings, "Use Project Settings", "Usa el modo global de Project Settings > Render.");
             DrawCameraRenderingPathOption(cam, CameraRenderingPath.Forward, "Forward", "Ruta estable y rapida para escenas pequenas/medianas.");
             DrawCameraRenderingPathOption(cam, CameraRenderingPath.ForwardPlus, "Forward+", "Recomendado para muchas luces. Preparado para clustered lighting.");
-            DrawCameraRenderingPathOption(cam, CameraRenderingPath.Deferred, "Deferred", "G-buffer para opacos + lighting fullscreen. Transparencias siguen en Forward.");
+            DrawCameraRenderingPathOption(cam, CameraRenderingPath.Deferred, "Deferred", "G-buffer para opacos + lighting fullscreen. Usa SMAA; MSAA se reserva para Forward/Forward+.");
             ImGui.EndCombo();
         }
 
@@ -116,7 +115,7 @@ internal sealed partial class ImGuiEditorApp
         {
             CameraRenderingPath.Forward => "Forward: camino clasico, simple y estable.",
             CameraRenderingPath.ForwardPlus => "Forward+: modo moderno para escalar mejor con muchas luces.",
-            CameraRenderingPath.Deferred => "Deferred: opacos en G-buffer; transparencias, Shader Graph y particulas se dibujan encima.",
+            CameraRenderingPath.Deferred => "Deferred: opacos en G-buffer; usa SMAA. MSAA esta disponible en Forward/Forward+.",
             _ => "Usa el Rendering Path global del proyecto."
         };
         ImGui.TextDisabled(help);
@@ -126,11 +125,45 @@ internal sealed partial class ImGuiEditorApp
     {
         bool selected = cam.RenderingPath == value;
         if (ImGui.Selectable(label, selected))
+        {
             cam.RenderingPath = value;
+            if (value == CameraRenderingPath.Deferred)
+            {
+                cam.AntiAliasing = true;
+                cam.AntiAliasingMode = CameraAntiAliasingMode.SMAA;
+            }
+        }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(tooltip);
         if (selected)
             ImGui.SetItemDefaultFocus();
+    }
+
+    private static void DrawCameraAntiAliasingCombo(Camera cam)
+    {
+        // TAA queda fuera hasta que el renderer exponga motion vectors e historial por
+        // cámara. Mostrarlo antes solo daría una opción que no puede ser correcta.
+        CameraAntiAliasingMode[] options =
+            [CameraAntiAliasingMode.None, CameraAntiAliasingMode.FXAA, CameraAntiAliasingMode.SMAA];
+        if (!options.Contains(cam.AntiAliasingMode))
+            cam.AntiAliasingMode = CameraAntiAliasingMode.SMAA;
+
+        FieldRow("Anti-aliasing");
+        ImGui.SetNextItemWidth(-1f);
+        if (ImGui.BeginCombo("##camera_antialiasing", cam.AntiAliasingMode.ToString()))
+        {
+            foreach (CameraAntiAliasingMode option in options)
+            {
+                bool selectedOption = cam.AntiAliasingMode == option;
+                if (ImGui.Selectable(option.ToString(), selectedOption))
+                {
+                    cam.AntiAliasingMode = option;
+                    cam.AntiAliasing = option != CameraAntiAliasingMode.None;
+                }
+                if (selectedOption) ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
     }
 
     private void DrawCameraDebugViewCombo()

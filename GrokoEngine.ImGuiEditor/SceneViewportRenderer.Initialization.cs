@@ -47,6 +47,17 @@ internal sealed partial class SceneViewportRenderer
         solidHasRoughnessMapLocation = GL.GetUniformLocation(solidShader, "uHasRoughnessMap");
         solidMetallicMapLocation = GL.GetUniformLocation(solidShader, "uMetallicMap");
         solidHasMetallicMapLocation = GL.GetUniformLocation(solidShader, "uHasMetallicMap");
+        solidLightmapLocation = GL.GetUniformLocation(solidShader, "uLightmap");
+        solidHasLightmapLocation = GL.GetUniformLocation(solidShader, "uHasLightmap");
+        solidLightmapIntensityLocation = GL.GetUniformLocation(solidShader, "uLightmapIntensity");
+        solidLightmapScaleOffsetLocation = GL.GetUniformLocation(solidShader, "uLightmapScaleOffset");
+        solidShadowmaskLocation = GL.GetUniformLocation(solidShader, "uShadowmask");
+        solidHasShadowmaskLocation = GL.GetUniformLocation(solidShader, "uHasShadowmask");
+        solidDirShadowmaskChannelLocation = GL.GetUniformLocation(solidShader, "uDirShadowmaskChannel");
+        solidMixedLightingModeLocation = GL.GetUniformLocation(solidShader, "uMixedLightingMode");
+        solidDistanceShadowmaskLocation = GL.GetUniformLocation(solidShader, "uDistanceShadowmask");
+        solidShadowmaskDistanceLocation = GL.GetUniformLocation(solidShader, "uShadowmaskDistance");
+        solidShadowmaskDistanceFadeLocation = GL.GetUniformLocation(solidShader, "uShadowmaskDistanceFade");
         solidRefractivePassLocation = GL.GetUniformLocation(solidShader, "uRefractivePass");
         solidOpaqueTextureLocation = GL.GetUniformLocation(solidShader, "uOpaqueTexture");
         solidScreenTexelLocation = GL.GetUniformLocation(solidShader, "uScreenTexel");
@@ -67,15 +78,21 @@ internal sealed partial class SceneViewportRenderer
         solidShadowStrengthLocation = GL.GetUniformLocation(solidShader, "uShadowStrength");
         solidShadowPcfRadiusLocation = GL.GetUniformLocation(solidShader, "uShadowPcfRadius");
         solidSpotShadowMapLocation = GL.GetUniformLocation(solidShader, "uSpotShadowMap");
-        solidSpotLightMvpLocation = GL.GetUniformLocation(solidShader, "uSpotLightMvp");
-        solidSpotShadowEnabledLocation = GL.GetUniformLocation(solidShader, "uSpotShadowEnabled");
-        solidSpotShadowStrengthLocation = GL.GetUniformLocation(solidShader, "uSpotShadowStrength");
+        for (int i = 0; i < MaxSpotLights; i++)
+        {
+            solidSpotLightMvpLocations[i] = GL.GetUniformLocation(solidShader, $"uSpotLightMvp[{i}]");
+            solidSpotShadowEnabledLocations[i] = GL.GetUniformLocation(solidShader, $"uSpotShadowEnabled[{i}]");
+            solidSpotShadowStrengthLocations[i] = GL.GetUniformLocation(solidShader, $"uSpotShadowStrength[{i}]");
+        }
         solidPointShadowCubeLocation = GL.GetUniformLocation(solidShader, "uPointShadowCube");
         solidPointShadowEnabledLocation = GL.GetUniformLocation(solidShader, "uPointShadowEnabled");
         solidPointShadowStrengthLocation = GL.GetUniformLocation(solidShader, "uPointShadowStrength");
         solidPointShadowPosLocation = GL.GetUniformLocation(solidShader, "uPointShadowPos");
         solidPointShadowFarLocation = GL.GetUniformLocation(solidShader, "uPointShadowFar");
+        solidPointShadowTexelSizeLocation = GL.GetUniformLocation(solidShader, "uPointShadowTexelSize");
+        solidPointShadowLightIndexLocation = GL.GetUniformLocation(solidShader, "uPointShadowLightIndex");
         solidShadowBiasScaleLocation = GL.GetUniformLocation(solidShader, "uShadowBiasScale");
+        solidShadowNormalBiasLocation = GL.GetUniformLocation(solidShader, "uShadowNormalBias");
         for (int i = 0; i < MaxGpuBones; i++)
             solidBoneMatrixLocations[i] = GL.GetUniformLocation(solidShader, $"uBones[{i}]");
         uAmbientColor = GL.GetUniformLocation(solidShader, "uAmbientColor");
@@ -92,6 +109,7 @@ internal sealed partial class SceneViewportRenderer
             uPointColor[i] = GL.GetUniformLocation(solidShader, $"uPointColor[{i}]");
             uPointIntensity[i] = GL.GetUniformLocation(solidShader, $"uPointIntensity[{i}]");
             uPointRange[i] = GL.GetUniformLocation(solidShader, $"uPointRange[{i}]");
+            solidPointShadowmaskChannelLocations[i] = GL.GetUniformLocation(solidShader, $"uPointShadowmaskChannel[{i}]");
         }
         uSpotCount = GL.GetUniformLocation(solidShader, "uSpotCount");
         for (int i = 0; i < MaxSpotLights; i++)
@@ -102,6 +120,8 @@ internal sealed partial class SceneViewportRenderer
             uSpotIntensity[i] = GL.GetUniformLocation(solidShader, $"uSpotIntensity[{i}]");
             uSpotRange[i] = GL.GetUniformLocation(solidShader, $"uSpotRange[{i}]");
             uSpotAngle[i] = GL.GetUniformLocation(solidShader, $"uSpotAngle[{i}]");
+            uSpotShadowSlotLocations[i] = GL.GetUniformLocation(solidShader, $"uSpotShadowSlot[{i}]");
+            solidSpotShadowmaskChannelLocations[i] = GL.GetUniformLocation(solidShader, $"uSpotShadowmaskChannel[{i}]");
         }
         uSpotCookieLocation = GL.GetUniformLocation(solidShader, "uSpotCookieArray");
         uSpotIesLutLocation = GL.GetUniformLocation(solidShader, "uSpotIesArray");
@@ -143,6 +163,15 @@ internal sealed partial class SceneViewportRenderer
         uActiveReflectionProbeHalfSize = GL.GetUniformLocation(solidShader, "uActiveReflectionProbeHalfSize");
         uActiveReflectionProbeBlendDistance = GL.GetUniformLocation(solidShader, "uActiveReflectionProbeBlendDistance");
         uActiveReflectionProbeIntensity = GL.GetUniformLocation(solidShader, "uActiveReflectionProbeIntensity");
+        uActiveReflectionProbeBoxProjection = GL.GetUniformLocation(solidShader, "uActiveReflectionProbeBoxProjection");
+        uSecondaryReflectionProbeMap = GL.GetUniformLocation(solidShader, "uSecondaryReflectionProbeMap");
+        uHasSecondaryReflectionProbeMap = GL.GetUniformLocation(solidShader, "uHasSecondaryReflectionProbeMap");
+        uSecondaryReflectionProbeMaxLod = GL.GetUniformLocation(solidShader, "uSecondaryReflectionProbeMaxLod");
+        uSecondaryReflectionProbeCenter = GL.GetUniformLocation(solidShader, "uSecondaryReflectionProbeCenter");
+        uSecondaryReflectionProbeHalfSize = GL.GetUniformLocation(solidShader, "uSecondaryReflectionProbeHalfSize");
+        uSecondaryReflectionProbeBlendDistance = GL.GetUniformLocation(solidShader, "uSecondaryReflectionProbeBlendDistance");
+        uSecondaryReflectionProbeIntensity = GL.GetUniformLocation(solidShader, "uSecondaryReflectionProbeIntensity");
+        uSecondaryReflectionProbeBoxProjection = GL.GetUniformLocation(solidShader, "uSecondaryReflectionProbeBoxProjection");
         uBrdfLut = GL.GetUniformLocation(solidShader, "uBrdfLut");
         uHasBrdfLut = GL.GetUniformLocation(solidShader, "uHasBrdfLut");
         uIblDiffuseStrength = GL.GetUniformLocation(solidShader, "uIblDiffuseStrength");
@@ -150,6 +179,8 @@ internal sealed partial class SceneViewportRenderer
         uAoStrength = GL.GetUniformLocation(solidShader, "uAoStrength");
         uFogDensity = GL.GetUniformLocation(solidShader, "uFogDensity");
         uFogColor = GL.GetUniformLocation(solidShader, "uFogColor");
+        uFogHeight = GL.GetUniformLocation(solidShader, "uFogHeight");
+        uFogHeightFalloff = GL.GetUniformLocation(solidShader, "uFogHeightFalloff");
         uVolumetricStrength = GL.GetUniformLocation(solidShader, "uVolumetricStrength");
         uDebugView = GL.GetUniformLocation(solidShader, "uDebugView");
 
@@ -185,6 +216,8 @@ internal sealed partial class SceneViewportRenderer
         GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, solidStride, 48);
         GL.EnableVertexAttribArray(5);
         GL.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, solidStride, 64);
+        GL.EnableVertexAttribArray(12);
+        GL.VertexAttribPointer(12, 2, VertexAttribPointerType.Float, false, solidStride, 80);
 
         GL.BindVertexArray(0);
         GL.BindBuffer(BufferTarget.ArrayBuffer, 0);

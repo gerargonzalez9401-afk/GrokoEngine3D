@@ -8,17 +8,17 @@ namespace GrokoEngine.ImGuiEditor;
 
 internal sealed partial class SceneViewportRenderer
 {
-    // â”€â”€ LOD automÃ¡tico por nombre (estilo Unity) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── LOD automático por nombre (estilo Unity) ────────────────────────────
     // Muchos modelos (SpeedTree, kits de assets) traen la cadena LOD completa como
-    // submallas "X_LOD0", "X_LOD1", ... Este mÃ³dulo la detecta por nombre y elige la
-    // submalla segÃºn el TAMAÃ‘O EN PANTALLA (radio/distancia) en el build del frame:
-    // el pase de color, las sombras y el instancing usan automÃ¡ticamente la versiÃ³n
-    // elegida (un Ã¡rbol lejano dibuja 1.600 tris en vez de 13.000, tambiÃ©n en sombras).
+    // submallas "X_LOD0", "X_LOD1", ... Este módulo la detecta por nombre y elige la
+    // submalla según el TAMAÑO EN PANTALLA (radio/distancia) en el build del frame:
+    // el pase de color, las sombras y el instancing usan automáticamente la versión
+    // elegida (un árbol lejano dibuja 1.600 tris en vez de 13.000, también en sombras).
 
-    /// <summary>Multiplicador de detalle LOD global: &gt;1 mantiene el detalle a mÃ¡s distancia.</summary>
+    /// <summary>Multiplicador de detalle LOD global: &gt;1 mantiene el detalle a más distancia.</summary>
     public float LodBias = 1f;
 
-    // LodGroup activo durante el recorrido de la jerarquÃ­a (el mÃ¡s cercano al objeto gana,
+    // LodGroup activo durante el recorrido de la jerarquía (el más cercano al objeto gana,
     // como en Unity). Lo establece BuildObjectRecursive con guardar/restaurar.
     private LodGroup? _activeLodGroup;
 
@@ -40,12 +40,12 @@ internal sealed partial class SceneViewportRenderer
     // Se invalida junto con el static batch cuando cambian mallas/materiales/jerarquia.
     private readonly Dictionary<GameObject, HierarchyLodBoundsCacheEntry> _hierarchyLodBoundsCache = new();
 
-    // Cache de la decisiÃ³n "objeto estÃ¡tico â†’ pase dinÃ¡mico" (transparencia/tamaÃ±o), por objeto
+    // Cache de la decisión "objeto estático → pase dinámico" (transparencia/tamaño), por objeto
     // con TTL. Ver BuildObjectRecursive. Se limpia en InvalidateStaticBatch.
     private readonly Dictionary<GameObject, (long NextCheckTick, bool NeedsDynamicPass)> _staticRouteCache = new();
 
     // Nodos que son hijos-variante LOD (Ash1_LOD1, Leaves2_LOD3, ...): un FBX importado "con
-    // hijos" trae uno por variante y NUNCA dibujan. Con muchos Ã¡rboles son cientos de nodos;
+    // hijos" trae uno por variante y NUNCA dibujan. Con muchos árboles son cientos de nodos;
     // sin este cache pagaban transform+componentes+ruta cada frame solo para descartarse
     // (medido: ~4 ms con ~600 variantes). Se limpia en InvalidateStaticBatch.
     private readonly Dictionary<GameObject, (long NextCheckTick, bool IsVariant)> _lodVariantNodeCache = new();
@@ -305,11 +305,11 @@ internal sealed partial class SceneViewportRenderer
         return info.HasChains && submeshIndex < info.IsLodVariant.Length && info.IsLodVariant[submeshIndex];
     }
 
-    // â”€â”€ Cache de draws por objeto (graba-y-reproduce) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Reconstruir el draw de cada malla desde cero costaba ~30 Âµs por objeto y frame
-    // (materiales, slots, texturas, structs) aunque NADA hubiera cambiado â€” con cientos
-    // de props era el mayor coste de CPU del frame (medido: ~7 ms con 237 hijos de Ã¡rbol).
-    // Mientras no cambien transform, nivel LOD ni materiales (TTL + invalidaciÃ³n explÃ­cita),
+    // ── Cache de draws por objeto (graba-y-reproduce) ────────────────────────
+    // Reconstruir el draw de cada malla desde cero costaba ~30 µs por objeto y frame
+    // (materiales, slots, texturas, structs) aunque NADA hubiera cambiado — con cientos
+    // de props era el mayor coste de CPU del frame (medido: ~7 ms con 237 hijos de árbol).
+    // Mientras no cambien transform, nivel LOD ni materiales (TTL + invalidación explícita),
     // se reutilizan los draws grabados: el coste por objeto cae a un lookup + appends.
     private readonly Dictionary<GameObject, MeshDrawCacheEntry> _meshDrawCache = new();
 
@@ -351,7 +351,7 @@ internal sealed partial class SceneViewportRenderer
 
     private void BuildMeshBoundsCached(GameObject obj, MeshFilter filter, ParsedMesh mesh, bool selected, Matrix4 transform)
     {
-        // Casos que quedan FUERA del cache (siguen el camino completo): pase estÃ¡tico,
+        // Casos que quedan FUERA del cache (siguen el camino completo): pase estático,
         // objetos seleccionados (wireframe), mallas con esqueleto, y el preview de arrastre.
         bool cacheable = !_buildingStatic &&
                          !selected &&
@@ -366,7 +366,7 @@ internal sealed partial class SceneViewportRenderer
         float importScale = filter.ImportScale <= 0f ? 1f : filter.ImportScale;
         int lodKey = ComputeLodKey(mesh, filter, transform, importScale);
         if (IsLodGroupCulled(mesh, filter, transform, importScale))
-            lodKey = HashCode.Combine(lodKey, -1);   // el estado "culled" tambiÃ©n invalida el cache
+            lodKey = HashCode.Combine(lodKey, -1);   // el estado "culled" también invalida el cache
         long now = Environment.TickCount64;
 
         if (_meshDrawCache.TryGetValue(obj, out var entry) &&
@@ -385,7 +385,7 @@ internal sealed partial class SceneViewportRenderer
         }
 
         // Miss: grabar lo que BuildMeshBounds encola. Solo se cachea si TODO fue a las tres
-        // listas de draws GPU; si tocÃ³ cualquier otro sink (vÃ©rtices CPU, skinned, lÃ­neas),
+        // listas de draws GPU; si tocó cualquier otro sink (vértices CPU, skinned, líneas),
         // el objeto no es cacheable este frame y se deja sin entrada.
         int dyn0 = dynamicMeshDraws.Count;
         int refr0 = refractiveMeshDraws.Count;
@@ -413,7 +413,7 @@ internal sealed partial class SceneViewportRenderer
         {
             World = transform,
             LodKey = lodKey,
-            // TTL corto + jitter: recoge cambios de material no invalidados explÃ­citamente
+            // TTL corto + jitter: recoge cambios de material no invalidados explícitamente
             // sin que todos los objetos regraben en el mismo frame.
             ExpiresAt = now + (obj.IsStatic ? 60000 : 1000) + (System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj) & 511),
             Dynamic = CopyRange(dynamicMeshDraws, dyn0),
@@ -448,7 +448,7 @@ internal sealed partial class SceneViewportRenderer
     {
         public static readonly MeshLodInfo Empty = new();
 
-        // Chains[i] = Ã­ndices de submalla (nivel 0 primero) si la submalla i es un LOD0 con variantes.
+        // Chains[i] = índices de submalla (nivel 0 primero) si la submalla i es un LOD0 con variantes.
         public int[]?[] Chains = Array.Empty<int[]?>();
         // true si la submalla es LOD1+ de alguna cadena: al dibujar el modelo ENTERO no se
         // dibuja de base (antes se pintaban los 4 niveles superpuestos).
@@ -511,8 +511,8 @@ internal sealed partial class SceneViewportRenderer
         return info ?? MeshLodInfo.Empty;
     }
 
-    // Umbrales de tamaÃ±o relativo en pantalla (radio/distancia), estilo LOD Group:
-    // por encima del primero se usa LOD0; el Ãºltimo nivel de la cadena cubre el resto.
+    // Umbrales de tamaño relativo en pantalla (radio/distancia), estilo LOD Group:
+    // por encima del primero se usa LOD0; el último nivel de la cadena cubre el resto.
     private static readonly float[] LodRelativeCutoffs = { 0.12f, 0.055f, 0.025f };
 
     private int SelectLodSubmesh(ParsedMesh mesh, MeshLodInfo info, int submeshIndex, in Matrix4 world, float importScale)
@@ -542,7 +542,7 @@ internal sealed partial class SceneViewportRenderer
         relative *= MathF.Max(0.01f, LodBias);
 
         // Umbrales: los del LodGroup activo (componente, configurable en el inspector)
-        // o los por defecto del motor si el objeto no tiene ninguno en su jerarquÃ­a.
+        // o los por defecto del motor si el objeto no tiene ninguno en su jerarquía.
         float t0 = LodRelativeCutoffs[0], t1 = LodRelativeCutoffs[1], t2 = LodRelativeCutoffs[2];
         float culledBelow = 0f;
         if (_activeLodGroup is { } group)
@@ -554,8 +554,8 @@ internal sealed partial class SceneViewportRenderer
             culledBelow = group.CulledBelow;
         }
 
-        // -1 = culled: el objeto es tan pequeÃ±o en pantalla que no se dibuja (en el pase
-        // estÃ¡tico no se aplica â€” el batch se hornea una vez y el objeto desaparecerÃ­a).
+        // -1 = culled: el objeto es tan pequeño en pantalla que no se dibuja (en el pase
+        // estático no se aplica — el batch se hornea una vez y el objeto desaparecería).
         if (culledBelow > 0f && relative < culledBelow && !_buildingStatic)
             return -1;
 
@@ -563,9 +563,9 @@ internal sealed partial class SceneViewportRenderer
         return chain[Math.Min(level, chain.Length - 1)];
     }
 
-    // Cull por LodGroup para mallas SIN cadena LOD (el componente tambiÃ©n sirve para ocultar
-    // props pequeÃ±os a distancia, como el "Culled" de Unity). Usa los bounds de la submalla
-    // dibujada (o del modelo entero) con la misma mÃ©trica que SelectLodSubmesh.
+    // Cull por LodGroup para mallas SIN cadena LOD (el componente también sirve para ocultar
+    // props pequeños a distancia, como el "Culled" de Unity). Usa los bounds de la submalla
+    // dibujada (o del modelo entero) con la misma métrica que SelectLodSubmesh.
     private bool IsLodGroupCulled(ParsedMesh mesh, MeshFilter filter, in Matrix4 world, float importScale)
     {
         // En LOD jerarquico el culling se decide una sola vez en la raiz del LodGroup.

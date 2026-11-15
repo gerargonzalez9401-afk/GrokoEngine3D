@@ -32,6 +32,11 @@ using GlfwMouseButton = OpenTK.Windowing.GraphicsLibraryFramework.MouseButton;
 namespace GrokoEngine.ImGuiEditor;
 internal sealed partial class ImGuiEditorApp
 {
+    // Los antiguos paneles Render, Lighting y Render Pro tenían controles duplicados.
+    // Se conservan temporalmente en código por compatibilidad, pero no se muestran: toda
+    // la configuración de render vive ahora en Render Pipeline.
+    private bool ShowLegacyRenderTabs => false;
+
     private void DrawEditorSettingsWindow()
     {
         if (!showEditorSettings)
@@ -120,7 +125,7 @@ internal sealed partial class ImGuiEditorApp
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Render"))
+            if (ShowLegacyRenderTabs && ImGui.BeginTabItem("Render"))
             {
                 ImGui.TextUnformatted("Frame Quality");
                 DrawUnitySliderFloat("Render Scale", ref renderScale, 0.25f, 2f, 0.01f);
@@ -157,7 +162,7 @@ internal sealed partial class ImGuiEditorApp
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Lighting"))
+            if (ShowLegacyRenderTabs && ImGui.BeginTabItem("Lighting"))
             {
                 if (ImGui.BeginCombo("Debug View", lightingDebugView.ToString()))
                 {
@@ -267,7 +272,7 @@ internal sealed partial class ImGuiEditorApp
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Render Pro"))
+            if (ShowLegacyRenderTabs && ImGui.BeginTabItem("Render Pro"))
             {
                 DrawRenderProSettingsTab();
                 ImGui.EndTabItem();
@@ -689,7 +694,11 @@ internal sealed partial class ImGuiEditorApp
             SmallCheckbox("Opaque Texture##rpOpaque", ref opaqueTextureEnabled);
             DrawStringCombo("Opaque Downsampling##rpOpaqueDown", ref opaqueDownsampling, ["None", "2x Bilinear", "4x Box", "4x Bilinear"]);
             SmallCheckbox("HDR##rpHdr", ref hdrEnabled);
-            DrawMsaaCombo("MSAA##rpMsaa", ref msaaSamples);
+            bool deferredPipeline = string.Equals(renderingPath, "Deferred", StringComparison.Ordinal);
+            using (new DisabledScope(deferredPipeline))
+                DrawMsaaCombo("MSAA##rpMsaa", ref msaaSamples);
+            if (deferredPipeline)
+                ImGui.TextDisabled("Deferred usa SMAA. MSAA esta disponible en Forward y Forward+.");
             DrawUnitySliderFloat("Render Scale##rpScale", ref renderScale, 0.25f, 2f, 0.01f);
             renderScale = Math.Clamp(renderScale, 0.25f, 2f);
             ImGui.TextDisabled($"Target: {GetViewportRenderSize().Width} x {GetViewportRenderSize().Height}");
@@ -706,6 +715,31 @@ internal sealed partial class ImGuiEditorApp
             if (ImGui.Button("Cinematic##rpPreset", new Vector2(108f, 26f)))
                 ApplyRenderPipelinePreset(2);
 
+            ImGui.Spacing();
+            DrawRenderProSection("Post Processing");
+            DrawQualityCombo("Bloom Quality##rpBloom", ref bloomQuality);
+            ImGui.TextDisabled("La calidad de AO se controla en la seccion SSAO.");
+
+            ImGui.Spacing();
+            DrawRenderProSection("Static LOD");
+            if (ImGui.BeginCombo("Tree/Prop LOD Mode##rpStaticLod", StaticHierarchyLodModeLabel(staticHierarchyLodMode)))
+            {
+                foreach (StaticHierarchyLodMode mode in Enum.GetValues<StaticHierarchyLodMode>())
+                {
+                    bool selected = staticHierarchyLodMode == mode;
+                    if (ImGui.Selectable(StaticHierarchyLodModeLabel(mode), selected))
+                    {
+                        staticHierarchyLodMode = mode;
+                        sceneRenderer.InvalidateStaticBatch();
+                    }
+                    if (selected) ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
+            }
+            ImGui.TextDisabled(staticHierarchyLodMode == StaticHierarchyLodMode.Performance120
+                ? "Ruta rapida para arboles y props estaticos."
+                : "LOD jerarquico dinamico: mas detalle, mayor coste.");
+
             ImGui.TableNextColumn();
             DrawRenderProSection("Renderer Data / Filtering");
             DrawLayerMaskCombo("Prepass Layer Mask##rpPrepassMask", ref prepassLayerMask);
@@ -715,11 +749,23 @@ internal sealed partial class ImGuiEditorApp
             ImGui.Spacing();
             DrawRenderProSection("Renderer Data / Path");
             DrawStringCombo("Rendering Path##rpPath", ref renderingPath, ["Forward", "Forward+", "Deferred"]);
-            ImGui.TextDisabled(renderingPath == "Forward+"
-                ? "Forward+ prepara el camino para muchas luces por tile/cluster."
-                : "Forward clasico: simple, estable y barato para escenas pequenas.");
+            bool deferredPath = string.Equals(renderingPath, "Deferred", StringComparison.Ordinal);
+            if (deferredPath)
+            {
+                fxaaEnabled = true;
+                postAntiAliasingMode = CameraAntiAliasingMode.SMAA;
+            }
+            ImGui.TextDisabled(renderingPath switch
+            {
+                "Forward+" => "Forward+ prepara el camino para muchas luces por tile/cluster.",
+                "Deferred" => "Deferred usa G-buffer para opacos y SMAA 1x; MSAA se reserva para Forward.",
+                _ => "Forward clasico: simple, estable y barato para escenas pequenas."
+            });
             SmallCheckbox("Transparent Receive Shadows##rpTransparentShadows", ref transparentReceiveShadows);
-            SmallCheckbox("FXAA##rpFxaa", ref fxaaEnabled);
+            using (new DisabledScope(deferredPath))
+                DrawPostAntiAliasingCombo("Anti-Aliasing##rpAa", ref postAntiAliasingMode, includeNone: true);
+            if (deferredPath)
+                ImGui.TextDisabled("SMAA 1x se activa automaticamente: bordes limpios sin MSAA en el G-buffer.");
 
             ImGui.Spacing();
             DrawRenderProSection("Screen Space Ambient Occlusion");
@@ -732,11 +778,77 @@ internal sealed partial class ImGuiEditorApp
             DrawUnitySliderFloat("Direct Lighting Strength##rpSsaoDirect", ref ssaoDirectLightingStrength, 0f, 1f, 0.01f);
 
             ImGui.Spacing();
+            DrawRenderProSection("Screen Space Reflections");
+            using (new DisabledScope(!deferredPath || !opaqueTextureEnabled))
+            {
+                SmallCheckbox("Enabled##rpSsrEnabled", ref screenSpaceReflectionsEnabled);
+                DrawQualityCombo("Quality##rpSsrQuality", ref screenSpaceReflectionsQuality);
+            }
+            if (!deferredPath)
+                ImGui.TextDisabled("SSR se usa solo en Deferred; Forward+ mantiene los reflejos IBL/probe.");
+            else if (!opaqueTextureEnabled)
+                ImGui.TextDisabled("Activa Opaque Texture para que SSR pueda reflejar el color de la escena.");
+            else
+                ImGui.TextDisabled("Solo metales lisos. Los probes cubren lo que queda fuera de pantalla.");
+
+            ImGui.Spacing();
             DrawRenderProSection("Shadows");
             DrawShadowQualityCombo("Shadow Quality##rpShadowQuality");
             DrawUnitySliderFloat("Shadow Bias##rpShadowBias", ref shadowBias, 0.1f, 4f, 0.01f);
             shadowBias = Math.Clamp(shadowBias, 0.1f, 4f);
             ImGui.TextDisabled(ShadowQualityDescription(shadowQuality));
+
+            ImGui.Spacing();
+            DrawRenderProSection("Debug View");
+            if (ImGui.BeginCombo("Mode##rpDebug", LightingDebugViewLabel(lightingDebugView)))
+            {
+                foreach (LightingDebugView view in Enum.GetValues<LightingDebugView>())
+                {
+                    bool selected = lightingDebugView == view;
+                    if (ImGui.Selectable(LightingDebugViewLabel(view), selected))
+                        lightingDebugView = view;
+                    if (selected) ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
+            }
+            ImGui.TextDisabled(LightingDebugViewDescription(lightingDebugView));
+
+            ImGui.Spacing();
+            DrawRenderProSection("Lighting / IBL");
+            SmallCheckbox("IBL Diffuse Irradiance##rpIbl", ref iblEnabled);
+            DrawUnitySliderFloat("IBL Diffuse##rpIblDiffuse", ref iblDiffuseStrength, 0f, 1.5f, 0.01f);
+            iblDiffuseStrength = Math.Clamp(iblDiffuseStrength, 0f, 1.5f);
+            DrawUnitySliderFloat("IBL Reflections##rpIblSpec", ref iblSpecularStrength, 0f, 0.35f, 0.005f);
+            iblSpecularStrength = Math.Clamp(iblSpecularStrength, 0f, 0.35f);
+            if (ImGui.BeginCombo("Color Space##rpColorSpace", colorSpace.ToString()))
+            {
+                foreach (ColorSpace space in Enum.GetValues<ColorSpace>())
+                {
+                    bool selected = colorSpace == space;
+                    if (ImGui.Selectable(space.ToString(), selected))
+                        colorSpace = space;
+                    if (selected) ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
+            }
+
+            ImGui.Spacing();
+            DrawRenderProSection("Environment");
+            int environmentModeIndex = (int)environmentMode;
+            if (ImGui.Combo("Environment Mode##rpEnvironment", ref environmentModeIndex, new[] { "HDRI", "Procedural Sky" }, 2))
+                environmentMode = (EnvironmentMode)environmentModeIndex;
+            string hdriSlot = string.IsNullOrWhiteSpace(hdriPath)
+                ? "None - click to choose .hdr"
+                : Path.GetFileName(hdriPath);
+            if (ImGui.Button(hdriSlot + "##rpHdri", new Vector2(260f, 26f)))
+            {
+                string? picked = BrowseForHdri();
+                if (picked != null)
+                    hdriPath = picked;
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Clear##rpHdri", new Vector2(62f, 26f)))
+                hdriPath = "";
 
             ImGui.EndTable();
         }
@@ -806,6 +918,33 @@ internal sealed partial class ImGuiEditorApp
         return changed;
     }
 
+    private static bool DrawPostAntiAliasingCombo(string label, ref CameraAntiAliasingMode value, bool includeNone)
+    {
+        CameraAntiAliasingMode[] options = includeNone
+            ? [CameraAntiAliasingMode.None, CameraAntiAliasingMode.FXAA, CameraAntiAliasingMode.SMAA]
+            : [CameraAntiAliasingMode.FXAA, CameraAntiAliasingMode.SMAA];
+        if (!options.Contains(value))
+            value = CameraAntiAliasingMode.SMAA;
+
+        bool changed = false;
+        if (ImGui.BeginCombo(label, value.ToString()))
+        {
+            foreach (CameraAntiAliasingMode option in options)
+            {
+                bool selected = value == option;
+                if (ImGui.Selectable(option.ToString(), selected))
+                {
+                    value = option;
+                    changed = true;
+                }
+                if (selected) ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+
+        return changed;
+    }
+
     private void DrawShadowQualityCombo(string label)
     {
         if (ImGui.BeginCombo(label, shadowQuality.ToString()))
@@ -831,6 +970,7 @@ internal sealed partial class ImGuiEditorApp
                 renderScale = 0.8f;
                 msaaSamples = 2;
                 fxaaEnabled = true;
+                postAntiAliasingMode = CameraAntiAliasingMode.FXAA;
                 hdrEnabled = true;
                 bloomQuality = 1;
                 ssaoEnabled = true;
@@ -839,12 +979,16 @@ internal sealed partial class ImGuiEditorApp
                 ssaoRadius = 0.22f;
                 shadowQuality = ShadowQuality.Medium;
                 shadowBias = 1.25f;
+                iblDiffuseStrength = 0.45f;
+                iblSpecularStrength = 0.10f;
+                staticHierarchyLodMode = StaticHierarchyLodMode.Performance120;
                 break;
             case 2:
                 renderingPath = "Forward+";
                 renderScale = 1f;
                 msaaSamples = 8;
                 fxaaEnabled = true;
+                postAntiAliasingMode = CameraAntiAliasingMode.SMAA;
                 hdrEnabled = true;
                 bloomQuality = 3;
                 ssaoEnabled = true;
@@ -853,12 +997,16 @@ internal sealed partial class ImGuiEditorApp
                 ssaoRadius = 0.45f;
                 shadowQuality = ShadowQuality.Ultra;
                 shadowBias = 0.85f;
+                iblDiffuseStrength = 0.85f;
+                iblSpecularStrength = 0.22f;
+                staticHierarchyLodMode = StaticHierarchyLodMode.LodPro;
                 break;
             default:
                 renderingPath = "Forward+";
                 renderScale = 1f;
                 msaaSamples = 4;
                 fxaaEnabled = true;
+                postAntiAliasingMode = CameraAntiAliasingMode.SMAA;
                 hdrEnabled = true;
                 bloomQuality = 2;
                 ssaoEnabled = true;
@@ -867,12 +1015,17 @@ internal sealed partial class ImGuiEditorApp
                 ssaoRadius = 0.3f;
                 shadowQuality = ShadowQuality.High;
                 shadowBias = 1f;
+                iblDiffuseStrength = 0.65f;
+                iblSpecularStrength = 0.16f;
+                staticHierarchyLodMode = StaticHierarchyLodMode.Performance120;
                 break;
         }
 
         depthTextureEnabled = true;
         opaqueTextureEnabled = true;
         transparentReceiveShadows = true;
+        sceneRenderer.InvalidateStaticBatch();
+        lightingDebugView = LightingDebugView.Final;
         statusMessage = "Render Pipeline preset applied";
     }
 

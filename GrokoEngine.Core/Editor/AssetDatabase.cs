@@ -61,6 +61,15 @@ namespace GrokoEngine
         public bool HasProblems => OrphanMetaFiles.Count > 0 || Errors.Count > 0;
     }
 
+    public sealed class AssetRecoveryEntry
+    {
+        public string Id { get; set; } = "";
+        public string RelativePath { get; set; } = "";
+        public string Guid { get; set; } = "";
+        public bool IsDirectory { get; set; }
+        public DateTime DeletedUtc { get; set; }
+    }
+
     public sealed class AssetDatabase
     {
         private const string GuidPrefix = "guid:";
@@ -69,16 +78,20 @@ namespace GrokoEngine
         private static readonly Dictionary<string, AssetDatabase> Shared = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly string assetsRoot;
+        private readonly string recoveryRoot;
         private readonly Dictionary<string, AssetMetaData> metaByPath = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string> pathByGuid = new(StringComparer.OrdinalIgnoreCase);
 
         public AssetDatabase(string assetsRoot)
         {
             this.assetsRoot = NormalizeFullPath(assetsRoot);
+            string projectRoot = Directory.GetParent(this.assetsRoot)?.FullName ?? this.assetsRoot;
+            recoveryRoot = Path.Combine(projectRoot, "Library", "GrokoRecovery");
             Directory.CreateDirectory(this.assetsRoot);
         }
 
         public string AssetsRoot => assetsRoot;
+        public string RecoveryRoot => recoveryRoot;
 
         public static AssetDatabase Get(string assetsRoot)
         {
@@ -96,6 +109,7 @@ namespace GrokoEngine
         {
             metaByPath.Clear();
             pathByGuid.Clear();
+            AssetReferences.InvalidateCache(assetsRoot);
 
             if (!Directory.Exists(assetsRoot))
                 return;
@@ -217,6 +231,7 @@ namespace GrokoEngine
 
             string metaPath = GetMetaPath(fullPath);
             AssetMetaData meta;
+            bool mustWriteMeta = false;
             if (File.Exists(metaPath))
             {
                 meta = LoadMetaFile(metaPath);
@@ -226,15 +241,22 @@ namespace GrokoEngine
             {
                 meta = new AssetMetaData();
                 meta.Normalize(fullPath);
+                mustWriteMeta = true;
             }
 
             if (pathByGuid.TryGetValue(meta.Guid, out var existingPath) &&
                 !string.Equals(existingPath, fullPath, StringComparison.OrdinalIgnoreCase))
             {
                 meta.Guid = AssetMetaData.NewGuid();
+                mustWriteMeta = true;
             }
 
-            SaveMetaFile(metaPath, meta);
+            // Refresh se ejecuta al abrir el proyecto. Reescribir cada .meta aunque no
+            // cambie nada convierte un arranque normal en miles de escrituras y fuerza a
+            // OneDrive (u otro sincronizador) a procesar todo Assets. Solo persistimos los
+            // metadatos nuevos o los que recibieron un GUID corregido por colisión.
+            if (mustWriteMeta)
+                SaveMetaFile(metaPath, meta);
             Index(fullPath, meta);
             return meta;
         }
@@ -298,56 +320,76 @@ namespace GrokoEngine
                 return false;
             }
 
+            bool isDirectory = Directory.Exists(source);
+            if (!isDirectory && !File.Exists(source))
+            {
+                error = "Source asset does not exist.";
+                return false;
+            }
+            if (isDirectory && IsInsideRoot(destination, source))
+            {
+                error = "Cannot move a folder inside itself.";
+                return false;
+            }
+
+            string oldMeta = GetMetaPath(source);
+            string newMeta = GetMetaPath(destination);
+            if (File.Exists(newMeta))
+            {
+                error = "Destination metadata already exists. Repair or remove the orphan .meta file before moving the asset.";
+                return false;
+            }
+
+            bool primaryMoved = false;
+            bool metaMoved = false;
             try
             {
-                if (Directory.Exists(source))
-                {
-                    if (IsInsideRoot(destination, source))
-                    {
-                        error = "Cannot move a folder inside itself.";
-                        return false;
-                    }
+                EnsureMeta(source); // Garantiza que asset y GUID se mueven juntos.
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
 
-                    EnsureMeta(source); // garantiza GUID de carpeta antes de mover.
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                if (isDirectory)
                     Directory.Move(source, destination);
-
-                    string oldMeta = GetMetaPath(source);
-                    string newMeta = GetMetaPath(destination);
-                    if (File.Exists(oldMeta))
-                    {
-                        if (File.Exists(newMeta))
-                            File.Delete(newMeta);
-                        File.Move(oldMeta, newMeta);
-                    }
-                }
-                else if (File.Exists(source))
-                {
-                    EnsureMeta(source); // garantiza GUID antes de mover.
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                    File.Move(source, destination);
-
-                    string oldMeta = GetMetaPath(source);
-                    string newMeta = GetMetaPath(destination);
-                    if (File.Exists(oldMeta))
-                    {
-                        if (File.Exists(newMeta))
-                            File.Delete(newMeta);
-                        File.Move(oldMeta, newMeta);
-                    }
-                }
                 else
-                {
-                    error = "Source asset does not exist.";
-                    return false;
-                }
+                    File.Move(source, destination);
+                primaryMoved = true;
+
+                File.Move(oldMeta, newMeta);
+                metaMoved = true;
 
                 Refresh(createMissingMeta: true);
                 return true;
             }
             catch (Exception ex)
             {
-                error = ex.Message;
+                var rollbackErrors = new List<string>();
+                try
+                {
+                    if (metaMoved && File.Exists(newMeta) && !File.Exists(oldMeta))
+                        File.Move(newMeta, oldMeta);
+                }
+                catch (Exception rollbackEx)
+                {
+                    rollbackErrors.Add("metadata: " + rollbackEx.Message);
+                }
+
+                try
+                {
+                    if (primaryMoved)
+                    {
+                        if (isDirectory && Directory.Exists(destination) && !Directory.Exists(source))
+                            Directory.Move(destination, source);
+                        else if (!isDirectory && File.Exists(destination) && !File.Exists(source))
+                            File.Move(destination, source);
+                    }
+                }
+                catch (Exception rollbackEx)
+                {
+                    rollbackErrors.Add("asset: " + rollbackEx.Message);
+                }
+
+                error = rollbackErrors.Count == 0
+                    ? ex.Message
+                    : $"{ex.Message} Rollback incomplete ({string.Join("; ", rollbackErrors)}).";
                 Refresh(createMissingMeta: false);
                 return false;
             }
@@ -355,6 +397,12 @@ namespace GrokoEngine
 
         public bool DeleteAsset(string assetPath, out string error)
         {
+            return MoveAssetToRecovery(assetPath, out _, out error);
+        }
+
+        public bool MoveAssetToRecovery(string assetPath, out AssetRecoveryEntry? entry, out string error)
+        {
+            entry = null;
             error = "";
             string fullPath = NormalizeFullPath(assetPath);
             if (!IsInsideRoot(fullPath, assetsRoot) || string.Equals(fullPath, assetsRoot, StringComparison.OrdinalIgnoreCase))
@@ -368,33 +416,186 @@ namespace GrokoEngine
                 return false;
             }
 
+            bool isDirectory = Directory.Exists(fullPath);
+            if (!isDirectory && !File.Exists(fullPath))
+            {
+                error = "Asset does not exist.";
+                return false;
+            }
+
+            string metaPath = GetMetaPath(fullPath);
+            string id = System.Guid.NewGuid().ToString("N");
+            string entryDirectory = Path.Combine(recoveryRoot, id);
+            string payloadPath = Path.Combine(entryDirectory, "asset");
+            string payloadMetaPath = GetMetaPath(payloadPath);
+            bool primaryMoved = false;
+            bool metaMoved = false;
+
             try
             {
-                if (File.Exists(fullPath))
-                {
-                    File.Delete(fullPath);
-                    string metaPath = GetMetaPath(fullPath);
-                    if (File.Exists(metaPath))
-                        File.Delete(metaPath);
-                }
-                else if (Directory.Exists(fullPath))
-                {
-                    Directory.Delete(fullPath, recursive: true);
-                    string metaPath = GetMetaPath(fullPath);
-                    if (File.Exists(metaPath))
-                        File.Delete(metaPath);
-                }
+                string guid = EnsureMeta(fullPath).Guid;
+                Directory.CreateDirectory(entryDirectory);
+                if (isDirectory)
+                    Directory.Move(fullPath, payloadPath);
                 else
-                {
-                    error = "Asset does not exist.";
-                    return false;
-                }
+                    File.Move(fullPath, payloadPath);
+                primaryMoved = true;
 
+                File.Move(metaPath, payloadMetaPath);
+                metaMoved = true;
+
+                entry = new AssetRecoveryEntry
+                {
+                    Id = id,
+                    RelativePath = NormalizeAssetPath(Path.GetRelativePath(assetsRoot, fullPath)),
+                    Guid = guid,
+                    IsDirectory = isDirectory,
+                    DeletedUtc = DateTime.UtcNow
+                };
+                AtomicFile.WriteAllText(Path.Combine(entryDirectory, "entry.json"), JsonSerializer.Serialize(entry, Options));
                 Refresh(createMissingMeta: false);
                 return true;
             }
             catch (Exception ex)
             {
+                var rollbackErrors = new List<string>();
+                try
+                {
+                    if (metaMoved && File.Exists(payloadMetaPath) && !File.Exists(metaPath))
+                        File.Move(payloadMetaPath, metaPath);
+                }
+                catch (Exception rollbackEx)
+                {
+                    rollbackErrors.Add("metadata: " + rollbackEx.Message);
+                }
+                try
+                {
+                    if (primaryMoved)
+                    {
+                        if (isDirectory && Directory.Exists(payloadPath) && !Directory.Exists(fullPath))
+                            Directory.Move(payloadPath, fullPath);
+                        else if (!isDirectory && File.Exists(payloadPath) && !File.Exists(fullPath))
+                            File.Move(payloadPath, fullPath);
+                    }
+                }
+                catch (Exception rollbackEx)
+                {
+                    rollbackErrors.Add("asset: " + rollbackEx.Message);
+                }
+
+                error = rollbackErrors.Count == 0
+                    ? ex.Message
+                    : $"{ex.Message} Rollback incomplete ({string.Join("; ", rollbackErrors)}).";
+                Refresh(createMissingMeta: false);
+                return false;
+            }
+        }
+
+        public IReadOnlyList<AssetRecoveryEntry> GetRecoveryEntries()
+        {
+            if (!Directory.Exists(recoveryRoot))
+                return Array.Empty<AssetRecoveryEntry>();
+
+            var entries = new List<AssetRecoveryEntry>();
+            foreach (string manifestPath in Directory.EnumerateFiles(recoveryRoot, "entry.json", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    var loaded = JsonSerializer.Deserialize<AssetRecoveryEntry>(File.ReadAllText(manifestPath), Options);
+                    if (loaded != null && Guid.TryParse(loaded.Id, out _))
+                        entries.Add(loaded);
+                }
+                catch
+                {
+                    // Una entrada dañada no debe impedir recuperar las demás.
+                }
+            }
+
+            return entries.OrderByDescending(item => item.DeletedUtc).ToArray();
+        }
+
+        public bool RestoreRecoveryEntry(string entryId, out string restoredPath, out string error)
+        {
+            restoredPath = "";
+            error = "";
+            if (!Guid.TryParse(entryId, out _))
+            {
+                error = "Invalid recovery entry id.";
+                return false;
+            }
+
+            string entryDirectory = Path.Combine(recoveryRoot, entryId);
+            string manifestPath = Path.Combine(entryDirectory, "entry.json");
+            string payloadPath = Path.Combine(entryDirectory, "asset");
+            string payloadMetaPath = GetMetaPath(payloadPath);
+            AssetRecoveryEntry? entry;
+            try
+            {
+                entry = JsonSerializer.Deserialize<AssetRecoveryEntry>(File.ReadAllText(manifestPath), Options);
+            }
+            catch (Exception ex)
+            {
+                error = "Could not read recovery entry: " + ex.Message;
+                return false;
+            }
+
+            if (entry == null || !string.Equals(entry.Id, entryId, StringComparison.OrdinalIgnoreCase))
+            {
+                error = "Recovery entry is invalid.";
+                return false;
+            }
+
+            string destination = NormalizeFullPath(Path.Combine(assetsRoot, entry.RelativePath));
+            string destinationMeta = GetMetaPath(destination);
+            if (!IsInsideRoot(destination, assetsRoot) || AssetExists(destination) || File.Exists(destinationMeta))
+            {
+                error = "Original asset location is no longer available for restore.";
+                return false;
+            }
+            if (entry.IsDirectory ? !Directory.Exists(payloadPath) : !File.Exists(payloadPath))
+            {
+                error = "Recovery payload is missing.";
+                return false;
+            }
+
+            bool primaryMoved = false;
+            bool metaMoved = false;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                if (entry.IsDirectory)
+                    Directory.Move(payloadPath, destination);
+                else
+                    File.Move(payloadPath, destination);
+                primaryMoved = true;
+                File.Move(payloadMetaPath, destinationMeta);
+                metaMoved = true;
+                Directory.Delete(entryDirectory, recursive: true);
+                restoredPath = destination;
+                Refresh(createMissingMeta: false);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    if (metaMoved && File.Exists(destinationMeta) && !File.Exists(payloadMetaPath))
+                        File.Move(destinationMeta, payloadMetaPath);
+                    if (primaryMoved)
+                    {
+                        if (entry.IsDirectory && Directory.Exists(destination) && !Directory.Exists(payloadPath))
+                            Directory.Move(destination, payloadPath);
+                        else if (!entry.IsDirectory && File.Exists(destination) && !File.Exists(payloadPath))
+                            File.Move(destination, payloadPath);
+                    }
+                }
+                catch (Exception rollbackEx)
+                {
+                    error = $"{ex.Message} Rollback failed: {rollbackEx.Message}";
+                    Refresh(createMissingMeta: false);
+                    return false;
+                }
+
                 error = ex.Message;
                 Refresh(createMissingMeta: false);
                 return false;
@@ -542,8 +743,7 @@ namespace GrokoEngine
 
         private static void SaveMetaFile(string metaPath, AssetMetaData meta)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(metaPath)!);
-            File.WriteAllText(metaPath, JsonSerializer.Serialize(meta, Options));
+            AtomicFile.WriteAllText(metaPath, JsonSerializer.Serialize(meta, Options));
         }
 
         private static bool TryParseReference(string reference, out string guid, out string fallbackPath)

@@ -25,7 +25,7 @@ namespace GrokoEngine
         private sealed class SerializationContext
         {
             public PhysicsEngine? PhysicsEngine;
-            public ScriptCompiler? ScriptCompiler;
+            public IScriptTypeResolver? ScriptCompiler;
             public string? BaseAssetsPath;
         }
 
@@ -147,7 +147,7 @@ namespace GrokoEngine
                     TypeName = GetSerializableTypeName(instance.GetType()),
                     Data = doc.RootElement.Clone()
                 };
-                File.WriteAllText(path, JsonSerializer.Serialize(envelope, Options));
+                AtomicFile.WriteAllText(path, JsonSerializer.Serialize(envelope, Options));
                 return true;
             }
             catch (Exception ex)
@@ -161,7 +161,7 @@ namespace GrokoEngine
             }
         }
 
-        public static ScriptableObject? Load(string path, PhysicsEngine physicsEngine, ScriptCompiler scriptCompiler)
+        public static ScriptableObject? Load(string path, PhysicsEngine physicsEngine, IScriptTypeResolver scriptCompiler)
         {
             _context = new SerializationContext
             {
@@ -213,7 +213,7 @@ namespace GrokoEngine
             }
         }
 
-        private static Type? ResolveType(string typeName, ScriptCompiler scriptCompiler)
+        private static Type? ResolveType(string typeName, IScriptTypeResolver scriptCompiler)
         {
             var fromScripts = scriptCompiler.FindScriptableObjectType(typeName);
             if (fromScripts != null) return fromScripts;

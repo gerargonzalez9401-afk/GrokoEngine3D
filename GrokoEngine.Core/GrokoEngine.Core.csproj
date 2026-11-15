@@ -8,12 +8,14 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+	  <Compile Remove="Editor\AssetDatabase.cs" />
+	  <Compile Remove="Editor\AssetService.cs" />
+	  <Compile Remove="Editor\TextureImportSettings.cs" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<!-- Rendering\ObjLoader.cs -->
 		<PackageReference Include="AssimpNet" Version="4.1.0" />
-		<!-- Scripting\ScriptCompiler.cs (hot-reload C# vía Roslyn + EnvDTE) -->
-		<PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.3.0" />
-		<PackageReference Include="envdte" Version="17.14.40260" />
-		<PackageReference Include="envdte80" Version="17.14.40260" />
 		<!-- Backend de física profesional (BepuBackend.cs) -->
 		<PackageReference Include="BepuPhysics" Version="2.4.0" />
 	</ItemGroup>

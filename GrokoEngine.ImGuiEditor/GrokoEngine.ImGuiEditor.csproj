@@ -14,9 +14,6 @@
   <ItemGroup>
     <PackageReference Include="AssimpNet" Version="4.1.0" />
     <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.3.0" />
-    <PackageReference Include="envdte" Version="17.14.40260" />
-    <PackageReference Include="envdte80" Version="17.14.40260" />
     <PackageReference Include="OpenTK.Audio.OpenAL" Version="4.9.4" />
     <PackageReference Include="OpenTK.Windowing.Desktop" Version="4.9.4" />
     <PackageReference Include="OpenTK.Graphics" Version="4.9.4" />
@@ -26,6 +23,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\GrokoEngine.Core\GrokoEngine.Core.csproj" />
+    <ProjectReference Include="..\GrokoEngine.Assets\GrokoEngine.Assets.csproj" />
+    <ProjectReference Include="..\GrokoEngine.Scripting\GrokoEngine.Scripting.csproj" />
     <ProjectReference Include="..\GrokoEngine.ShaderGraph\GrokoEngine.ShaderGraph.csproj" />
   </ItemGroup>
 

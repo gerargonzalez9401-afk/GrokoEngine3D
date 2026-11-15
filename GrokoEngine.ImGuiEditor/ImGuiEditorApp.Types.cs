@@ -190,6 +190,9 @@ internal sealed partial class ImGuiEditorApp
         public string ViewportResolutionPreset { get; set; } = "free";
         public float RenderScale { get; set; } = 1f;
         public bool FxaaEnabled { get; set; } = true;
+        // Nullable para distinguir preferencias anteriores (sin este campo) y migrarlas
+        // de forma segura desde FxaaEnabled.
+        public CameraAntiAliasingMode? PostAntiAliasingMode { get; set; }
         public string RenderPipelineAssetName { get; set; } = "Groko Render Pipeline Asset";
         public string RendererDataName { get; set; } = "PC_Renderer";
         public string RenderingPath { get; set; } = "Forward+";
@@ -208,6 +211,10 @@ internal sealed partial class ImGuiEditorApp
         public float SsaoRadius { get; set; } = 0.3f;
         public float SsaoFalloffDistance { get; set; } = 100f;
         public float SsaoDirectLightingStrength { get; set; } = 0.25f;
+        // SSR solo es valido en Deferred y requiere copiar el color opaco. Se mantiene apagado
+        // hasta que el proyecto lo solicite porque es un efecto de calidad, no un coste oculto.
+        public bool ScreenSpaceReflectionsEnabled { get; set; }
+        public int ScreenSpaceReflectionsQuality { get; set; } = 1;
         public int BloomQuality { get; set; } = 2;
         public int AmbientOcclusionQuality { get; set; } = 2;
         public float ShadowBias { get; set; } = 1f;

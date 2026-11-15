@@ -68,6 +68,7 @@ public sealed partial class ShaderCodeGenerator
         sb.AppendLine("uniform float u_CascadeSplit[5];");
         sb.AppendLine("uniform int u_ShadowPcfRadius;");
         sb.AppendLine("uniform float u_ShadowBiasScale;");
+        sb.AppendLine("uniform float u_ShadowNormalBias;");
         sb.AppendLine("uniform vec3 u_ShadowCameraPos;");
         if (_features.Contains("scenedepth"))
         {
@@ -171,6 +172,7 @@ public sealed partial class ShaderCodeGenerator
         sb.AppendLine("uniform float u_CascadeSplit[5];");
         sb.AppendLine("uniform int u_ShadowPcfRadius;");
         sb.AppendLine("uniform float u_ShadowBiasScale;");
+        sb.AppendLine("uniform float u_ShadowNormalBias;");
         sb.AppendLine("uniform vec3 u_ShadowCameraPos;");
         if (_features.Contains("scenedepth"))
         {

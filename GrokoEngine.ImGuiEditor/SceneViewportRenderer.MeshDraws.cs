@@ -537,6 +537,7 @@ internal sealed partial class SceneViewportRenderer
         SetIntUniform(solidUseSkinningLocation, 0);
         if (solidUseSurfaceUniformsLocation >= 0)
             GL.Uniform1(solidUseSurfaceUniformsLocation, 0);
+        DisableForwardLightmap();
         ApplyAlphaClipUniforms(false, 0.5f);
     }
 
@@ -560,6 +561,7 @@ internal sealed partial class SceneViewportRenderer
         SetVector4Uniform(solidSurfaceColorLocation, draw.Color);
         SetVector4Uniform(solidSurfaceMaterialLocation, draw.Material);
         SetVector4Uniform(solidSurfaceEmissionLocation, draw.Emission);
+        DisableForwardLightmap();
         ApplyAlphaClipUniforms(draw.AlphaClip, draw.AlphaClipThreshold);
     }
 
@@ -582,6 +584,7 @@ internal sealed partial class SceneViewportRenderer
             SetVector4Uniform(solidSurfaceEmissionLocation, draw.Emission);
             boundEmission = draw.Emission;
         }
+        DisableForwardLightmap();
     }
 
     private void ApplySkinnedSurfaceUniforms(SkinnedMeshDraw draw)
@@ -591,6 +594,7 @@ internal sealed partial class SceneViewportRenderer
         SetVector4Uniform(solidSurfaceColorLocation, draw.Color);
         SetVector4Uniform(solidSurfaceMaterialLocation, draw.Material);
         SetVector4Uniform(solidSurfaceEmissionLocation, draw.Emission);
+        DisableForwardLightmap();
         ApplyAlphaClipUniforms(draw.AlphaClip, draw.AlphaClipThreshold);
     }
 

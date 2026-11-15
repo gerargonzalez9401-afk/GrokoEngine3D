@@ -23,19 +23,19 @@ private readonly record struct TerrainTreePrototypeRenderData(string Path, Parse
     public bool IsValid => !string.IsNullOrWhiteSpace(Path) && Mesh != null && Mesh.Positions.Length > 0;
 }
 
-// Arboles plantados (Terrain.Trees): SIEMPRE por el pase dinÃ¡mico (ver BuildObjectRecursive),
-// nunca horneados en el batch estÃ¡tico â€” se encolan vÃ­a TryQueueDynamicMeshDraw, la misma cola
-// que usa cualquier malla dinÃ¡mica. Eso los hace elegibles para el instancing por GPU que ya
-// existe ahÃ­ (CanInstanceTogether agrupa por mesh+textura+color+material; todos los Ã¡rboles del
-// mismo prototipo comparten esos cuatro, asÃ­ que terminan en una sola llamada
-// glDrawArraysInstanced por prototipo en vez de un draw/triÃ¡ngulos sueltos por Ã¡rbol).
-// La altura de cada Ã¡rbol se resamplea del heightmap actual en cada frame, asÃ­ que si esculpÃ­s
-// el terreno despuÃ©s de plantar, los Ã¡rboles ya plantados "flotan" solos hasta la nueva altura.
-// CachÃ© de alturas muestreadas por instancia (Ã¡rboles y pasto): GetHeightLocal hace una
-// interpolaciÃ³n bilineal por llamada, y hacerla por Ã¡rbol/mata POR FRAME era el costo CPU
-// dominante con miles de instancias. La cachÃ© se invalida sola cuando cambia el heightmap
-// (Version) o la lista de instancias (Tree/DetailVersion) â€” durante una pincelada se recalcula
-// una vez por frame, que es exactamente lo que hacÃ­a antes en el peor caso.
+// Arboles plantados (Terrain.Trees): SIEMPRE por el pase dinámico (ver BuildObjectRecursive),
+// nunca horneados en el batch estático — se encolan vía TryQueueDynamicMeshDraw, la misma cola
+// que usa cualquier malla dinámica. Eso los hace elegibles para el instancing por GPU que ya
+// existe ahí (CanInstanceTogether agrupa por mesh+textura+color+material; todos los árboles del
+// mismo prototipo comparten esos cuatro, así que terminan en una sola llamada
+// glDrawArraysInstanced por prototipo en vez de un draw/triángulos sueltos por árbol).
+// La altura de cada árbol se resamplea del heightmap actual en cada frame, así que si esculpís
+// el terreno después de plantar, los árboles ya plantados "flotan" solos hasta la nueva altura.
+// Caché de alturas muestreadas por instancia (árboles y pasto): GetHeightLocal hace una
+// interpolación bilineal por llamada, y hacerla por árbol/mata POR FRAME era el costo CPU
+// dominante con miles de instancias. La caché se invalida sola cuando cambia el heightmap
+// (Version) o la lista de instancias (Tree/DetailVersion) — durante una pincelada se recalcula
+// una vez por frame, que es exactamente lo que hacía antes en el peor caso.
 private readonly Dictionary<string, (float[] Heights, int Version)> _terrainTreeHeightCache = new(StringComparer.OrdinalIgnoreCase);
 private readonly Dictionary<string, (float[] Heights, int Version)> _terrainDetailHeightCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -133,7 +133,7 @@ private void QueueTerrainTreeInstances(Terrain terrain, Matrix4 transform, Frust
         var treeHeights = GetTreeHeights(terrain);
 
         var tint = new Vector4(1f, 1f, 1f, 1f);
-        var material = new Vector4(0f, 0.5f, 1f, 1f); // metallic 0, roughness 0.5 por defecto
+        var material = new Vector4(0f, 0.5f, 3f, 0f); // metallic 0, roughness 0.5, flags PBR, sin transmisión
 
         foreach (var decision in lod.Decisions)
         {
@@ -211,10 +211,10 @@ private void QueueTerrainTreeInstances(Terrain terrain, Matrix4 transform, Frust
         }
     }
 
-// Detalles/pasto (Terrain.Details): siempre billboard, nunca malla â€” Unity's clÃ¡sico "Detail
-// Texture" tampoco tiene LOD de malla para pasto. Density Scale reduce cuÃ¡ntos de los plantados
-// se dibujan de verdad SIN borrar los datos pintados, usando un hash estable por Ã­ndice (no un
-// mÃ³dulo, para que el recorte no se vea como un patrÃ³n en grilla).
+// Detalles/pasto (Terrain.Details): siempre billboard, nunca malla — Unity's clásico "Detail
+// Texture" tampoco tiene LOD de malla para pasto. Density Scale reduce cuántos de los plantados
+// se dibujan de verdad SIN borrar los datos pintados, usando un hash estable por índice (no un
+// módulo, para que el recorte no se vea como un patrón en grilla).
 private static float StableUnitHash(int i)
     {
         uint x = (uint)i * 2654435761u;
@@ -279,11 +279,11 @@ private void QueueTerrainDetailInstances(Terrain terrain, Matrix4 transform, Fru
         }
     }
 
-// Encola un Ã¡rbol como billboard: quad plano, ancho X/Z tomado del bounding box de la malla real
+// Encola un árbol como billboard: quad plano, ancho X/Z tomado del bounding box de la malla real
 // (escalado por Scale de la instancia), anclado al piso, que rota SOLO en Y para mirar siempre
-// a cÃ¡mara (no billboard esfÃ©rico como las partÃ­culas). SimplificaciÃ³n deliberada respecto a
+// a cámara (no billboard esférico como las partículas). Simplificación deliberada respecto a
 // Unity: usa la MISMA textura del prototipo 3D directo sobre el quad, en vez de un snapshot
-// recortado horneado â€” mÃ¡s barato de implementar, algo menos fiel visualmente de cerca (que es
+// recortado horneado — más barato de implementar, algo menos fiel visualmente de cerca (que es
 // justo donde no se usa: los billboards solo aparecen lejos o fuera del ranking de malla).
 private void QueueTreeBillboard(Vector3 worldPos, MiMotor.Mathematics.Vector3 extent, Vector3 cameraPosition, ParsedMesh mesh)
     {
@@ -306,9 +306,9 @@ private void QueueTreeBillboard(Vector3 worldPos, MiMotor.Mathematics.Vector3 ex
         list.Add(new TreeBillboardInstance(worldPos, halfWidth, height, yaw, new Vector4(1f, 1f, 1f, 1f)));
     }
 
-// Dibuja los billboards acumulados este frame (Ã¡rboles fuera de rango de malla, o detalles/
-// pasto â€” siempre billboard), agrupados por textura â€” una llamada glDrawArraysInstanced por
-// textura distinta. MÃ©todo compartido: mismo shader/VAO para Ã¡rboles-billboard y detalles.
+// Dibuja los billboards acumulados este frame (árboles fuera de rango de malla, o detalles/
+// pasto — siempre billboard), agrupados por textura — una llamada glDrawArraysInstanced por
+// textura distinta. Método compartido: mismo shader/VAO para árboles-billboard y detalles.
 private void DrawTreeBillboardInstances(ref Matrix4 mvp, Dictionary<string, List<TreeBillboardInstance>> billboardsByTexture, float windStrength = 0f)
     {
         if (billboardsByTexture.Count == 0 || _treeBillboardShader == 0)
@@ -319,7 +319,7 @@ private void DrawTreeBillboardInstances(ref Matrix4 mvp, Dictionary<string, List
         GL.UniformMatrix4(_treeBillboardMvpLoc, true, ref mvp);
         GL.Uniform1(_treeBillboardTexLoc, 0);
         // Balanceo por viento (solo pasto): dobla la parte superior del quad con un seno
-        // desfasado por posiciÃ³n, para que no ondee todo el campo en fase.
+        // desfasado por posición, para que no ondee todo el campo en fase.
         GL.Uniform1(_treeBillboardWindLoc, windStrength);
         GL.Uniform1(_treeBillboardTimeLoc, (float)(Environment.TickCount64 % 1000000L) / 1000f);
         GL.BindVertexArray(_treeBillboardVao);
@@ -359,7 +359,7 @@ private void DrawTreeBillboardInstances(ref Matrix4 mvp, Dictionary<string, List
         GL.UseProgram(0);
     }
 
-// Resuelve un vecino por EditorId contra el Ã­ndice armado una vez por frame en Render(). Null si
+// Resuelve un vecino por EditorId contra el índice armado una vez por frame en Render(). Null si
 // no hay ID configurado o si el GameObject referenciado ya no existe/no tiene Terrain.
 private Terrain? ResolveTerrainNeighbor(string? neighborId) =>
     !string.IsNullOrEmpty(neighborId) && _terrainsByEditorId.TryGetValue(neighborId, out var neighbor) ? neighbor : null;
@@ -369,11 +369,11 @@ private void ApplyTerrainLighting(IReadOnlyList<GameObject> objects)
         var ambient = FindComponent<AmbientLight>(objects);
         var ambColor = ambient != null
             ? new Vector3(ambient.R, ambient.G, ambient.B)
-            : new Vector3(0.3f, 0.32f, 0.36f);
-        float ambIntensity = ambient?.Intensity ?? 0.22f;
+            : Vector3.Zero;
+        float ambIntensity = ambient?.Intensity ?? 0f;
         GL.Uniform3(terrainAmbientColorLocation, ambColor);
         GL.Uniform1(terrainAmbientIntensityLocation, ambIntensity);
-        GL.Uniform1(terrainSkyStrengthLocation, ambient?.SkyStrength ?? 0.08f);
+        GL.Uniform1(terrainSkyStrengthLocation, ambient?.SkyStrength ?? 0f);
 
         var dir = FindPrimaryDirectionalLight(objects);
         if (dir != null && dir.gameObject != null)
@@ -390,9 +390,9 @@ private void ApplyTerrainLighting(IReadOnlyList<GameObject> objects)
         }
     }
 
-// Mismo contrato de dirty-rect que el heightmap: si SplatVersion cambiÃ³ y hay regiÃ³n pendiente,
-// se sube solo ese rect con glTexSubImage2D (pintar a resoluciÃ³n 2049 costarÃ­a ~16 MB por frame
-// si se re-subiera entera); sin regiÃ³n (undo, carga, cambio de Resolution) se re-sube completa.
+// Mismo contrato de dirty-rect que el heightmap: si SplatVersion cambió y hay región pendiente,
+// se sube solo ese rect con glTexSubImage2D (pintar a resolución 2049 costaría ~16 MB por frame
+// si se re-subiera entera); sin región (undo, carga, cambio de Resolution) se re-sube completa.
 private int GetOrUpdateSplatTexture(GameObject obj, Terrain terrain)
     {
         int ownerHash = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(terrain);
@@ -449,23 +449,23 @@ private int GetOrUpdateSplatTexture(GameObject obj, Terrain terrain)
 
 private readonly record struct TreeBillboardInstance(Vector3 Center, float HalfWidth, float Height, float Yaw, Vector4 Color);
 
-// Shader instanciado para billboards de Ã¡rbol: quad unitario compartido (offset -0.5..0.5 en X,
-// 0..1 en Y anclado al piso), rotado SOLO en Y para mirar hacia la cÃ¡mara (no billboard esfÃ©rico
-// como las partÃ­culas) usando el yaw ya calculado en CPU por instancia.
+// Shader instanciado para billboards de árbol: quad unitario compartido (offset -0.5..0.5 en X,
+// 0..1 en Y anclado al piso), rotado SOLO en Y para mirar hacia la cámara (no billboard esférico
+// como las partículas) usando el yaw ya calculado en CPU por instancia.
 private static int CreateTreeBillboardShader()
     {
         const string vert = """
             #version 330 core
-            layout(location=0) in vec2  aUnitOffset;   // por-vÃ©rtice (divisor 0): x en -0.5..0.5, y en 0..1
-            layout(location=1) in vec2  aUnitUv;        // por-vÃ©rtice (divisor 0): 0..1
-            layout(location=2) in vec3  iCenter;        // por-instancia (divisor 1): base del Ã¡rbol, a nivel de piso
+            layout(location=0) in vec2  aUnitOffset;   // por-vértice (divisor 0): x en -0.5..0.5, y en 0..1
+            layout(location=1) in vec2  aUnitUv;        // por-vértice (divisor 0): 0..1
+            layout(location=2) in vec3  iCenter;        // por-instancia (divisor 1): base del árbol, a nivel de piso
             layout(location=3) in float iHalfWidth;
             layout(location=4) in float iHeight;
             layout(location=5) in float iYaw;
             layout(location=6) in vec4  iColor;
             uniform mat4 uMvp;
             uniform float uTime;
-            uniform float uWind;   // 0 = sin viento (Ã¡rboles); >0 dobla la copa del quad (pasto)
+            uniform float uWind;   // 0 = sin viento (árboles); >0 dobla la copa del quad (pasto)
             out vec4 vColor;
             out vec2 vUv;
             void main()

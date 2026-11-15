@@ -39,8 +39,7 @@ public static class EditorSettingsService
 
     public static void Save(EditorSettingsModel settings)
     {
-        Directory.CreateDirectory(SettingsDirectory);
-        File.WriteAllText(SettingsPath, JsonSerializer.Serialize(settings, Options));
+        AtomicFileWriter.WriteAllText(SettingsPath, JsonSerializer.Serialize(settings, Options));
     }
 
     public static void AddRecentFile(string path)

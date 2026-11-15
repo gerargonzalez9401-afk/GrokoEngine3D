@@ -11,6 +11,7 @@ internal sealed partial class SceneViewportRenderer
                 GL.DeleteTexture(texture);
         textureCache.Clear();
         textureFileTimeCache.Clear();
+        textureNextValidationTick.Clear();
         parsedMeshCache.Clear();
         ClearGpuMeshCache();
         ClearSkinnedGpuMeshCache();
@@ -45,7 +46,7 @@ internal sealed partial class SceneViewportRenderer
         if (_occVao != 0) GL.DeleteVertexArray(_occVao);
         if (_shadowArrayTex != 0) GL.DeleteTexture(_shadowArrayTex);
         if (_shadowFbo != 0) GL.DeleteFramebuffer(_shadowFbo);
-        if (_spotShadowTex != 0) GL.DeleteTexture(_spotShadowTex);
+        if (_spotShadowArrayTex != 0) GL.DeleteTexture(_spotShadowArrayTex);
         if (_spotShadowFbo != 0) GL.DeleteFramebuffer(_spotShadowFbo);
         if (_pointShadowCube != 0) GL.DeleteTexture(_pointShadowCube);
         if (_pointShadowFbo != 0) GL.DeleteFramebuffer(_pointShadowFbo);
@@ -53,6 +54,8 @@ internal sealed partial class SceneViewportRenderer
         ReleaseDeferredTargets();
         if (_gbufferShader != 0) GL.DeleteProgram(_gbufferShader);
         if (_deferredLightingShader != 0) GL.DeleteProgram(_deferredLightingShader);
+        if (_ssrShader != 0) GL.DeleteProgram(_ssrShader);
+        if (_ssgiShader != 0) GL.DeleteProgram(_ssgiShader);
         if (_deferredQuadVbo != 0) GL.DeleteBuffer(_deferredQuadVbo);
         if (_deferredQuadVao != 0) GL.DeleteVertexArray(_deferredQuadVao);
 

@@ -14,6 +14,8 @@ internal sealed partial class SceneViewportRenderer
     // inherentes. Los reflejos limpios los da el reflection probe (GGX). Queda como toggle por si
     // en el futuro se añade TAA/HiZ para dejarlo a nivel Unreal.
     public bool ScreenSpaceReflections { get; set; }
+    /// <summary>0=Low, 1=Medium, 2=High, 3=Ultra. SSR es siempre opcional.</summary>
+    public int ScreenSpaceReflectionQuality { get; set; } = 1;
 
     private int _ssrShader;
     private int _ssrSceneLoc, _ssrDepthLoc, _ssrNormalLoc, _ssrMaterialLoc;
@@ -82,11 +84,20 @@ internal sealed partial class SceneViewportRenderer
         GL.UniformMatrix4(_ssrViewProjLoc, true, ref viewProj);
         GL.Uniform3(_ssrCameraPosLoc, cameraPosition);
         GL.Uniform2(_ssrTexelLoc, 1f / Math.Max(1, width), 1f / Math.Max(1, height));
-        // Pasos más finos (menor distancia + más pasos) → reflejo sin escalonado/"picado".
-        GL.Uniform1(_ssrMaxDistanceLoc, 30f);
-        GL.Uniform1(_ssrThicknessLoc, 0.8f);
-        GL.Uniform1(_ssrStepsLoc, 140);        // marcheo muy fino → sin escalón ni necesidad de grano
-        GL.Uniform1(_ssrStrengthLoc, 1f);
+        // El SSR antiguo usaba 140 pasos en pantalla completa, incluso en calidad normal:
+        // penalizaba el frame antes de que el usuario lo hubiera elegido. Estos presupuestos
+        // escalan de forma deliberada; el probe/IBL llena los rayos que salen de la pantalla.
+        (float distance, float thickness, int steps, float strength) = Math.Clamp(ScreenSpaceReflectionQuality, 0, 3) switch
+        {
+            0 => (20f, 1.20f, 28, 0.70f),
+            1 => (30f, 0.95f, 40, 0.82f),
+            2 => (40f, 0.72f, 64, 0.94f),
+            _ => (50f, 0.60f, 96, 1.00f)
+        };
+        GL.Uniform1(_ssrMaxDistanceLoc, distance);
+        GL.Uniform1(_ssrThicknessLoc, thickness);
+        GL.Uniform1(_ssrStepsLoc, steps);
+        GL.Uniform1(_ssrStrengthLoc, strength);
 
         GL.BindVertexArray(_deferredQuadVao);
         GL.DrawArrays(PrimitiveType.Triangles, 0, 3);

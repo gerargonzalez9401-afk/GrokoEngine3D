@@ -700,7 +700,7 @@ private void SaveParticlePresetAsset(GrokoEngine.ParticleSystem ps)
             string baseName = SanitizeParticlePresetFileName(gameObjectNameFallback: "ParticlePreset");
             string path = UniqueParticlePresetPath(dir, baseName);
             var preset = new ParticlePresetFile(1, Path.GetFileNameWithoutExtension(path), CopyParticlePresetValues(ps));
-            File.WriteAllText(path, JsonSerializer.Serialize(preset, ParticleModuleClipboardJsonOptions));
+            AtomicFile.WriteAllText(path, JsonSerializer.Serialize(preset, ParticleModuleClipboardJsonOptions));
             particlePresetAssetPath = path;
             statusMessage = "Particle preset guardado: " + Path.GetFileName(path);
             InvalidateProjectFolderCache(dir);

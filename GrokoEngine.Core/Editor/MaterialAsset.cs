@@ -30,6 +30,7 @@ namespace GrokoEngine
         public float DistortionStrength { get; set; } = 0f;
         public bool SpecularHighlights { get; set; } = true;
         public bool EnvironmentReflections { get; set; } = true;
+        public float SubsurfaceScattering { get; set; } = 0f;
         public float EmissionR { get; set; } = 0f;
         public float EmissionG { get; set; } = 0f;
         public float EmissionB { get; set; } = 0f;
@@ -50,6 +51,7 @@ namespace GrokoEngine
             AlphaClipThreshold = Math.Max(0f, Math.Min(1f, AlphaClipThreshold));
             RefractionStrength = Math.Max(0f, Math.Min(1f, RefractionStrength));
             DistortionStrength = Math.Max(0f, Math.Min(1f, DistortionStrength));
+            SubsurfaceScattering = Math.Max(0f, Math.Min(1f, SubsurfaceScattering));
         }
     }
 
@@ -135,7 +137,7 @@ namespace GrokoEngine
             data.TexturePath = data.AlbedoPath;
             RelativizeAssetPaths(data, path);
             data.TexturePath = data.AlbedoPath;
-            File.WriteAllText(path, JsonSerializer.Serialize(data, Options));
+            AtomicFile.WriteAllText(path, JsonSerializer.Serialize(data, Options));
             EnsureMetaIfInsideAssets(path);
         }
 
@@ -163,6 +165,7 @@ namespace GrokoEngine
             mat.DistortionStrength = Clamp01(data.DistortionStrength);
             mat.SpecularHighlights = data.SpecularHighlights;
             mat.EnvironmentReflections = data.EnvironmentReflections;
+            mat.SubsurfaceScattering = Clamp01(data.SubsurfaceScattering);
             mat.EmissionR = Clamp01(data.EmissionR);
             mat.EmissionG = Clamp01(data.EmissionG);
             mat.EmissionB = Clamp01(data.EmissionB);
@@ -196,6 +199,7 @@ namespace GrokoEngine
                 DistortionStrength = material.DistortionStrength,
                 SpecularHighlights = material.SpecularHighlights,
                 EnvironmentReflections = material.EnvironmentReflections,
+                SubsurfaceScattering = material.SubsurfaceScattering,
                 EmissionR = material.EmissionR,
                 EmissionG = material.EmissionG,
                 EmissionB = material.EmissionB,
@@ -241,10 +245,10 @@ namespace GrokoEngine
         }
 
         private static string SerializeAssetPath(string? path, string? assetsRoot)
-            => AssetDatabase.SerializeReference(path, assetsRoot);
+            => AssetReferences.Serialize(path, assetsRoot);
 
         private static string ResolveAssetPath(string? path, string? assetsRoot)
-            => AssetDatabase.ResolveReference(path, assetsRoot) ?? "";
+            => AssetReferences.Resolve(path, assetsRoot) ?? "";
 
         private static string? InferAssetsRoot(string filePath)
         {
@@ -268,7 +272,7 @@ namespace GrokoEngine
             if (string.IsNullOrWhiteSpace(assetsRoot) || !File.Exists(path))
                 return;
 
-            AssetDatabase.Get(assetsRoot).GetOrCreateGuid(path);
+            AssetReferences.GetOrCreateGuid(path);
         }
 
         private static string GetUniquePath(string desiredPath)

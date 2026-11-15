@@ -19,7 +19,7 @@ internal sealed partial class SceneViewportRenderer
     public float SunContactShadowLength { get; private set; }
     public int SunContactShadowSamples { get; private set; }
 
-    private void ComputeSunScreenPosition(IReadOnlyList<GameObject> objects, Vector3 eye, Matrix4 mvp, Vector3 camFront)
+    private void ComputeSunScreenPosition(IReadOnlyList<GameObject> objects, Vector3 eye, Matrix4 mvp, Vector3 camFront, float farClip)
     {
         SunGodRaysActive = false;
         SunContactShadowsActive = false;
@@ -30,11 +30,15 @@ internal sealed partial class SceneViewportRenderer
         Vector3 sunSky = (ToTk(sun.GetNormalizedDirection()).Normalized() * -1f);
         if (Vector3.Dot(sunSky, camFront.Normalized()) <= 0.05f)
             return;
-        var clip = new Vector4(eye + sunSky * 100000f, 1f) * mvp;
+        // No proyectar el sol a una distancia arbitraria de 100 km: con una cámara de far clip
+        // corto se sale de precisión y el origen de los rayos se desfasaba respecto al viewport.
+        float sunProjectionDistance = Math.Clamp(Math.Max(1f, farClip) * 0.5f, 10f, 5000f);
+        var clip = new Vector4(eye + sunSky * sunProjectionDistance, 1f) * mvp;
         if (clip.W <= 0.0001f)
             return;
         SunScreenUv = new Vector2((clip.X / clip.W) * 0.5f + 0.5f, (clip.Y / clip.W) * 0.5f + 0.5f);
-        if (sun.GodRays)
+        bool rayOriginVisible = SunScreenUv.X >= -0.05f && SunScreenUv.X <= 1.05f && SunScreenUv.Y >= -0.05f && SunScreenUv.Y <= 1.05f;
+        if (sun.GodRays && rayOriginVisible)
         {
             SunGodRaysActive = true;
             SunGodRaysStrength = sun.GodRaysStrength;
@@ -57,9 +61,12 @@ internal sealed partial class SceneViewportRenderer
         _frameAmbient = FindComponent<AmbientLight>(objects);
         _framePostProcess = FindComponent<PostProcessSettings>(objects);
         _frameDir = FindPrimaryDirectionalLight(objects);
+        if (_frameDir is { Mode: LightMode.Mixed, ShadowmaskBakedFallback: true })
+            _frameDir = null;
 
         _framePointLights.Clear();
         CollectComponents(objects, _framePointLights, int.MaxValue);
+        _framePointLights.RemoveAll(light => light.Mode == LightMode.Baked || (light.Mode == LightMode.Mixed && light.ShadowmaskBakedFallback));
         bool highLightBudget = RenderingPath == RendererRenderingPath.ForwardPlus || RenderingPath == RendererRenderingPath.Deferred;
         int pointBudget = highLightBudget ? MaxPointLights : Math.Min(4, MaxPointLights);
         int spotBudget = highLightBudget ? MaxSpotLights : Math.Min(2, MaxSpotLights);
@@ -67,6 +74,7 @@ internal sealed partial class SceneViewportRenderer
         TrimLightsByImportance(_framePointLights, pointBudget, cameraPosition, l => l.Intensity, l => l.Range);
         _frameSpotLights.Clear();
         CollectComponents(objects, _frameSpotLights, int.MaxValue);
+        _frameSpotLights.RemoveAll(light => light.Mode == LightMode.Baked || (light.Mode == LightMode.Mixed && light.ShadowmaskBakedFallback));
         TrimLightsByImportance(_frameSpotLights, spotBudget, cameraPosition, l => l.Intensity, l => l.Range);
         _frameAreaLights.Clear();
         CollectComponents(objects, _frameAreaLights, int.MaxValue);
@@ -88,16 +96,22 @@ internal sealed partial class SceneViewportRenderer
 
         // Ambient
         var ambient = _frameAmbient;
+        // Un entorno sin Ambient Light, HDRI ni cielo no aporta iluminación. El relleno
+        // gris anterior hacía que una habitación cerrada siguiese visible al apagar luces.
         var ambColor = ambient != null
             ? new Vector3(ambient.R, ambient.G, ambient.B)
-            : new Vector3(0.3f, 0.32f, 0.36f);
-        float ambIntensity = ambient?.Intensity ?? 0.22f;
+            : Vector3.Zero;
+        float ambIntensity = ambient?.Intensity ?? 0f;
         // Indirect Multiplier del sol: su luz de rebote escala el fill ambiente (aprox. de GI).
         if (_frameDir != null) ambIntensity *= _frameDir.IndirectMultiplier;
         GL.Uniform3(uAmbientColor, ambColor);
         GL.Uniform1(uAmbientIntensity, ambIntensity);
-        GL.Uniform1(uSkyStrength, ambient?.SkyStrength ?? 0.08f);
+        GL.Uniform1(uSkyStrength, ambient?.SkyStrength ?? 0f);
         GL.Uniform3(uCameraPos, cameraPosition);
+        GL.Uniform1(solidMixedLightingModeLocation, (int)MixedLightingMode);
+        GL.Uniform1(solidDistanceShadowmaskLocation, DistanceShadowmask ? 1 : 0);
+        GL.Uniform1(solidShadowmaskDistanceLocation, Math.Clamp(ShadowmaskDistance, 1f, 500f));
+        GL.Uniform1(solidShadowmaskDistanceFadeLocation, Math.Clamp(ShadowmaskDistanceFade, 0.01f, Math.Max(ShadowmaskDistance, 0.01f)));
 
         var pp = _framePostProcess;
         bool ppEnabled = pp?.Enabled ?? false;
@@ -148,7 +162,7 @@ internal sealed partial class SceneViewportRenderer
             if (EnvironmentMode == EnvironmentMode.ProceduralSky)
                 UpdateProceduralSkyAmbient(_frameDir);
             else
-                _flatAmbientColor = new Vector3(0.3f, 0.32f, 0.36f);
+                _flatAmbientColor = Vector3.Zero;
             GL.Uniform1(uHasEnvMap, 0);
             GL.Uniform3(uEnvDiffuseColor, _flatAmbientColor);
             GL.Uniform1(uUseEnvSh, 0);
@@ -157,6 +171,8 @@ internal sealed partial class SceneViewportRenderer
         GL.Uniform1(uAoStrength, 0f);
         GL.Uniform1(uFogDensity, ppEnabled && pp!.Fog ? pp.FogDensity : 0f);
         GL.Uniform3(uFogColor, ppEnabled ? new Vector3(pp!.FogR, pp.FogG, pp.FogB) : new Vector3(0.48f, 0.58f, 0.68f));
+        GL.Uniform1(uFogHeight, ppEnabled && pp!.Fog ? pp.FogHeight : 0f);
+        GL.Uniform1(uFogHeightFalloff, ppEnabled && pp!.Fog ? Math.Clamp(pp.FogHeightFalloff, 0f, 4f) : 0f);
         GL.Uniform1(uVolumetricStrength, ppEnabled ? pp!.VolumetricLightStrength : 0f);
         GL.Uniform1(uDebugView, DebugView);
 
@@ -167,6 +183,7 @@ internal sealed partial class SceneViewportRenderer
             GL.Uniform3(uDirDir, ToTk(dir.GetNormalizedDirection()).Normalized());
             GL.Uniform3(uDirColor, ToTk(dir.GetEffectiveColor()));   // Filter * temperatura (Kelvin)
             GL.Uniform1(uDirIntensity, dir.Intensity);
+            GL.Uniform1(solidDirShadowmaskChannelLocation, dir.Mode == LightMode.Mixed ? dir.ShadowmaskChannel : -1);
         }
         else
         {
@@ -174,6 +191,7 @@ internal sealed partial class SceneViewportRenderer
             GL.Uniform3(uDirDir, new Vector3(0f, -1f, 0f));
             GL.Uniform3(uDirColor, Vector3.Zero);
             GL.Uniform1(uDirIntensity, 0f);
+            GL.Uniform1(solidDirShadowmaskChannelLocation, -1);
         }
 
         GL.Uniform1(uPointCount, _framePointLights.Count);
@@ -185,6 +203,7 @@ internal sealed partial class SceneViewportRenderer
             GL.Uniform3(uPointColor[i], ToTk(pl.GetEffectiveColor()));
             GL.Uniform1(uPointIntensity[i], pl.Intensity);
             GL.Uniform1(uPointRange[i], pl.Range);
+            GL.Uniform1(solidPointShadowmaskChannelLocations[i], pl.Mode == LightMode.Mixed ? pl.ShadowmaskChannel : -1);
         }
 
         GL.Uniform1(uSpotCount, _frameSpotLights.Count);
@@ -199,6 +218,17 @@ internal sealed partial class SceneViewportRenderer
             GL.Uniform1(uSpotIntensity[i], sl.Intensity);
             GL.Uniform1(uSpotRange[i], sl.Range);
             GL.Uniform1(uSpotAngle[i], MathHelper.DegreesToRadians(sl.Angle));
+            GL.Uniform1(solidSpotShadowmaskChannelLocations[i], sl.Mode == LightMode.Mixed ? sl.ShadowmaskChannel : -1);
+            int shadowSlot = -1;
+            for (int slot = 0; slot < MaxSpotLights; slot++)
+            {
+                if (ReferenceEquals(_cachedSpotShadowLights[slot], sl))
+                {
+                    shadowSlot = slot;
+                    break;
+                }
+            }
+            GL.Uniform1(uSpotShadowSlotLocations[i], shadowSlot);
         }
         ApplySpotCookiesAndIes();
         ApplyPointIesArray();
@@ -218,78 +248,93 @@ internal sealed partial class SceneViewportRenderer
         }
     }
 
+    private int ResolvePointShadowLightIndex(PointShadowInfo pointShadow)
+    {
+        if (!pointShadow.Enabled || pointShadow.Light == null)
+            return -1;
+
+        return _framePointLights.IndexOf(pointShadow.Light);
+    }
+
     private void ApplyActiveReflectionProbe(Vector3 cameraPosition)
     {
         _activeReflectionProbeCubemapPath = null;
         _activeReflectionProbeTexture = 0;
         _activeReflectionProbeMaxLod = 0f;
+        var (primary, secondary) = SelectReflectionProbes(cameraPosition);
+        if (primary is { } probe)
+        {
+            _activeReflectionProbeCubemapPath = NormalizeExistingAssetPath(probe.Probe.EffectiveCubemapPath) ?? probe.Probe.EffectiveCubemapPath;
+            _activeReflectionProbeTexture = probe.Texture;
+            _activeReflectionProbeMaxLod = probe.MaxLod;
+        }
 
-        ReflectionProbe? best = null;
-        Vector3 bestCenter = Vector3.Zero;
-        Vector3 bestHalfSize = Vector3.One;
-        float bestScore = float.NegativeInfinity;
+        UploadReflectionProbe(primary, 10,
+            uActiveReflectionProbeMap, uHasActiveReflectionProbeMap, uActiveReflectionProbeMaxLod,
+            uActiveReflectionProbeCenter, uActiveReflectionProbeHalfSize, uActiveReflectionProbeBlendDistance,
+            uActiveReflectionProbeIntensity, uActiveReflectionProbeBoxProjection);
+        UploadReflectionProbe(secondary, 14,
+            uSecondaryReflectionProbeMap, uHasSecondaryReflectionProbeMap, uSecondaryReflectionProbeMaxLod,
+            uSecondaryReflectionProbeCenter, uSecondaryReflectionProbeHalfSize, uSecondaryReflectionProbeBlendDistance,
+            uSecondaryReflectionProbeIntensity, uSecondaryReflectionProbeBoxProjection);
+    }
+
+    private readonly record struct ReflectionProbeBinding(ReflectionProbe Probe, Vector3 Center, Vector3 HalfSize, int Texture, float MaxLod);
+
+    // Selección CPU estable (importance y proximidad) + mezcla GPU por píxel. Dos cubemaps son
+    // suficientes para cruzar puertas y solapamientos sin el coste/limite de samplers de una lista
+    // arbitraria; el peso final sigue dependiendo de cada volumen, no de la cámara.
+    private (ReflectionProbeBinding? Primary, ReflectionProbeBinding? Secondary) SelectReflectionProbes(Vector3 cameraPosition)
+    {
+        ReflectionProbeBinding? primary = null, secondary = null;
+        float primaryScore = float.NegativeInfinity, secondaryScore = float.NegativeInfinity;
 
         foreach (var probe in _frameReflectionProbes)
         {
-            if (probe == null || !probe.Enabled || probe.gameObject == null)
+            if (probe == null || !probe.Enabled || probe.gameObject == null || string.IsNullOrWhiteSpace(probe.EffectiveCubemapPath))
+                continue;
+            if (!TryGetReflectionProbeCubeTexture(probe.EffectiveCubemapPath, out int texture, out float maxLod))
                 continue;
 
-            string path = probe.EffectiveCubemapPath;
-            if (string.IsNullOrWhiteSpace(path))
-                continue;
-
-            var probePos = ComputeWorldPosition(probe.gameObject);
-            var center = new Vector3(probePos.X + probe.CenterX, probePos.Y + probe.CenterY, probePos.Z + probe.CenterZ);
-            var half = new Vector3(
+            Vector3 position = ComputeWorldPosition(probe.gameObject);
+            Vector3 center = new(position.X + probe.CenterX, position.Y + probe.CenterY, position.Z + probe.CenterZ);
+            Vector3 halfSize = new(
                 MathF.Max(0.01f, probe.SizeX) * 0.5f,
                 MathF.Max(0.01f, probe.SizeY) * 0.5f,
                 MathF.Max(0.01f, probe.SizeZ) * 0.5f);
-
-            // Primera version pro: un probe activo por frame. Se prioriza el probe de
-            // mayor Importance y, en empate, el mas cercano a la camara. La influencia
-            // visual NO es global: el shader la calcula por pixel dentro del volumen.
-            float distance = (cameraPosition - center).Length;
-            float priority = probe.Importance * 1000f;
-            float score = priority - distance * 0.01f;
-            if (score > bestScore)
+            float score = probe.Importance * 1000f - (cameraPosition - center).Length * 0.01f;
+            var candidate = new ReflectionProbeBinding(probe, center, halfSize, texture, maxLod);
+            if (score > primaryScore)
             {
-                best = probe;
-                bestCenter = center;
-                bestHalfSize = half;
-                bestScore = score;
+                secondary = primary;
+                secondaryScore = primaryScore;
+                primary = candidate;
+                primaryScore = score;
+            }
+            else if (score > secondaryScore)
+            {
+                secondary = candidate;
+                secondaryScore = score;
             }
         }
+        return (primary, secondary);
+    }
 
-        if (best != null && TryGetReflectionProbeCubeTexture(best.EffectiveCubemapPath, out int tex, out float maxLod))
-        {
-            _activeReflectionProbeCubemapPath = NormalizeExistingAssetPath(best.EffectiveCubemapPath) ?? best.EffectiveCubemapPath;
-            _activeReflectionProbeTexture = tex;
-            _activeReflectionProbeMaxLod = maxLod;
-
-            GL.ActiveTexture(TextureUnit.Texture10);
-            GL.BindTexture(TextureTarget.TextureCubeMap, tex);
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.Uniform1(uActiveReflectionProbeMap, 10);
-            GL.Uniform1(uHasActiveReflectionProbeMap, 1);
-            GL.Uniform1(uActiveReflectionProbeMaxLod, maxLod);
-            GL.Uniform3(uActiveReflectionProbeCenter, bestCenter);
-            GL.Uniform3(uActiveReflectionProbeHalfSize, bestHalfSize);
-            GL.Uniform1(uActiveReflectionProbeBlendDistance, MathF.Max(0.001f, best.BlendDistance));
-            GL.Uniform1(uActiveReflectionProbeIntensity, Math.Clamp(best.Intensity, 0f, 2f));
-        }
-        else
-        {
-            GL.ActiveTexture(TextureUnit.Texture10);
-            GL.BindTexture(TextureTarget.TextureCubeMap, 0);
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.Uniform1(uActiveReflectionProbeMap, 10);
-            GL.Uniform1(uHasActiveReflectionProbeMap, 0);
-            GL.Uniform1(uActiveReflectionProbeMaxLod, 0f);
-            GL.Uniform3(uActiveReflectionProbeCenter, Vector3.Zero);
-            GL.Uniform3(uActiveReflectionProbeHalfSize, Vector3.One);
-            GL.Uniform1(uActiveReflectionProbeBlendDistance, 0.001f);
-            GL.Uniform1(uActiveReflectionProbeIntensity, 0f);
-        }
+    private static void UploadReflectionProbe(ReflectionProbeBinding? binding, int textureUnit,
+        int mapLocation, int hasMapLocation, int maxLodLocation, int centerLocation, int halfSizeLocation,
+        int blendDistanceLocation, int intensityLocation, int boxProjectionLocation)
+    {
+        GL.ActiveTexture((TextureUnit)((int)TextureUnit.Texture0 + textureUnit));
+        GL.BindTexture(TextureTarget.TextureCubeMap, binding?.Texture ?? 0);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.Uniform1(mapLocation, textureUnit);
+        GL.Uniform1(hasMapLocation, binding.HasValue ? 1 : 0);
+        GL.Uniform1(maxLodLocation, binding?.MaxLod ?? 0f);
+        GL.Uniform3(centerLocation, binding?.Center ?? Vector3.Zero);
+        GL.Uniform3(halfSizeLocation, binding?.HalfSize ?? Vector3.One);
+        GL.Uniform1(blendDistanceLocation, binding.HasValue ? MathF.Max(0.001f, binding.Value.Probe.BlendDistance) : 0.001f);
+        GL.Uniform1(intensityLocation, binding.HasValue ? Math.Clamp(binding.Value.Probe.Intensity, 0f, 2f) : 0f);
+        GL.Uniform1(boxProjectionLocation, binding.HasValue && binding.Value.Probe.BoxProjection ? 1 : 0);
     }
 
     private void UploadAreaLight(int index, GameObject? obj, float r, float g, float b, float intensity, float range, float width, float height)

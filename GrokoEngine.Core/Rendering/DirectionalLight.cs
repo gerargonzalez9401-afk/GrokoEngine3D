@@ -3,6 +3,27 @@ using System;
 
 namespace GrokoEngine
 {
+    // Modo de la luz, estilo Unity. Realtime: se calcula cada frame. Mixed: directo en tiempo real
+    // + indirecto/sombras lejanas horneadas. Baked: todo horneado. (Mixed/Baked se implementarán
+    // con el sistema de lightmaps; por ahora el render los trata como Realtime.)
+    public enum LightMode
+    {
+        Realtime = 0,
+        Mixed = 1,
+        Baked = 2
+    }
+
+    /// <summary>
+    /// Política global para las luces Mixed. El valor se guarda en Lighting Settings y lo
+    /// consumen tanto Forward como Deferred; no debe depender de qué cámara esté activa.
+    /// </summary>
+    public enum MixedLightingMode
+    {
+        BakedIndirect = 0,
+        Shadowmask = 1,
+        Subtractive = 2
+    }
+
     // =====================================================
     // DIRECTIONAL LIGHT
     // =====================================================
@@ -10,12 +31,36 @@ namespace GrokoEngine
     {
         public Vector3 Direction     { get; set; } = new Vector3(0.5f, -1.0f, 0.5f);
         public float   Intensity     { get; set; } = 1.0f;
+        // Dirección LOCAL del haz. Con UseTransformRotation activo se rota por el Transform
+        // mundial del GameObject, igual que una Directional Light de un motor profesional.
+        // Esto permite orientar el sol desde el gizmo sin editar un vector a mano.
+        public bool    UseTransformRotation { get; set; } = true;
         // Color canónico via R, G, B — un solo set de propiedades, sin redundancia
         public float   R             { get; set; } = 1.0f;
         public float   G             { get; set; } = 1.0f;
         public float   B             { get; set; } = 1.0f;
         public bool    Shadows       { get; set; } = false;
         public float   ShadowStrength{ get; set; } = 0.55f;
+
+        // ── Light Mode (estilo Unity): Realtime / Mixed / Baked. ──
+        public LightMode Mode { get; set; } = LightMode.Realtime;
+        // Canal RGBA asignado durante el Bake de Shadowmask; -1 si no participa.
+        public int ShadowmaskChannel { get; set; } = -1;
+        // Si más de cuatro luces Mixed se solapan, el baker convierte el excedente en
+        // directo baked. Conserva Mode=Mixed en el inspector y evita una luz realtime
+        // sin canal de máscara.
+        public bool ShadowmaskBakedFallback { get; set; }
+
+        // ── Bias de sombra por-luz (estilo Unity) ──
+        // Bias: empuja la profundidad de la sombra para evitar "shadow acne" (auto-sombreado).
+        // Normal Bias: desplaza el muestreo a lo largo de la normal para reducir el acne en
+        // superficies inclinadas sin causar "peter-panning" (sombra despegada del objeto).
+        private float _shadowBias = 0.05f;
+        public float ShadowBias { get => _shadowBias; set => _shadowBias = Math.Clamp(value, 0f, 2f); }
+        private float _shadowNormalBias = 0.4f;
+        public float ShadowNormalBias { get => _shadowNormalBias; set => _shadowNormalBias = Math.Clamp(value, 0f, 3f); }
+        private float _shadowNearPlane = 0.2f;
+        public float ShadowNearPlane { get => _shadowNearPlane; set => _shadowNearPlane = Math.Clamp(value, 0.01f, 10f); }
 
         // ── Light Appearance (estilo Unity): Filter (R,G,B) + Temperatura de color ──
         public bool    UseTemperature { get; set; } = false;
@@ -87,16 +132,34 @@ namespace GrokoEngine
                 Math.Clamp(b, 0f, 255f) / 255f);
         }
 
-        /// <summary>Devuelve la dirección normalizada. Si es vector cero retorna (0,-1,0).</summary>
+        /// <summary>
+        /// Devuelve la dirección mundial normalizada. La Direction es local cuando
+        /// UseTransformRotation está activo; la posición del objeto no afecta a un sol,
+        /// pero sí su rotación (rayos paralelos, como Unity).
+        /// </summary>
         public Vector3 GetNormalizedDirection()
         {
             float len = MathF.Sqrt(
                 Direction.X * Direction.X +
                 Direction.Y * Direction.Y +
                 Direction.Z * Direction.Z);
-            return len < 0.0001f
+            var local = len < 0.0001f
                 ? new Vector3(0f, -1f, 0f)
                 : Direction.Normalized();
+
+            if (!UseTransformRotation || gameObject == null)
+                return local;
+
+            // WorldMatrix incluye también la rotación de padres. Usamos solo su bloque 3x3;
+            // normalizar el resultado descarta escala para que una escala no deforme el ángulo
+            // solar. System.Numerics usa vectores fila, de ahí la disposición M11/M21/M31.
+            var m = gameObject.WorldMatrix;
+            var world = new Vector3(
+                local.X * m.M11 + local.Y * m.M21 + local.Z * m.M31,
+                local.X * m.M12 + local.Y * m.M22 + local.Z * m.M32,
+                local.X * m.M13 + local.Y * m.M23 + local.Z * m.M33);
+            float worldLength = MathF.Sqrt(world.X * world.X + world.Y * world.Y + world.Z * world.Z);
+            return worldLength < 0.0001f ? local : world / worldLength;
         }
     }
 
@@ -105,6 +168,11 @@ namespace GrokoEngine
     // =====================================================
     public class PointLight : Component
     {
+        // Igual que Unity: Realtime queda sólo en GPU, Mixed aparece en GPU y en el bake,
+        // Baked se guarda en el lightmap y deja de sumar cada frame.
+        public LightMode Mode { get; set; } = LightMode.Realtime;
+        public int ShadowmaskChannel { get; set; } = -1;
+        public bool ShadowmaskBakedFallback { get; set; }
         public float Intensity      { get; set; } = 1.0f;
         private float _range = 6.0f;
         public float Range
@@ -143,6 +211,9 @@ namespace GrokoEngine
     // =====================================================
     public class SpotLight : Component
     {
+        public LightMode Mode { get; set; } = LightMode.Realtime;
+        public int ShadowmaskChannel { get; set; } = -1;
+        public bool ShadowmaskBakedFallback { get; set; }
         public float   Intensity     { get; set; } = 1.0f;
         private float _range = 8.0f;
         public float Range
@@ -299,6 +370,16 @@ namespace GrokoEngine
         // 0 = ACES (filmico clasico), 1 = AgX (moderno, mejor con colores saturados/brillantes).
         public int   ToneMappingMode          { get; set; } = 0;
 
+        // ── Auto Exposure / cámara física ──
+        // La exposición se obtiene de la luminancia HDR y se adapta con historial GPU.
+        // Los límites están en EV relativos (multiplicadores exp2) para no reventar la
+        // imagen al mirar una luz o entrar en una habitación oscura.
+        public bool AutoExposure { get; set; } = false;
+        public float AutoExposureMinEV { get; set; } = -4f;
+        public float AutoExposureMaxEV { get; set; } = 4f;
+        public float AutoExposureCompensation { get; set; } = 0f;
+        public float AutoExposureAdaptationSpeed { get; set; } = 1.5f;
+
         // ── White Balance (aplicado en HDR antes del tonemap) ──
         private float _whiteBalanceTemp;
         public float WhiteBalanceTemperature { get => _whiteBalanceTemp; set => _whiteBalanceTemp = Math.Clamp(value, -100f, 100f); }
@@ -436,6 +517,16 @@ namespace GrokoEngine
         public float FogR { get; set; } = 0.48f;
         public float FogG { get; set; } = 0.58f;
         public float FogB { get; set; } = 0.68f;
+        // Niebla exponencial por altura. Falloff 0 conserva el comportamiento uniforme
+        // de escenas antiguas; valores 0.05–0.35 concentran la atmósfera cerca del suelo.
+        public float FogHeight { get; set; } = 0f;
+        public float FogHeightFalloff { get; set; } = 0f;
         public float VolumetricLightStrength { get; set; } = 0.12f;
+
+        // Rebote difuso en pantalla para Deferred. No sustituye lightmaps/probes: añade el
+        // detalle de contacto que el entorno estático no puede conocer (color bleeding local).
+        public bool ScreenSpaceGlobalIllumination { get; set; } = false;
+        public float ScreenSpaceGiIntensity { get; set; } = 0.22f;
+        public float ScreenSpaceGiRadius { get; set; } = 1.2f;
     }
 }

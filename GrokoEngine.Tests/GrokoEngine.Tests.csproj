@@ -10,6 +10,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\GrokoEngine.Core\GrokoEngine.Core.csproj" />
+    <ProjectReference Include="..\GrokoEngine.Assets\GrokoEngine.Assets.csproj" />
+    <ProjectReference Include="..\GrokoEngine.Scripting\GrokoEngine.Scripting.csproj" />
     <ProjectReference Include="..\GrokoEngine.ShaderGraph\GrokoEngine.ShaderGraph.csproj" />
   </ItemGroup>
 

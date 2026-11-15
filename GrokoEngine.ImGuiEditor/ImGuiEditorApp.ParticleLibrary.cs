@@ -174,7 +174,7 @@ internal sealed partial class ImGuiEditorApp
         string outputName = SanitizeUnityVfxPresetName(prefabName);
         string path = Path.Combine(targetDir, outputName + ".particlepreset");
         var file = new ParticlePresetFile(3, outputName, CopyParticlePresetValues(ps));
-        File.WriteAllText(path, JsonSerializer.Serialize(file, ParticleModuleClipboardJsonOptions));
+        AtomicFile.WriteAllText(path, JsonSerializer.Serialize(file, ParticleModuleClipboardJsonOptions));
 
         string fireSize = prefabName.Contains("Small", StringComparison.OrdinalIgnoreCase) ? "Small"
             : prefabName.Contains("Medium", StringComparison.OrdinalIgnoreCase) ? "Medium"
@@ -209,7 +209,7 @@ internal sealed partial class ImGuiEditorApp
             ["AudioClip"] = audioPath,
             ["Usage"] = "Add AudioSource to the same GameObject and assign this .wav for looping fire ambience."
         };
-        File.WriteAllText(path, JsonSerializer.Serialize(hint, new JsonSerializerOptions { WriteIndented = true }));
+        AtomicFile.WriteAllText(path, JsonSerializer.Serialize(hint, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private static void ApplyUnityVfxPrefabPreset(GrokoEngine.ParticleSystem ps, string prefabName, string yaml, string textureDir)
@@ -397,7 +397,7 @@ internal sealed partial class ImGuiEditorApp
             ps.TexturePath = texturePath;
 
         var file = new ParticlePresetFile(2, preset.FileName, CopyParticlePresetValues(ps));
-        File.WriteAllText(path, JsonSerializer.Serialize(file, ParticleModuleClipboardJsonOptions));
+        AtomicFile.WriteAllText(path, JsonSerializer.Serialize(file, ParticleModuleClipboardJsonOptions));
         return path;
     }
 

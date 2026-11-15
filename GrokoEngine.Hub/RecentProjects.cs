@@ -48,14 +48,20 @@ public static class RecentProjects
                     return list.OrderByDescending(p => p.LastOpened).ToList();
             }
         }
-        catch { /* archivo corrupto: empezar limpio */ }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"No se pudo leer la lista de proyectos recientes: {ex.Message}");
+        }
         return new List<ProjectEntry>();
     }
 
     public static void Save(List<ProjectEntry> projects)
     {
-        try { File.WriteAllText(StorePath, JsonSerializer.Serialize(projects, JsonOptions)); }
-        catch { /* sin permisos de escritura: ignorar */ }
+        try { AtomicFileWriter.WriteAllText(StorePath, JsonSerializer.Serialize(projects, JsonOptions)); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"No se pudo guardar la lista de proyectos recientes: {ex.Message}");
+        }
     }
 
     /// <summary>Añade el proyecto o refresca su fecha si ya estaba. Persiste y devuelve la lista ordenada.</summary>

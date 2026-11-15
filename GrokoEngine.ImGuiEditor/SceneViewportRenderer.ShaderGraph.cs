@@ -56,6 +56,7 @@ internal sealed partial class SceneViewportRenderer
         public int CascadeCountLocation = -1;
         public int ShadowPcfRadiusLocation = -1;
         public int ShadowBiasScaleLocation = -1;
+        public int ShadowNormalBiasLocation = -1;
         public int ShadowCameraPosLocation = -1;
         public int[] CascadeLightMvpLocations = new int[5];
         public int[] CascadeSplitLocations = new int[5];
@@ -438,7 +439,8 @@ void main()
         SetIntUniform(entry.CascadeCountLocation, shadow.CascadeCount);
         SetIntUniform(entry.ShadowPcfRadiusLocation, ShadowPcfRadiusFor(_shadowQuality));
         SetUniformIfPresent(entry.ShadowStrengthLocation, shadow.Strength);
-        SetUniformIfPresent(entry.ShadowBiasScaleLocation, Math.Clamp(ShadowBias, 0.1f, 4f));
+        SetUniformIfPresent(entry.ShadowBiasScaleLocation, EffectiveShadowBiasScale());
+        SetUniformIfPresent(entry.ShadowNormalBiasLocation, _frameDir != null ? _frameDir.ShadowNormalBias : 0f);
         if (entry.ShadowCameraPosLocation >= 0)
             GL.Uniform3(entry.ShadowCameraPosLocation, shadow.CameraPosition);
 
@@ -691,6 +693,7 @@ void main()
         entry.CascadeCountLocation = GL.GetUniformLocation(entry.Program, "u_CascadeCount");
         entry.ShadowPcfRadiusLocation = GL.GetUniformLocation(entry.Program, "u_ShadowPcfRadius");
         entry.ShadowBiasScaleLocation = GL.GetUniformLocation(entry.Program, "u_ShadowBiasScale");
+        entry.ShadowNormalBiasLocation = GL.GetUniformLocation(entry.Program, "u_ShadowNormalBias");
         entry.ShadowCameraPosLocation = GL.GetUniformLocation(entry.Program, "u_ShadowCameraPos");
         for (int c = 0; c < 5; c++)
         {
@@ -730,7 +733,7 @@ void main()
     private static bool IsShaderGraphEngineUniform(string name)
             => name is "u_Time" or "u_Resolution" or "u_CameraPos" or "u_LightDir" or "u_LightColor"
                 or "u_LightIntensity" or "u_CameraNear" or "u_CameraFar" or "u_ColorSpaceLinear"
-                or "u_ShadowStrength" or "u_ShadowBiasScale" or "u_ShadowCameraPos";
+                or "u_ShadowStrength" or "u_ShadowBiasScale" or "u_ShadowNormalBias" or "u_ShadowCameraPos";
 
     private void BindShaderGraphSamplers(ShaderGraphMaterialEntry entry, IReadOnlyDictionary<string, string>? overrides)
     {

@@ -294,6 +294,9 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private readonly List<ViewportResolutionPreset> viewportResolutionPresets = new();
     private string viewportResolutionPresetKey = "free";
     private float renderScale = 1f;
+    // SMAA es la opción de calidad por defecto para el camino Deferred. FxaaEnabled
+    // se conserva para que las preferencias antiguas sigan cargando correctamente.
+    private CameraAntiAliasingMode postAntiAliasingMode = CameraAntiAliasingMode.SMAA;
     private bool fxaaEnabled = true;
     private string renderPipelineAssetName = "Groko Render Pipeline Asset";
     private string rendererDataName = "PC_Renderer";
@@ -313,6 +316,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private float ssaoRadius = 0.3f;
     private float ssaoFalloffDistance = 100f;
     private float ssaoDirectLightingStrength = 0.25f;
+    private bool screenSpaceReflectionsEnabled;
+    private int screenSpaceReflectionsQuality = 1;
     private int bloomQuality = 2;
     private int ambientOcclusionQuality = 2;
     private float shadowBias = 1f;
@@ -332,6 +337,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
     private EnvironmentMode environmentMode = EnvironmentMode.Hdri;
     private StaticHierarchyLodMode staticHierarchyLodMode = StaticHierarchyLodMode.Performance120;
     private readonly EditorProfiler profiler = new();
+    private GpuTimerQuery? sceneGpuTimer;
     private bool showProfiler;
     private bool consoleShowInfo = true;
     private bool consoleShowWarnings = true;
@@ -538,6 +544,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         imguiLayoutPath = Path.Combine(projectPath, ".groko-imgui-layout.ini");
         editorSettingsPath = Path.Combine(projectPath, ".groko-editor-settings.json");
         scriptCompiler = new ScriptCompiler(rootAssetsPath);
+        scriptCompiler.SetProjectTrusted(true, persist: false);
         sceneGraph = new EditorSceneGraph(objects, physicsEngine);
         selection = new SelectionService(sceneGraph);
         assetService = new AssetService(rootAssetsPath);
@@ -577,8 +584,11 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         statusMessage = "Editor loaded";
         Program.UpdateSplash("Generating script project", 0.48f);
         scriptCompiler.Initialize();
-        Program.UpdateSplash("Compiling scripts", 0.62f);
-        scriptCompiler.Compile();
+        Program.UpdateSplash(scriptCompiler.IsProjectTrusted ? "Compiling scripts" : "Scripts awaiting project trust", 0.62f);
+        if (scriptCompiler.IsProjectTrusted)
+            scriptCompiler.Compile();
+        else
+            statusMessage = "Scripts blocked until this project is trusted";
         Program.UpdateSplash("Indexing asset database", 0.72f);
         PrimitiveMeshFactory.EnsureAllPrimitiveMeshes(rootAssetsPath);
         assetService.AssetDatabase.Refresh(createMissingMeta: true);
@@ -586,6 +596,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         LoadScene();
         Program.UpdateSplash("Prewarming scene materials", 0.82f);
         PrewarmSceneRenderableAssetsDuringLoad();
+        BakeRequestedReflectionProbesOnLoad();
+        _ = BakeRequestedLightmapsOnLoadAsync();
         Program.UpdateSplash("Loading textures and materials", 0.86f);
         BuildProjectPreviewCacheDuringLoad();
         Program.UpdateSplash("Starting asset watchers", 0.94f);
@@ -627,6 +639,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         previewGenerationQueued.Clear();
         previewGenerationFailures.Clear();
         iconAtlasRegions.Clear();
+        sceneGpuTimer?.Dispose();
+        sceneGpuTimer = null;
         imgui.Dispose();
         sceneRenderer.Dispose();
         sceneTarget.Dispose();
@@ -852,16 +866,26 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         // La UI usa esta misma cámara para Screen Space - Camera y World Space.
         activeUiCameraState = activeCam;
 
+        // La vista Scene usa la cámara del editor para navegar, pero sus ajustes de
+        // render deben venir de la Game Camera activa (o de una Camera seleccionada).
+        // Antes, seleccionar una luz dejaba `viewportCameraSettings` en null y la vista
+        // saltaba silenciosamente a Project Settings/Forward+, por eso la escena se volvía
+        // azul hasta volver a seleccionar Main Camera.
         Camera? viewportCameraSettings = gameView
             ? gameCameraComponent
-            : selected?.GetComponent<Camera>();
+            : selected?.GetComponent<Camera>() ?? FindGameCamera(objects)?.GetComponent<Camera>();
 
         bool depthTextureActive = ResolveCameraTextureMode(viewportCameraSettings?.DepthTexture, depthTextureEnabled);
         bool opaqueTextureActive = ResolveCameraTextureMode(viewportCameraSettings?.OpaqueTexture, opaqueTextureEnabled);
+        RendererRenderingPath viewportRenderingPath = ResolveRendererRenderingPath(viewportCameraSettings);
 
         int samples = activeCam.AntiAliasing ? activeCam.AntiAliasingSamples : 1;
         if (!gameView)
             samples = Math.Max(samples, msaaSamples);
+        // Deferred no puede resolver MSAA correctamente sin sombrear cada muestra del G-buffer.
+        // URP/HDRP también lo deshabilitan para Deferred; usamos FXAA al final de la imagen.
+        if (viewportRenderingPath == RendererRenderingPath.Deferred)
+            samples = 1;
         sceneTarget.DepthTextureEnabled = depthTextureActive;
         sceneTarget.OpaqueTextureEnabled = opaqueTextureActive;
         sceneTarget.Resize(width, height, samples);
@@ -872,16 +896,29 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.DebugView = (int)lightingDebugView;
         sceneRenderer.ShadowQuality = shadowQuality;
         sceneRenderer.ShadowBias = shadowBias;
-        sceneRenderer.RenderingPath = ResolveRendererRenderingPath(viewportCameraSettings);
+        sceneRenderer.RenderingPath = viewportRenderingPath;
+        sceneRenderer.MixedLightingMode = (MixedLightingMode)Math.Clamp(lightmapMixedModeIndex, 0, 2);
+        sceneRenderer.DistanceShadowmask = lightmapDistanceShadowmask;
+        sceneRenderer.ShadowmaskDistance = lightmapShadowmaskDistance;
+        sceneRenderer.ShadowmaskDistanceFade = lightmapShadowmaskDistanceFade;
         sceneRenderer.ColorSpace = colorSpace;
         sceneRenderer.ImageBasedLighting = iblEnabled;
         sceneRenderer.IblDiffuseStrength = iblDiffuseStrength;
         sceneRenderer.IblSpecularStrength = iblSpecularStrength;
+        sceneRenderer.ScreenSpaceReflections = viewportRenderingPath == RendererRenderingPath.Deferred
+            && opaqueTextureActive && screenSpaceReflectionsEnabled;
+        sceneRenderer.ScreenSpaceReflectionQuality = screenSpaceReflectionsQuality;
         sceneRenderer.EnvironmentHdriPath = hdriPath;
         sceneRenderer.EnvironmentMode = environmentMode;
         sceneRenderer.StaticHierarchyLodMode = staticHierarchyLodMode;
         sceneRenderer.DrawEnvironmentBackground = !gameView || gameCameraComponent?.ClearFlags != CameraClearFlags.SolidColor;
-        sceneRenderer.RenderRealtimeShadows = gameView;
+        // El viewport Scene también es una vista de render, no solo un alambre de edición.
+        // Antes las sombras se apagaban aquí salvo en Game (`gameView`), por lo que una luz
+        // iluminaba paredes y objetos en Edit pero nunca podía ocluirlos.  Eso hacía imposible
+        // ajustar iluminación interior desde Scene y daba la falsa impresión de que Spot/Point
+        // Shadows no funcionaban. Respeta el flag de la cámara en ambos viewports, igual que
+        // hace el render de Game más abajo.
+        sceneRenderer.RenderRealtimeShadows = gameCameraComponent?.RenderShadows ?? true;
         sceneRenderer.ShadowUpdateIntervalFrames = gameView ? ShadowUpdateIntervalForQuality(shadowQuality) : 1;
         sceneRenderer.SceneGridAxis = ToRendererGridAxis(sceneGridAxis);
         sceneRenderer.SceneGridSize = sceneGridSize;
@@ -900,21 +937,45 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             rendererSelectedObjectIds.Add(selectedObject.EditorId);
         sceneRenderer.SelectedObjectIds = rendererSelectedObjectIds;
         long sceneRendererStart = EditorProfiler.Timestamp();
+        sceneGpuTimer ??= new GpuTimerQuery();
+        sceneGpuTimer.Begin();
         // noGameCamera: no dibujamos la escena → la Game view queda en el clear negro (como Unity).
-        if (!noGameCamera)
-            sceneRenderer.Render(objects, gameView ? null : selected, activeCam, width, height, showGrid: !gameView && sceneGridVisible);
+        try
+        {
+            if (!noGameCamera)
+                sceneRenderer.Render(objects, gameView ? null : selected, activeCam, width, height, showGrid: !gameView && sceneGridVisible, targetFramebuffer: sceneTarget.BoundFramebufferHandle, targetSamples: sceneTarget.Samples);
+        }
+        finally
+        {
+            sceneGpuTimer.End();
+        }
         sceneRenderer.ResolveAndCaptureOpaqueTexture = null;
         profiler.SampleSceneRenderer(EditorProfiler.ElapsedMs(sceneRendererStart));
+        if (sceneGpuTimer.HasResult)
+            profiler.SampleGpuScene((float)sceneGpuTimer.LastMilliseconds);
         sceneTarget.Resolve();
         sceneTarget.CaptureOpaqueTexture();
         var postSettings = FindActiveComponent<PostProcessSettings>(objects);
         bool diagnosticDebugView = lightingDebugView != LightingDebugView.Final;
         bool postEnabled = !diagnosticDebugView && (postSettings?.PostProcessEnabled ?? false);
-        sceneTarget.FxaaEnabled = !diagnosticDebugView && fxaaEnabled;
+        // Deferred usa anti-aliasing de postproceso: el G-buffer es por píxel y MSAA no
+        // conserva sus atributos/materiales de forma correcta tras el resolve. SMAA es
+        // estable en imagen estática y no requiere motion vectors.
+        CameraAntiAliasingMode viewportAa = viewportCameraSettings is { AntiAliasing: true }
+            ? viewportCameraSettings.AntiAliasingMode
+            : (fxaaEnabled ? postAntiAliasingMode : CameraAntiAliasingMode.None);
+        // En Deferred no dejamos el frame sin AA por una preferencia vieja/guardada como
+        // "None": MSAA está inhabilitado para el G-buffer, así que SMAA es la ruta segura.
+        if (viewportRenderingPath == RendererRenderingPath.Deferred)
+            viewportAa = CameraAntiAliasingMode.SMAA;
+        sceneTarget.AntiAliasingMode = diagnosticDebugView ? CameraAntiAliasingMode.None : viewportAa;
+        sceneTarget.FxaaEnabled = sceneTarget.AntiAliasingMode == CameraAntiAliasingMode.FXAA;
         // Si no hay PostProcess activo, no envíes calidades altas al shader: evita que
         // una configuración global dispare loops de bloom/AO innecesarios por accidente.
         sceneTarget.BloomQuality = postEnabled ? bloomQuality : 0;
         sceneTarget.AmbientOcclusionQuality = postEnabled && depthTextureActive && ssaoEnabled ? ambientOcclusionQuality : 0;
+        sceneTarget.CameraNearClip = Math.Max(0.001f, activeCam.NearClip);
+        sceneTarget.CameraFarClip = Math.Max(sceneTarget.CameraNearClip + 0.001f, activeCam.FarClip);
         // God rays del sol (independiente del PostProcess): el renderer calculo la pos del sol en pantalla.
         sceneTarget.GodRaysEnabled = !diagnosticDebugView && depthTextureActive && sceneRenderer.SunGodRaysActive;
         sceneTarget.GodRaySunU = sceneRenderer.SunScreenUv.X;
@@ -956,8 +1017,11 @@ internal sealed partial class ImGuiEditorApp : GameWindow
 
         bool depthTextureActive = ResolveCameraTextureMode(gameCameraComponent?.DepthTexture, depthTextureEnabled);
         bool opaqueTextureActive = ResolveCameraTextureMode(gameCameraComponent?.OpaqueTexture, opaqueTextureEnabled);
+        RendererRenderingPath gameRenderingPath = ResolveRendererRenderingPath(gameCameraComponent);
 
         int samples = activeCam.AntiAliasing ? activeCam.AntiAliasingSamples : 1;
+        if (gameRenderingPath == RendererRenderingPath.Deferred)
+            samples = 1;
         gamePreviewTarget.DepthTextureEnabled = depthTextureActive;
         gamePreviewTarget.OpaqueTextureEnabled = opaqueTextureActive;
         gamePreviewTarget.Resize(width, height, samples);
@@ -968,11 +1032,18 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.DebugView = (int)lightingDebugView;
         sceneRenderer.ShadowQuality = shadowQuality;
         sceneRenderer.ShadowBias = shadowBias;
-        sceneRenderer.RenderingPath = ResolveRendererRenderingPath(gameCameraComponent);
+        sceneRenderer.RenderingPath = gameRenderingPath;
+        sceneRenderer.MixedLightingMode = (MixedLightingMode)Math.Clamp(lightmapMixedModeIndex, 0, 2);
+        sceneRenderer.DistanceShadowmask = lightmapDistanceShadowmask;
+        sceneRenderer.ShadowmaskDistance = lightmapShadowmaskDistance;
+        sceneRenderer.ShadowmaskDistanceFade = lightmapShadowmaskDistanceFade;
         sceneRenderer.ColorSpace = colorSpace;
         sceneRenderer.ImageBasedLighting = iblEnabled;
         sceneRenderer.IblDiffuseStrength = iblDiffuseStrength;
         sceneRenderer.IblSpecularStrength = iblSpecularStrength;
+        sceneRenderer.ScreenSpaceReflections = gameRenderingPath == RendererRenderingPath.Deferred
+            && opaqueTextureActive && screenSpaceReflectionsEnabled;
+        sceneRenderer.ScreenSpaceReflectionQuality = screenSpaceReflectionsQuality;
         sceneRenderer.EnvironmentHdriPath = hdriPath;
         sceneRenderer.EnvironmentMode = environmentMode;
         sceneRenderer.StaticHierarchyLodMode = staticHierarchyLodMode;
@@ -994,16 +1065,24 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         sceneRenderer.SelectedObjectIds = Array.Empty<string>();
 
         if (!noGameCamera)
-            sceneRenderer.Render(objects, null, activeCam, width, height, showGrid: false);
+            sceneRenderer.Render(objects, null, activeCam, width, height, showGrid: false, targetFramebuffer: gamePreviewTarget.BoundFramebufferHandle, targetSamples: gamePreviewTarget.Samples);
         sceneRenderer.ResolveAndCaptureOpaqueTexture = null;
 
         gamePreviewTarget.Resolve();
         gamePreviewTarget.CaptureOpaqueTexture();
         bool diagnosticDebugView = lightingDebugView != LightingDebugView.Final;
         bool postEnabled = !diagnosticDebugView && (postSettings?.PostProcessEnabled ?? false) && (gameCameraComponent?.PostProcessing ?? true);
-        gamePreviewTarget.FxaaEnabled = !diagnosticDebugView && fxaaEnabled && (gameCameraComponent?.AntiAliasingMode != CameraAntiAliasingMode.None);
+        CameraAntiAliasingMode gameAa = gameCameraComponent is { AntiAliasing: true }
+            ? gameCameraComponent.AntiAliasingMode
+            : (fxaaEnabled ? postAntiAliasingMode : CameraAntiAliasingMode.None);
+        if (gameRenderingPath == RendererRenderingPath.Deferred)
+            gameAa = CameraAntiAliasingMode.SMAA;
+        gamePreviewTarget.AntiAliasingMode = diagnosticDebugView ? CameraAntiAliasingMode.None : gameAa;
+        gamePreviewTarget.FxaaEnabled = gamePreviewTarget.AntiAliasingMode == CameraAntiAliasingMode.FXAA;
         gamePreviewTarget.BloomQuality = postEnabled ? bloomQuality : 0;
         gamePreviewTarget.AmbientOcclusionQuality = postEnabled && depthTextureActive && ssaoEnabled ? ambientOcclusionQuality : 0;
+        gamePreviewTarget.CameraNearClip = Math.Max(0.001f, activeCam.NearClip);
+        gamePreviewTarget.CameraFarClip = Math.Max(gamePreviewTarget.CameraNearClip + 0.001f, activeCam.FarClip);
         gamePreviewTarget.GodRaysEnabled = !diagnosticDebugView && depthTextureActive && sceneRenderer.SunGodRaysActive;
         gamePreviewTarget.GodRaySunU = sceneRenderer.SunScreenUv.X;
         gamePreviewTarget.GodRaySunV = sceneRenderer.SunScreenUv.Y;
@@ -1273,7 +1352,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         try
         {
             typeof(ImGui).GetMethod("SaveIniSettingsToDisk", new[] { typeof(string) })?.Invoke(null, new object[] { imguiLayoutPath });
-            File.WriteAllText(imguiLayoutPath + ".ver", LayoutVersion.ToString());
+            AtomicFile.WriteAllText(imguiLayoutPath + ".ver", LayoutVersion.ToString());
         }
         catch (Exception ex)
         {
@@ -1304,6 +1383,9 @@ internal sealed partial class ImGuiEditorApp : GameWindow
                 : "free";
             renderScale = Math.Clamp(settings.RenderScale, 0.25f, 2f);
             fxaaEnabled = settings.FxaaEnabled;
+            postAntiAliasingMode = settings.PostAntiAliasingMode is CameraAntiAliasingMode.FXAA or CameraAntiAliasingMode.SMAA
+                ? settings.PostAntiAliasingMode.Value
+                : (fxaaEnabled ? CameraAntiAliasingMode.FXAA : CameraAntiAliasingMode.None);
             renderPipelineAssetName = string.IsNullOrWhiteSpace(settings.RenderPipelineAssetName) ? "Groko Render Pipeline Asset" : settings.RenderPipelineAssetName;
             rendererDataName = string.IsNullOrWhiteSpace(settings.RendererDataName) ? "PC_Renderer" : settings.RendererDataName;
             renderingPath = settings.RenderingPath is "Forward" or "Forward+" or "Deferred" ? settings.RenderingPath : "Forward+";
@@ -1324,6 +1406,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             ssaoRadius = Math.Clamp(settings.SsaoRadius <= 0f ? 0.3f : settings.SsaoRadius, 0.02f, 3f);
             ssaoFalloffDistance = Math.Clamp(settings.SsaoFalloffDistance <= 0f ? 100f : settings.SsaoFalloffDistance, 1f, 500f);
             ssaoDirectLightingStrength = Math.Clamp(settings.SsaoDirectLightingStrength, 0f, 1f);
+            screenSpaceReflectionsEnabled = settings.ScreenSpaceReflectionsEnabled;
+            screenSpaceReflectionsQuality = Math.Clamp(settings.ScreenSpaceReflectionsQuality, 0, 3);
             bloomQuality = Math.Clamp(settings.BloomQuality, 0, 3);
             ambientOcclusionQuality = Math.Clamp(settings.AmbientOcclusionQuality, 0, 3);
             shadowBias = Math.Clamp(settings.ShadowBias, 0.1f, 4f);
@@ -1390,6 +1474,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
                 ViewportResolutionPreset = viewportResolutionPresetKey,
                 RenderScale = renderScale,
                 FxaaEnabled = fxaaEnabled,
+                PostAntiAliasingMode = postAntiAliasingMode,
                 RenderPipelineAssetName = renderPipelineAssetName,
                 RendererDataName = rendererDataName,
                 RenderingPath = renderingPath,
@@ -1408,6 +1493,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
                 SsaoRadius = ssaoRadius,
                 SsaoFalloffDistance = ssaoFalloffDistance,
                 SsaoDirectLightingStrength = ssaoDirectLightingStrength,
+                ScreenSpaceReflectionsEnabled = screenSpaceReflectionsEnabled,
+                ScreenSpaceReflectionsQuality = screenSpaceReflectionsQuality,
                 BloomQuality = bloomQuality,
                 AmbientOcclusionQuality = ambientOcclusionQuality,
                 ShadowBias = shadowBias,
@@ -1452,7 +1539,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
                 ConsoleShowErrors = consoleShowErrors
             };
 
-            File.WriteAllText(editorSettingsPath, JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }));
+            AtomicFile.WriteAllText(editorSettingsPath, JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex)
         {
@@ -1700,6 +1787,7 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         long toolsStart = EditorProfiler.Timestamp();
         DrawGuiDesignerWindow();
         DrawEditorSettingsWindow();
+        DrawLightingWindow();
         DrawShaderGraphWindow();
         DrawAnimationWindow();
         DrawAnimatorGraphWindow();
@@ -1894,7 +1982,23 @@ internal sealed partial class ImGuiEditorApp : GameWindow
             if (ImGui.MenuItem("Create Folder") && currentProjectDirectory != null)
                 CreateAssetFolder(currentProjectDirectory);
             ImGui.Separator();
-            if (ImGui.MenuItem("Compile Scripts")) CompileScripts();
+            if (ImGui.MenuItem("Restore Last Deleted Asset", "Ctrl+Shift+Z")) RestoreMostRecentAsset();
+            ImGui.Separator();
+            if (scriptCompiler.IsProjectTrusted)
+            {
+                if (ImGui.MenuItem("Revoke Script Trust"))
+                {
+                    scriptCompiler.SetProjectTrusted(false);
+                    statusMessage = "Script execution blocked for this project";
+                }
+                if (ImGui.MenuItem("Compile Scripts")) CompileScripts();
+            }
+            else if (ImGui.MenuItem("Trust Project Scripts"))
+            {
+                scriptCompiler.SetProjectTrusted(true);
+                statusMessage = "Project scripts trusted; compiling...";
+                CompileScripts();
+            }
             ImGui.EndMenu();
         }
 
@@ -1902,6 +2006,9 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         {
             DrawObjectCreationMenu(null);
 
+            ImGui.Separator();
+            if (ImGui.MenuItem("Align Game Camera to Scene View", "Ctrl+Shift+F", false, !isPlaying && FindGameCamera(objects) != null))
+                AlignGameCameraToSceneView();
             ImGui.Separator();
             if (ImGui.MenuItem("Duplicate Selected", "Ctrl+D", false, selected != null)) DuplicateSelected();
             if (ImGui.MenuItem("Delete Selected", "Del", false, selected != null)) DeleteSelected();
@@ -1937,6 +2044,8 @@ internal sealed partial class ImGuiEditorApp : GameWindow
                 showGuiDesigner = true;
             if (ImGui.MenuItem("Editor Settings"))
                 showEditorSettings = true;
+            if (ImGui.MenuItem("Lighting", "", showLightingWindow))
+                showLightingWindow = !showLightingWindow;
             if (ImGui.MenuItem("Shader Graph"))
                 showShaderGraph = true;
             if (ImGui.MenuItem("Animation", "", showAnimationWindow))
@@ -1972,7 +2081,12 @@ internal sealed partial class ImGuiEditorApp : GameWindow
         if (ImGui.BeginMenu("Tools"))
         {
             if (ImGui.MenuItem("Bake Lightmaps", "", false, !isPlaying))
-                _ = BakeLightmapsAsync();
+            {
+                showLightingWindow = true;
+                _ = BakeLightmapsAsync(CurrentLightmapResolution);
+            }
+            if (ImGui.MenuItem("Lighting Window"))
+                showLightingWindow = true;
             if (ImGui.MenuItem("Play Physics", "", simulatePhysics))
             {
                 simulatePhysics = !simulatePhysics;

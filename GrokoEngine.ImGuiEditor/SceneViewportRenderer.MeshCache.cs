@@ -50,7 +50,7 @@ internal sealed partial class SceneViewportRenderer
                 ? new Vector2(mesh.UVs[ui], mesh.UVs[ui + 1])
                 : new Vector2(0.5f, 0.5f);
 
-            verts[actual++] = new SolidVertex(pos, norm, Vector4.One, uv, new Vector4(0f, 0.5f, 1f, 1f), Vector4.Zero);
+            verts[actual++] = new SolidVertex(pos, norm, Vector4.One, uv, new Vector4(0f, 0.5f, 3f, 0f), Vector4.Zero);
         }
 
         if (actual <= 0)
@@ -114,7 +114,7 @@ internal sealed partial class SceneViewportRenderer
             var indices = new Vector4(mesh.BoneIndices[bi], mesh.BoneIndices[bi + 1], mesh.BoneIndices[bi + 2], mesh.BoneIndices[bi + 3]);
             var weights = new Vector4(mesh.BoneWeights[bi], mesh.BoneWeights[bi + 1], mesh.BoneWeights[bi + 2], mesh.BoneWeights[bi + 3]);
 
-            verts[actual++] = new SkinnedVertex(pos, norm, Vector4.One, uv, new Vector4(0f, 0.5f, 1f, 1f), Vector4.Zero, indices, weights);
+            verts[actual++] = new SkinnedVertex(pos, norm, Vector4.One, uv, new Vector4(0f, 0.5f, 3f, 0f), Vector4.Zero, indices, weights);
         }
 
         if (actual <= 0)
@@ -151,6 +151,8 @@ internal sealed partial class SceneViewportRenderer
         GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, stride, 48);
         GL.EnableVertexAttribArray(5);
         GL.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, stride, 64);
+        GL.EnableVertexAttribArray(12);
+        GL.VertexAttribPointer(12, 2, VertexAttribPointerType.Float, false, stride, 80);
     }
 
     private static void DeleteGpuMesh(CachedGpuMesh mesh)
@@ -198,9 +200,9 @@ internal sealed partial class SceneViewportRenderer
     {
         ConfigureSolidVertexAttributes(stride);
         GL.EnableVertexAttribArray(10);
-        GL.VertexAttribPointer(10, 4, VertexAttribPointerType.Float, false, stride, 80);
+        GL.VertexAttribPointer(10, 4, VertexAttribPointerType.Float, false, stride, 88);
         GL.EnableVertexAttribArray(11);
-        GL.VertexAttribPointer(11, 4, VertexAttribPointerType.Float, false, stride, 96);
+        GL.VertexAttribPointer(11, 4, VertexAttribPointerType.Float, false, stride, 104);
     }
 
     private void InitializeInstanceBuffer()

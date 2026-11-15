@@ -1,5 +1,7 @@
 using OpenTK.Graphics.OpenGL4;
 using System;
+using System.Drawing;
+using System.Drawing.Imaging;
 
 namespace GrokoEngine.ImGuiEditor;
 
@@ -53,6 +55,27 @@ internal sealed partial class SceneRenderTarget
         GL.Viewport(0, 0, Math.Max(1, windowWidth), Math.Max(1, windowHeight));
     }
 
+    /// <summary>Captures the final post-processed frame for GPU regression tests.</summary>
+    public Bitmap CapturePostProcessBitmap()
+    {
+        var bitmap = new Bitmap(Width, Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        var rect = new Rectangle(0, 0, Width, Height);
+        var data = bitmap.LockBits(rect, ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        try
+        {
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, postFramebuffer);
+            GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
+            GL.ReadPixels(0, 0, Width, Height, OpenTK.Graphics.OpenGL4.PixelFormat.Bgra, PixelType.UnsignedByte, data.Scan0);
+        }
+        finally
+        {
+            bitmap.UnlockBits(data);
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        }
+        bitmap.RotateFlip(RotateFlipType.RotateNoneFlipY);
+        return bitmap;
+    }
+
     // Presenta la imagen final post-procesada, ya con gamma, a pantalla completa.
     // Usado por el Game Mode (juego exportado) en vez de mostrarla como ImGui::Image.
     // Es un blit de framebuffer (sin shader): la post-pasada deja el resultado en
@@ -74,12 +97,16 @@ internal sealed partial class SceneRenderTarget
     public void Dispose()
     {
         ReleaseMsaaResources();
+        ReleaseSmaaResources();
+        ReleaseAutoExposureResources();
         ReleaseBloomMips();
         if (bloomDownShader != 0) GL.DeleteProgram(bloomDownShader);
         if (bloomUpShader != 0) GL.DeleteProgram(bloomUpShader);
         if (postVertexBuffer != 0) GL.DeleteBuffer(postVertexBuffer);
         if (postVertexArray != 0) GL.DeleteVertexArray(postVertexArray);
         if (postShader != 0) GL.DeleteProgram(postShader);
+        if (smaaResolveShader != 0) GL.DeleteProgram(smaaResolveShader);
+        if (smaaEdgeShader != 0) GL.DeleteProgram(smaaEdgeShader);
         if (opaqueTexture != 0) GL.DeleteTexture(opaqueTexture);
         if (opaqueFramebuffer != 0) GL.DeleteFramebuffer(opaqueFramebuffer);
         if (postTexture != 0) GL.DeleteTexture(postTexture);

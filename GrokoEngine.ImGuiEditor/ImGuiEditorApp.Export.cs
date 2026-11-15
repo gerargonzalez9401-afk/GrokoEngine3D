@@ -39,7 +39,7 @@ internal sealed class GameLaunchConfig
         }
     }
 
-    public void Save(string path) => File.WriteAllText(path, JsonSerializer.Serialize(this, Options));
+    public void Save(string path) => AtomicFile.WriteAllText(path, JsonSerializer.Serialize(this, Options));
 
     private void Normalize()
     {
@@ -161,7 +161,7 @@ internal sealed partial class ImGuiEditorApp
                 if (s != null)
                 {
                     s.HdriPath = "Assets/_Environment/" + fileName;
-                    File.WriteAllText(settingsCopy, JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
+                    AtomicFile.WriteAllText(settingsCopy, JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true }));
                 }
             }
         }

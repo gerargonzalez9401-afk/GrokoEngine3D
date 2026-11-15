@@ -32,6 +32,12 @@ using GlfwMouseButton = OpenTK.Windowing.GraphicsLibraryFramework.MouseButton;
 namespace GrokoEngine.ImGuiEditor;
 internal sealed partial class ImGuiEditorApp
 {
+    // El gizmo de un ReflectionProbe se dibuja cada frame mientras está seleccionado. Guardar
+    // únicamente la ruta del preview evita deserializar el .cubemap y hacer File.Exists cada
+    // frame (muy visible en proyectos que sincronizan Assets con OneDrive).
+    private readonly Dictionary<string, string?> reflectionProbePreviewPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> reflectionProbePreviewLoadAttempts = new(StringComparer.OrdinalIgnoreCase);
+
     private void DrawScenePanel(Vector2 size)
     {
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
@@ -517,18 +523,27 @@ internal sealed partial class ImGuiEditorApp
         if (string.IsNullOrWhiteSpace(resolved))
             return false;
 
-        string previewPath = resolved;
-        if (CubemapAsset.IsCubemapPath(resolved))
+        if (!reflectionProbePreviewPaths.TryGetValue(resolved, out string? previewPath))
         {
-            var data = CubemapAsset.Load(resolved);
-            previewPath = !string.IsNullOrWhiteSpace(data.PreviewTexturePath)
-                ? data.PreviewTexturePath
-                : !string.IsNullOrWhiteSpace(data.PositiveZPath)
-                    ? data.PositiveZPath
-                    : data.SourceTexturePath;
+            previewPath = resolved;
+            if (CubemapAsset.IsCubemapPath(resolved))
+            {
+                var data = CubemapAsset.Load(resolved);
+                previewPath = !string.IsNullOrWhiteSpace(data.PreviewTexturePath)
+                    ? data.PreviewTexturePath
+                    : !string.IsNullOrWhiteSpace(data.PositiveZPath)
+                        ? data.PositiveZPath
+                        : data.SourceTexturePath;
+            }
+
+            // Esta validación pertenece a la resolución de la fuente, no al render del gizmo.
+            // Se invalida al hornear el probe o cuando cambia su asset.
+            if (string.IsNullOrWhiteSpace(previewPath) || !File.Exists(previewPath))
+                previewPath = null;
+            reflectionProbePreviewPaths[resolved] = previewPath;
         }
 
-        if (string.IsNullOrWhiteSpace(previewPath) || !File.Exists(previewPath))
+        if (string.IsNullOrWhiteSpace(previewPath))
             return false;
 
         if (TryGetCachedPreviewTexture(previewPath, out textureId))
@@ -536,10 +551,26 @@ internal sealed partial class ImGuiEditorApp
 
         // Los cubemaps baked acaban de crear PNGs nuevos; si el preview todavia no estaba
         // en cache, lo construimos al vuelo para que la esfera cambie inmediatamente.
-        if (BuildAndLoadPreviewNow(previewPath) && TryGetCachedPreviewTexture(previewPath, out textureId))
+        // Si una carga falla, no se repite cada frame. Un horneado/invalidate limpia esta marca.
+        if (reflectionProbePreviewLoadAttempts.Add(previewPath) &&
+            BuildAndLoadPreviewNow(previewPath) &&
+            TryGetCachedPreviewTexture(previewPath, out textureId))
             return true;
 
         return false;
+    }
+
+    private void InvalidateReflectionProbePreviewSource(string? cubemapPath)
+    {
+        if (string.IsNullOrWhiteSpace(cubemapPath))
+            return;
+
+        string? resolved = SceneViewportRenderer.NormalizeExistingAssetPath(cubemapPath);
+        if (!string.IsNullOrWhiteSpace(resolved) && reflectionProbePreviewPaths.Remove(resolved, out string? previewPath))
+        {
+            if (!string.IsNullOrWhiteSpace(previewPath))
+                reflectionProbePreviewLoadAttempts.Remove(previewPath);
+        }
     }
 
     private void ComputeViewportImageRect(Vector2 panelMin, Vector2 panelSize, out Vector2 imageMin, out Vector2 imageSize)

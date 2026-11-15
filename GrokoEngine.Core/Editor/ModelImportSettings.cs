@@ -129,7 +129,7 @@ namespace GrokoEngine
             try
             {
                 string p = SettingsPath(modelPath);
-                File.WriteAllText(p, JsonSerializer.Serialize(settings, Options));
+                AtomicFile.WriteAllText(p, JsonSerializer.Serialize(settings, Options));
                 _cache[p] = (settings, File.GetLastWriteTimeUtc(p)); // mantén el caché coherente
             }
             catch (Exception ex)

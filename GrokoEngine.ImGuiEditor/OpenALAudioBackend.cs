@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using OpenTK.Audio.OpenAL;
 using GrokoEngine;
 using Vector3 = MiMotor.Mathematics.Vector3;
@@ -152,9 +151,11 @@ namespace GrokoEngine.ImGuiEditor
         public void ReleaseAllSources()
         {
             if (!ok) return;
-            foreach (var src in sourceHandles.Values)
+            foreach (var pair in sourceHandles)
             {
+                int src = pair.Value;
                 if (AL.IsSource(src)) { AL.SourceStop(src); AL.DeleteSource(src); }
+                pair.Key.BackendSource = 0;
             }
             sourceHandles.Clear();
             foreach (var src in oneShots)
@@ -240,10 +241,18 @@ namespace GrokoEngine.ImGuiEditor
             int buffer = 0;
             try
             {
-                if (File.Exists(path) && LoadWav(path, out var data, out var format, out var rate) && data.Length > 0)
+                if (File.Exists(path) && WavPcmReader.TryRead(path, out var wav, out _) && wav.Samples.Length > 0)
                 {
+                    ALFormat format = (wav.Channels, wav.BitsPerSample) switch
+                    {
+                        (1, 8) => ALFormat.Mono8,
+                        (1, 16) => ALFormat.Mono16,
+                        (2, 8) => ALFormat.Stereo8,
+                        (2, 16) => ALFormat.Stereo16,
+                        _ => throw new InvalidDataException("Unsupported WAV format.")
+                    };
                     buffer = AL.GenBuffer();
-                    AL.BufferData(buffer, format, data, rate);
+                    AL.BufferData(buffer, format, wav.Samples, wav.SampleRate);
                     if (AL.GetError() != ALError.NoError)
                     {
                         AL.DeleteBuffer(buffer);
@@ -276,84 +285,16 @@ namespace GrokoEngine.ImGuiEditor
             }
         }
 
-        // ─────────────────────────── Loader de WAV (PCM 8/16-bit, mono/estéreo) ───────────────────────────
-
-        private static bool LoadWav(string path, out byte[] data, out ALFormat format, out int sampleRate)
-        {
-            data = Array.Empty<byte>();
-            format = ALFormat.Mono16;
-            sampleRate = 44100;
-
-            using var fs = File.OpenRead(path);
-            using var br = new BinaryReader(fs);
-
-            if (ReadTag(br) != "RIFF") return false;
-            br.ReadInt32();                       // tamaño RIFF (ignorado)
-            if (ReadTag(br) != "WAVE") return false;
-
-            short channels = 0, bits = 0, audioFormat = 0;
-            byte[]? pcm = null;
-
-            while (fs.Position + 8 <= fs.Length)
-            {
-                string chunkId = ReadTag(br);
-                int chunkSize = br.ReadInt32();
-                if (chunkSize < 0) break;
-
-                if (chunkId == "fmt ")
-                {
-                    audioFormat = br.ReadInt16();
-                    channels = br.ReadInt16();
-                    sampleRate = br.ReadInt32();
-                    br.ReadInt32();               // byte rate
-                    br.ReadInt16();               // block align
-                    bits = br.ReadInt16();
-                    int rest = chunkSize - 16;
-                    if (rest > 0) br.ReadBytes(rest);
-                }
-                else if (chunkId == "data")
-                {
-                    pcm = br.ReadBytes(chunkSize);
-                }
-                else
-                {
-                    fs.Seek(chunkSize, SeekOrigin.Current);
-                }
-
-                if ((chunkSize & 1) == 1 && fs.Position < fs.Length)
-                    fs.Seek(1, SeekOrigin.Current);   // los chunks se alinean a 2 bytes
-            }
-
-            if (pcm == null || pcm.Length == 0 || channels == 0 || bits == 0) return false;
-            if (audioFormat != 1) return false;       // solo PCM sin comprimir
-            if (channels > 2 || (bits != 8 && bits != 16)) return false;
-
-            format = (channels, bits) switch
-            {
-                (1, 8) => ALFormat.Mono8,
-                (1, 16) => ALFormat.Mono16,
-                (2, 8) => ALFormat.Stereo8,
-                (2, 16) => ALFormat.Stereo16,
-                _ => ALFormat.Mono16
-            };
-            data = pcm;
-            return true;
-        }
-
-        private static string ReadTag(BinaryReader br)
-        {
-            var bytes = br.ReadBytes(4);
-            return bytes.Length == 4 ? Encoding.ASCII.GetString(bytes) : "";
-        }
-
         public void Dispose()
         {
             if (!ok) return;
-            ok = false;
             try
             {
+                // ReleaseAllSources comprueba Available; por eso ok debe permanecer true
+                // hasta que todas las fuentes vivas hayan sido detenidas y liberadas.
                 ReleaseAllSources();
                 if (previewSource != 0 && AL.IsSource(previewSource)) { AL.SourceStop(previewSource); AL.DeleteSource(previewSource); }
+                previewSource = 0;
                 foreach (var buffer in clipBuffers.Values)
                     if (buffer != 0 && AL.IsBuffer(buffer)) AL.DeleteBuffer(buffer);
                 clipBuffers.Clear();
@@ -365,6 +306,12 @@ namespace GrokoEngine.ImGuiEditor
             catch (Exception ex)
             {
                 EditorDiagnostics.Log("OpenAL dispose falló: " + ex.Message, "Warning");
+            }
+            finally
+            {
+                ok = false;
+                context = ALContext.Null;
+                device = ALDevice.Null;
             }
         }
     }

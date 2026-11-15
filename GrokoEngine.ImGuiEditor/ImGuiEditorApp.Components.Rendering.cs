@@ -99,21 +99,33 @@ private GameObject CreateRectangleLight()
         });
     }
 
-private async Task BakeLightmapsAsync()
+private async Task BakeLightmapsAsync(int? resolutionOverride = null)
     {
         if (_isBaking) return;
+
+        if (!lightmapBakedGlobalIllumination)
+        {
+            statusMessage = "Bake cancelado: Baked Global Illumination está desactivado.";
+            lightmapLastLog = statusMessage;
+            lightmapLastProgress = 0f;
+            return;
+        }
 
         // Verificar que hay objetos estáticos con mesh
         int staticCount = CountStaticMeshes(objects);
         if (staticCount == 0)
         {
             statusMessage = "Bake cancelado: no hay objetos con Static=true y MeshFilter en la escena.";
+            lightmapLastLog = statusMessage;
+            lightmapLastProgress = 0f;
             return;
         }
 
         if (string.IsNullOrWhiteSpace(projectPath))
         {
             statusMessage = "Bake cancelado: projectPath vacío. Abre un proyecto primero.";
+            lightmapLastLog = statusMessage;
+            lightmapLastProgress = 0f;
             return;
         }
 
@@ -122,7 +134,10 @@ private async Task BakeLightmapsAsync()
         try
         {
             _isBaking = true;
-            statusMessage = $"Baking {staticCount} objetos...";
+            int bakeResolution = Math.Clamp(resolutionOverride ?? CurrentLightmapResolution, 256, 4096);
+            lightmapLastProgress = 0f;
+            lightmapLastLog = $"Preparando bake de {staticCount} objetos estáticos a {lightmapResolution} texels/u (máximo {bakeResolution}px).";
+            statusMessage = lightmapLastLog;
 
             string outputDir = System.IO.Path.Combine(projectPath, "Assets", "Lightmaps");
 
@@ -131,68 +146,270 @@ private async Task BakeLightmapsAsync()
             // principal (fase 1) y solo el cálculo puro de CPU corre en Task.Run
             // (fase 2), así que ya no hay carreras con el bucle de render.
             // statusMessage es un string (asignación atómica), seguro de escribir.
-            baker.OnLog += msg => statusMessage = msg;
-            baker.OnProgress += p => statusMessage = $"Baking... {(int)(p * 100)}%";
+            baker.OnLog += msg =>
+            {
+                lightmapLastLog = msg;
+                statusMessage = msg;
+            };
+            baker.OnProgress += p =>
+            {
+                lightmapLastProgress = Math.Clamp(p, 0f, 1f);
+                statusMessage = $"Baking... {(int)(lightmapLastProgress * 100)}%";
+            };
 
             var lighting = BuildBakeLighting();
-            await baker.BakeAsync(objects, lighting, path =>
+            var bakeSettings = new LightmapBakeSettings(
+                lightmapResolution,
+                bakeResolution,
+                lightmapPadding,
+                lightmapIndirectIntensity,
+                lightmapAlbedoBoost,
+                lightmapIndirectSamples,
+                lightmapBounces).Normalize();
+            await baker.BakeAsync(objects, lighting, (path, submeshIndex) =>
             {
                 var m = ObjLoader.Load(path);
                 if (m == null) return null;
+                if (submeshIndex >= 0 && submeshIndex < m.Submeshes.Count)
+                {
+                    var submesh = m.Submeshes[submeshIndex];
+                    return new LightmapBaker.BakedMeshData(
+                        m.Positions, m.Normals, m.UVs, submesh.VertexCount / 3,
+                        submesh.VertexStart, submesh.VertexCount);
+                }
                 return new LightmapBaker.BakedMeshData(m.Positions, m.Normals, m.UVs, m.TriangleCount);
-            });
+            }, bakeResolution, bakeSettings);
 
-            foreach (var kv in baker.BakedPaths)
-                _lightmapPaths[kv.Key] = kv.Value;
+            foreach (var kv in baker.BakedLinks)
+            {
+                _lightmapPaths[kv.Key] = kv.Value.Path;
+                var bakedObject = FindGameObjectByEditorId(objects, kv.Key);
+                var meshRenderer = bakedObject?.GetComponent<MeshRenderer>();
+                if (meshRenderer != null)
+                {
+                    meshRenderer.LightmapPath = kv.Value.Path;
+                    meshRenderer.ShadowmaskPath = kv.Value.ShadowmaskPath;
+                    meshRenderer.ReceiveGlobalIllumination = 1;
+                    meshRenderer.LightmapScaleX = kv.Value.ScaleX;
+                    meshRenderer.LightmapScaleY = kv.Value.ScaleY;
+                    meshRenderer.LightmapOffsetX = kv.Value.OffsetX;
+                    meshRenderer.LightmapOffsetY = kv.Value.OffsetY;
+                    meshRenderer.UseGeneratedLightmapUv = true;
+                }
+            }
 
-            statusMessage = $"✅ Bake completado — {baker.BakedPaths.Count} lightmaps en: {outputDir}";
+            // Los rangos estáticos guardan sus texturas por rango; reconstruirlos hace que la
+            // asignación recién horneada se refleje en el siguiente frame, sin reiniciar la escena.
+            sceneRenderer.InvalidateStaticBatch();
+            sceneDirty = true;
+
+            lightmapLastProgress = 1f;
+            statusMessage = $"Bake completado — {baker.BakedPaths.Count} renderers enlazados a atlas en: {outputDir}. Shadowmask usa hasta cuatro luces Mixed.";
+            lightmapLastLog = statusMessage;
         }
         catch (Exception ex)
         {
-            statusMessage = $"❌ Error en bake: {ex.Message}";
+            statusMessage = $"Error en bake: {ex.Message}";
+            lightmapLastLog = statusMessage;
         }
         finally
         {
             _isBaking = false;
         }
+}
+
+private async Task BakeRequestedLightmapsOnLoadAsync()
+{
+    string requestPath = System.IO.Path.Combine(projectPath, ".groko-auto-bake-lightmaps");
+    if (!System.IO.File.Exists(requestPath))
+        return;
+
+    try
+    {
+        string text = (await System.IO.File.ReadAllTextAsync(requestPath)).Trim();
+        int resolution = int.TryParse(text, out int parsed) ? Math.Clamp(parsed, 32, 4096) : 256;
+        await BakeLightmapsAsync(resolution);
     }
+    finally
+    {
+        try { System.IO.File.Delete(requestPath); } catch { }
+    }
+}
 
 private BakeLightingInfo BuildBakeLighting()
     {
-        var info = new BakeLightingInfo();
+        // Un sol Realtime se resuelve exclusivamente en el shadow map. Meterlo además en
+        // lightmaps sin trazado de oclusión deja luz horneada atravesando paredes al rotarlo.
+        // El integrador baked de sol llegará cuando el baker tenga visibilidad por rayos.
+        var info = new BakeLightingInfo
+        {
+            Directional = new BakeDirectionalLight { Intensity = 0f }
+        };
+        // Unity Shadowmask reserva cuatro canales RGBA POR TEXEL, no cuatro luces para
+        // toda la escena. Luces locales que no se solapan pueden reutilizar el canal.
+        bool useShadowmask = lightmapMixedModeIndex == 1;
+        var shadowmaskChannels = BuildShadowmaskChannels(objects, useShadowmask);
+        int ReserveShadowmaskChannel(Component light, LightMode mode)
+        {
+            int channel = useShadowmask && mode == LightMode.Mixed && shadowmaskChannels.TryGetValue(light, out int assigned)
+                ? assigned : -1;
+            bool fallback = useShadowmask && mode == LightMode.Mixed && channel < 0;
+            switch (light)
+            {
+                case DirectionalLight directional:
+                    directional.ShadowmaskChannel = channel;
+                    directional.ShadowmaskBakedFallback = fallback;
+                    break;
+                case PointLight point:
+                    point.ShadowmaskChannel = channel;
+                    point.ShadowmaskBakedFallback = fallback;
+                    break;
+                case SpotLight spot:
+                    spot.ShadowmaskChannel = channel;
+                    spot.ShadowmaskBakedFallback = fallback;
+                    break;
+            }
+            return channel;
+        }
         void Visit(IEnumerable<GameObject> objs)
         {
             foreach (var obj in objs)
             {
-                if (obj.GetComponent<DirectionalLight>() is { } dl)
+                if (obj.GetComponent<DirectionalLight>() is { } dl && dl.Mode != LightMode.Realtime)
+                {
+                    var direction = dl.GetNormalizedDirection();
                     info.Directional = new BakeDirectionalLight
                     {
-                        X = dl.Direction.X,
-                        Y = dl.Direction.Y,
-                        Z = dl.Direction.Z,
+                        X = direction.X,
+                        Y = direction.Y,
+                        Z = direction.Z,
                         R = dl.R,
                         G = dl.G,
                         B = dl.B,
-                        Intensity = dl.Intensity
+                        Intensity = dl.Intensity,
+                        BakeDirect = dl.Mode == LightMode.Baked || (useShadowmask && dl.Mode == LightMode.Mixed && !shadowmaskChannels.ContainsKey(dl)),
+                        BakeIndirect = true,
+                        ShadowmaskChannel = ReserveShadowmaskChannel(dl, dl.Mode)
                     };
+                }
                 if (obj.GetComponent<AmbientLight>() is { } al)
                     info.Ambient = new BakeAmbientLight
                     { R = al.R, G = al.G, B = al.B, Intensity = al.Intensity, SkyStrength = al.SkyStrength };
-                if (obj.GetComponent<PointLight>() is { } pl)
+                if (obj.GetComponent<PointLight>() is { } pl && pl.Mode != LightMode.Realtime)
                     info.PointLights.Add(new BakePointLight
                     {
-                        Position = new MiMotor.Mathematics.Vector3(obj.PosX, obj.PosY, obj.PosZ),
-                        R = pl.R,
-                        G = pl.G,
-                        B = pl.B,
+                        Position = obj.WorldPosition,
+                        R = pl.GetEffectiveColor().X,
+                        G = pl.GetEffectiveColor().Y,
+                        B = pl.GetEffectiveColor().Z,
                         Intensity = pl.Intensity,
-                        Range = pl.Range
+                        Range = pl.Range,
+                        BakeDirect = pl.Mode == LightMode.Baked || (useShadowmask && pl.Mode == LightMode.Mixed && !shadowmaskChannels.ContainsKey(pl)),
+                        BakeIndirect = true,
+                        ShadowmaskChannel = ReserveShadowmaskChannel(pl, pl.Mode)
+                    });
+                if (obj.GetComponent<SpotLight>() is { } sl && sl.Mode != LightMode.Realtime)
+                    info.SpotLights.Add(new BakeSpotLight
+                    {
+                        Position = obj.WorldPosition,
+                        Direction = ResolveBakeSpotDirection(sl),
+                        R = sl.GetEffectiveColor().X,
+                        G = sl.GetEffectiveColor().Y,
+                        B = sl.GetEffectiveColor().Z,
+                        Intensity = sl.Intensity,
+                        Range = sl.Range,
+                        OuterAngleDegrees = sl.Angle,
+                        BakeDirect = sl.Mode == LightMode.Baked || (useShadowmask && sl.Mode == LightMode.Mixed && !shadowmaskChannels.ContainsKey(sl)),
+                        BakeIndirect = true,
+                        ShadowmaskChannel = ReserveShadowmaskChannel(sl, sl.Mode)
                     });
                 Visit(obj.Children);
             }
         }
         Visit(objects);
         return info;
+    }
+
+private readonly record struct ShadowmaskLightCandidate(Component Light, Vector3 Position, float Range, bool Directional);
+
+private static Dictionary<Component, int> BuildShadowmaskChannels(IEnumerable<GameObject> roots, bool enabled)
+{
+    var result = new Dictionary<Component, int>();
+    if (!enabled)
+        return result;
+
+    var candidates = new List<ShadowmaskLightCandidate>();
+    void Visit(IEnumerable<GameObject> items)
+    {
+        foreach (var obj in items)
+        {
+            if (obj.GetComponent<DirectionalLight>() is { Mode: LightMode.Mixed } directional)
+                candidates.Add(new ShadowmaskLightCandidate(directional, obj.WorldPosition, float.PositiveInfinity, true));
+            if (obj.GetComponent<PointLight>() is { Mode: LightMode.Mixed } point)
+                candidates.Add(new ShadowmaskLightCandidate(point, obj.WorldPosition, point.Range, false));
+            if (obj.GetComponent<SpotLight>() is { Mode: LightMode.Mixed } spot)
+                candidates.Add(new ShadowmaskLightCandidate(spot, obj.WorldPosition, spot.Range, false));
+            Visit(obj.Children);
+        }
+    }
+
+    Visit(roots);
+    // Primero las direccionales y después los volúmenes más grandes: reduce el riesgo de
+    // dejar sin canal una luz dominante. El desempate por EditorId hace el bake reproducible.
+    candidates.Sort((a, b) =>
+    {
+        int directional = b.Directional.CompareTo(a.Directional);
+        if (directional != 0) return directional;
+        int range = b.Range.CompareTo(a.Range);
+        if (range != 0) return range;
+        return string.CompareOrdinal(a.Light.gameObject?.EditorId, b.Light.gameObject?.EditorId);
+    });
+
+    var assigned = new List<(ShadowmaskLightCandidate Candidate, int Channel)>();
+    foreach (var candidate in candidates)
+    {
+        for (int channel = 0; channel < 4; channel++)
+        {
+            bool conflict = assigned.Any(other => other.Channel == channel && ShadowmaskVolumesOverlap(candidate, other.Candidate));
+            if (conflict) continue;
+            result[candidate.Light] = channel;
+            assigned.Add((candidate, channel));
+            break;
+        }
+    }
+    return result;
+}
+
+private static bool ShadowmaskVolumesOverlap(ShadowmaskLightCandidate a, ShadowmaskLightCandidate b)
+{
+    if (a.Directional || b.Directional)
+        return true;
+    var delta = a.Position - b.Position;
+    float reach = a.Range + b.Range;
+    return delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z <= reach * reach;
+}
+
+private static Vector3 ResolveBakeSpotDirection(SpotLight spot)
+    {
+        var local = spot.Direction;
+        if (local.X * local.X + local.Y * local.Y + local.Z * local.Z <= 0.00000001f)
+            local = new Vector3(0f, 0f, 1f);
+
+        var obj = spot.gameObject;
+        if (obj == null)
+            return local.Normalized();
+
+        return RotateBakeVector(local, new Vector3(obj.RotX, obj.RotY, obj.RotZ)).Normalized();
+    }
+
+private static Vector3 RotateBakeVector(Vector3 v, Vector3 rot)
+    {
+        float z = rot.Z * (MathF.PI / 180f), cz = MathF.Cos(z), sz = MathF.Sin(z);
+        v = new Vector3(v.X * cz - v.Y * sz, v.X * sz + v.Y * cz, v.Z);
+        float x = rot.X * (MathF.PI / 180f), cx = MathF.Cos(x), sx = MathF.Sin(x);
+        v = new Vector3(v.X, v.Y * cx - v.Z * sx, v.Y * sx + v.Z * cx);
+        float y = rot.Y * (MathF.PI / 180f), cy = MathF.Cos(y), sy = MathF.Sin(y);
+        return new Vector3(v.X * cy + v.Z * sy, v.Y, -v.X * sy + v.Z * cy);
     }
 
 private static void DrawComponentSummary(Component component)

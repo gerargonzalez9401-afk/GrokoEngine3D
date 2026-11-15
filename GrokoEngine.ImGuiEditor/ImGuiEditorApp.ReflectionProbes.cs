@@ -1,6 +1,7 @@
 using GrokoEngine;
 using OpenTK.Graphics.OpenGL4;
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -10,6 +11,40 @@ namespace GrokoEngine.ImGuiEditor;
 
 internal sealed partial class ImGuiEditorApp
 {
+    // Opt-in por proyecto para automatización de escenas de prueba/CI. El archivo contiene un
+    // nombre de probe por línea; se consume una vez para no rehornear al abrir normalmente.
+    private void BakeRequestedReflectionProbesOnLoad()
+    {
+        string requestPath = Path.Combine(projectPath, ".groko-auto-bake-probes");
+        if (!File.Exists(requestPath) || sceneRenderer == null)
+            return;
+
+        try
+        {
+            var requested = new HashSet<string>(File.ReadAllLines(requestPath), StringComparer.OrdinalIgnoreCase);
+            int baked = 0;
+            foreach (var owner in objects)
+            {
+                if (!requested.Contains(owner.Name))
+                    continue;
+                var probe = owner.GetComponent<ReflectionProbe>();
+                if (probe == null)
+                    continue;
+                BakeReflectionProbe(owner, probe);
+                baked++;
+            }
+            statusMessage = baked > 0 ? $"Reflection probe auto-baked ({baked})." : "Reflection probe auto-bake request found no matching probes.";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = "Reflection probe auto-bake failed: " + ex.Message;
+        }
+        finally
+        {
+            try { File.Delete(requestPath); } catch { }
+        }
+    }
+
     private void BakeReflectionProbe(GameObject owner, ReflectionProbe probe)
     {
         if (sceneRenderer == null)
@@ -119,6 +154,7 @@ internal sealed partial class ImGuiEditorApp
             CubemapAsset.Save(cubemapPath, data);
 
             probe.BakedCubemapPath = cubemapPath;
+            InvalidateReflectionProbePreviewSource(cubemapPath);
             InvalidateAssetPreview(cubemapPath, deleteTexture: true);
             InvalidateAssetPreview(pz, deleteTexture: true);
             selectedAssetPath = cubemapPath;

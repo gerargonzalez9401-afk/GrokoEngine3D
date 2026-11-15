@@ -37,6 +37,10 @@ namespace GrokoEngine
         // Clips de animación esqueletal con canales por hueso (para reproducir).
         public List<SkeletalClip> Clips = new();
 
+        // Problemas recuperables durante la importación. La geometría puede seguir siendo
+        // válida aunque Assimp no exponga una jerarquía o un clip concreto.
+        public List<string> ImportWarnings = new();
+
         // Escala recomendada al importar (estilo Unity: lleva el modelo a metros, 1u=1m).
         // p.ej. FBX de Mixamo en cm → 0.01. OBJ y modelos sin metadatos → 1.
         public float RecommendedScale = 1f;
@@ -632,6 +636,7 @@ namespace GrokoEngine
             }
 
             // Jerarquía de huesos (solo si el modelo tiene esqueleto/animaciones).
+            var importWarnings = new List<string>();
             ModelNode? hierarchy = null;
             try
             {
@@ -642,7 +647,11 @@ namespace GrokoEngine
                     hierarchy = ConvertNode(scene.RootNode, ref budget);
                 }
             }
-            catch { hierarchy = null; }
+            catch (Exception ex)
+            {
+                hierarchy = null;
+                importWarnings.Add($"No se pudo importar la jerarquía del rig: {ex.Message}");
+            }
 
             var animations = new List<ModelAnimationInfo>();
             var clips = new List<SkeletalClip>();
@@ -680,7 +689,12 @@ namespace GrokoEngine
                     }
                 }
             }
-            catch { animations.Clear(); clips.Clear(); }
+            catch (Exception ex)
+            {
+                animations.Clear();
+                clips.Clear();
+                importWarnings.Add($"No se pudieron importar las animaciones embebidas: {ex.Message}");
+            }
 
             ComputeSubmeshBounds(positions, submeshes);
             int separateObjects = scene.RootNode != null ? CountMeshNodes(scene.RootNode) : 0;
@@ -698,6 +712,7 @@ namespace GrokoEngine
                 Hierarchy = hierarchy,
                 Animations = animations,
                 Clips = clips,
+                ImportWarnings = importWarnings,
                 RecommendedScale = recommendedScale,
                 HasSkin = boneNames.Count > 0 && boneIdx.Count == (positions.Count / 3) * 4,
                 BoneIndices = boneIdx.ToArray(),
@@ -767,7 +782,7 @@ namespace GrokoEngine
                 if (!File.Exists(outPath))
                 {
                     if (tex.IsCompressed && tex.CompressedData != null)
-                        File.WriteAllBytes(outPath, tex.CompressedData);
+                        AtomicFile.WriteAllBytes(outPath, tex.CompressedData);
                     else
                         return null; // datos sin comprimir (raw RGBA) no soportados por el visor de assets actual
                 }

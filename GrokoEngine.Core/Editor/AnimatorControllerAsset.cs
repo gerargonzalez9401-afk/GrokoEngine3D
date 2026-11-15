@@ -203,7 +203,7 @@ namespace GrokoEngine
             data.Name = string.IsNullOrWhiteSpace(data.Name)
                 ? Path.GetFileNameWithoutExtension(path)
                 : data.Name;
-            File.WriteAllText(path, JsonSerializer.Serialize(data, Options));
+            AtomicFile.WriteAllText(path, JsonSerializer.Serialize(data, Options));
         }
 
         private static string GetUniquePath(string desiredPath)

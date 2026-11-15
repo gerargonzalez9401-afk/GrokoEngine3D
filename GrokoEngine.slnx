@@ -4,4 +4,6 @@
   <Project Path="GrokoEngine.ImGuiEditor/GrokoEngine.ImGuiEditor.csproj" />
   <Project Path="GrokoEngine.ShaderGraph/GrokoEngine.ShaderGraph.csproj" />
   <Project Path="GrokoEngine.Tests/GrokoEngine.Tests.csproj" />
+  <Project Path="GrokoEngine.Scripting/GrokoEngine.Scripting.csproj" />
+  <Project Path="GrokoEngine.Assets/GrokoEngine.Assets.csproj" />
 </Solution>

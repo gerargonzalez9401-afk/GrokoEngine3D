@@ -1548,7 +1548,28 @@ private void DeleteAsset(string path)
              IsPathInsideDirectory(currentProjectDirectory, fullPath)))
             currentProjectDirectory = rootAssetsPath;
         InvalidateProjectFolderCache(Path.GetDirectoryName(fullPath));
-        statusMessage = "Asset deleted";
+        statusMessage = "Asset moved to recovery";
+    }
+
+private void RestoreMostRecentAsset()
+    {
+        var entry = assetService.AssetDatabase.GetRecoveryEntries().FirstOrDefault();
+        if (entry == null)
+        {
+            statusMessage = "Recovery is empty";
+            return;
+        }
+
+        if (!assetService.AssetDatabase.RestoreRecoveryEntry(entry.Id, out string restoredPath, out string restoreError))
+        {
+            statusMessage = "Restore failed: " + restoreError;
+            return;
+        }
+
+        selectedAssetPath = restoredPath;
+        currentProjectDirectory = Path.GetDirectoryName(restoredPath) ?? rootAssetsPath;
+        InvalidateProjectFolderCache(currentProjectDirectory);
+        statusMessage = "Asset restored: " + Path.GetFileName(restoredPath);
     }
 
 private bool IsInsideAssets(string path)

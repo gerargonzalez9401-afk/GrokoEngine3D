@@ -46,7 +46,7 @@ internal sealed class HubApp : GameWindow
         imgui = new ImGuiController(ClientSize.X, ClientSize.Y);
         projects = RecentProjects.Load();
         newLocation = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "GrokoProjects");
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "GrokoProjects");
     }
 
     protected override void OnUnload()
@@ -235,7 +235,7 @@ internal sealed class HubApp : GameWindow
     private void OpenExistingDialog()
     {
         string? picked = FolderDialog.Pick(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         if (picked == null) return;
 
         // El editor espera una subcarpeta Assets/: si no existe, se prepara.
